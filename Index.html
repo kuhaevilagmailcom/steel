@@ -1,0 +1,1605 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STEEL VAPE | Одноразовые устройства</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* ===== CSS Reset & Variables ===== */
+        :root {
+            --black: #000000;
+            --white: #FFFFFF;
+            --gray-50: #FAFAFA;
+            --gray-100: #F5F5F5;
+            --gray-200: #EEEEEE;
+            --gray-300: #E0E0E0;
+            --gray-400: #BDBDBD;
+            --gray-500: #9E9E9E;
+            --gray-600: #757575;
+            --gray-700: #616161;
+            --gray-800: #424242;
+            --gray-900: #212121;
+            --accent: #000000;
+            --accent-hover: #333333;
+            --border: #E0E0E0;
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.05);
+            --shadow-md: 0 8px 25px rgba(0,0,0,0.08);
+            --shadow-lg: 0 15px 35px rgba(0,0,0,0.12);
+            --transition-fast: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-base: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--white);
+            color: var(--gray-900);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        /* ===== Typography ===== */
+        h1, h2, h3, h4 {
+            font-weight: 800;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+
+        h1 {
+            font-size: 2.75rem;
+            margin-bottom: 1rem;
+            color: var(--black);
+            position: relative;
+            display: inline-block;
+        }
+
+        h1::after {
+            content: '';
+            position: absolute;
+            bottom: -8px;
+            left: 0;
+            width: 60px;
+            height: 3px;
+            background: var(--black);
+        }
+
+        h2 {
+            font-size: 2.25rem;
+            margin-bottom: 1.5rem;
+            color: var(--gray-900);
+        }
+
+        h3 {
+            font-size: 1.75rem;
+            margin-bottom: 1rem;
+            color: var(--gray-900);
+        }
+
+        /* ===== Layout ===== */
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 1.5rem;
+        }
+
+        section {
+            padding: 5rem 0;
+        }
+
+        /* ===== Header ===== */
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            padding: 1.25rem 0;
+        }
+
+        .header-inner {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-weight: 900;
+            font-size: 1.75rem;
+            color: var(--black);
+            text-decoration: none;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .tg-link {
+            color: var(--gray-600);
+            font-size: 1.5rem;
+            transition: all var(--transition-fast);
+            text-decoration: none;
+        }
+
+        .tg-link:hover {
+            color: var(--black);
+            transform: translateY(-2px);
+        }
+
+        /* ===== Cart Button ===== */
+        .cart-btn {
+            position: relative;
+            background: var(--black);
+            color: var(--white);
+            border: 2px solid var(--black);
+            border-radius: var(--radius-xl);
+            padding: 0.875rem 1.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            transition: all var(--transition-base);
+        }
+
+        .cart-btn:hover {
+            background: var(--white);
+            color: var(--black);
+            transform: translateY(-3px);
+        }
+
+        .cart-count {
+            background: var(--white);
+            color: var(--black);
+            border-radius: 50%;
+            width: 26px;
+            height: 26px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+            font-weight: 800;
+            border: 2px solid var(--black);
+        }
+
+        .cart-btn:hover .cart-count {
+            background: var(--black);
+            color: var(--white);
+        }
+
+        /* ===== Promo Code ===== */
+        .promo-section {
+            background: var(--gray-100);
+            padding: 1.5rem 0;
+            margin-bottom: 3rem;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+        }
+
+        .promo-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 2rem;
+        }
+
+        .promo-text {
+            font-size: 1.125rem;
+            font-weight: 500;
+            color: var(--gray-900);
+        }
+
+        .promo-code {
+            background: var(--white);
+            padding: 0.75rem 1.5rem;
+            border-radius: var(--radius-xl);
+            border: 2px solid var(--black);
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            color: var(--black);
+        }
+
+        .promo-code:hover {
+            background: var(--black);
+            color: var(--white);
+            transform: scale(1.05);
+        }
+
+        /* ===== Products ===== */
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 2.5rem;
+            margin-top: 3rem;
+        }
+
+        .product-card {
+            background: var(--white);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+            transition: all var(--transition-base);
+            border: 1px solid var(--border);
+        }
+
+        .product-card:hover {
+            transform: translateY(-10px);
+            box-shadow: var(--shadow-lg);
+            border-color: var(--black);
+        }
+
+        .product-image {
+            width: 100%;
+            height: 280px;
+            object-fit: contain;
+            background: var(--gray-50);
+            padding: 2rem;
+        }
+
+        .product-body {
+            padding: 2rem;
+        }
+
+        .product-name {
+            font-size: 1.375rem;
+            margin-bottom: 0.75rem;
+            color: var(--gray-900);
+            font-weight: 700;
+        }
+
+        .product-price {
+            font-size: 2rem;
+            font-weight: 900;
+            margin: 1rem 0;
+            color: var(--black);
+        }
+
+        .flavors {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin: 1.25rem 0;
+        }
+
+        .flavor-btn {
+            padding: 0.625rem 1.25rem;
+            background: var(--white);
+            border: 2px solid var(--gray-300);
+            border-radius: var(--radius-xl);
+            color: var(--gray-700);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+
+        .flavor-btn:hover {
+            background: var(--black);
+            color: var(--white);
+            border-color: var(--black);
+        }
+
+        .flavor-btn.active {
+            background: var(--black);
+            color: var(--white);
+            border-color: var(--black);
+        }
+
+        .add-btn {
+            width: 100%;
+            padding: 1.125rem;
+            background: var(--white);
+            color: var(--black);
+            border: 2px solid var(--black);
+            border-radius: var(--radius-lg);
+            font-size: 1.125rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all var(--transition-base);
+            margin-top: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+        }
+
+        .add-btn:hover {
+            background: var(--black);
+            color: var(--white);
+            transform: translateY(-3px);
+        }
+
+        /* ===== Cart Overlay ===== */
+        .cart-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: flex-end;
+        }
+
+        .cart-overlay.active {
+            display: flex;
+        }
+
+        .cart-sidebar {
+            width: 100%;
+            max-width: 450px;
+            height: 100%;
+            background: var(--white);
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .cart-overlay.active .cart-sidebar {
+            transform: translateX(0);
+        }
+
+        .cart-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .close-cart {
+            background: none;
+            border: none;
+            font-size: 1.25rem;
+            color: var(--gray-600);
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+
+        .close-cart:hover {
+            color: var(--black);
+        }
+
+        .cart-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ===== Cart Steps ===== */
+        .cart-step {
+            padding: 1.5rem;
+            display: none;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .cart-step.active {
+            display: flex;
+        }
+
+        .step-header {
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .step-header h4 {
+            font-size: 1.25rem;
+            color: var(--black);
+            margin-bottom: 0.5rem;
+        }
+
+        .step-desc {
+            color: var(--gray-600);
+            font-size: 0.9rem;
+        }
+
+        .step-content {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 1.5rem;
+        }
+
+        .step-actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: auto;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .step-btn {
+            flex: 1;
+            padding: 1rem;
+            border: 2px solid var(--black);
+            border-radius: var(--radius-md);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+
+        .step-btn.next {
+            background: var(--black);
+            color: var(--white);
+        }
+
+        .step-btn.next:hover:not(:disabled) {
+            background: var(--white);
+            color: var(--black);
+        }
+
+        .step-btn.prev {
+            background: var(--white);
+            color: var(--black);
+        }
+
+        .step-btn.prev:hover {
+            background: var(--black);
+            color: var(--white);
+        }
+
+        .step-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ===== Step 1: Items Review ===== */
+        .cart-items {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            background: var(--gray-50);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border);
+        }
+
+        .item-info h4 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .item-flavor {
+            color: var(--gray-600);
+            font-size: 0.875rem;
+        }
+
+        .item-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .quantity-btn {
+            background: var(--white);
+            border: 1px solid var(--border);
+            width: 28px;
+            height: 28px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .quantity-btn:hover {
+            border-color: var(--black);
+        }
+
+        .remove-item {
+            background: none;
+            border: none;
+            color: var(--gray-600);
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+
+        .remove-item:hover {
+            color: var(--black);
+        }
+
+        .empty-cart {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--gray-600);
+        }
+
+        /* ===== Step 2: Payment Method ===== */
+        .payment-methods {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .payment-method {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            border: 2px solid var(--border);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: var(--transition-fast);
+        }
+
+        .payment-method:hover {
+            border-color: var(--black);
+        }
+
+        .payment-method.active {
+            border-color: var(--black);
+            background: var(--gray-50);
+        }
+
+        .payment-method input {
+            display: none;
+        }
+
+        .payment-method::before {
+            content: '';
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border);
+            border-radius: 50%;
+            transition: var(--transition-fast);
+            flex-shrink: 0;
+        }
+
+        .payment-method.active::before {
+            border-color: var(--black);
+            background: var(--black);
+            box-shadow: inset 0 0 0 3px var(--white);
+        }
+
+        .transfer-info {
+            padding: 1rem;
+            background: var(--gray-50);
+            border-radius: var(--radius-md);
+            margin-top: 1rem;
+            border: 1px solid var(--border);
+            display: none;
+        }
+
+        .transfer-info.active {
+            display: block;
+        }
+
+        .bank-name {
+            display: inline-block;
+            background: var(--black);
+            color: var(--white);
+            font-weight: 900;
+            font-size: 1rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            margin: 0.5rem 0;
+        }
+
+        .phone-number {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--white);
+            padding: 0.875rem;
+            border-radius: var(--radius-md);
+            margin: 1rem 0;
+            border: 1px solid var(--border);
+        }
+
+        .copy-btn {
+            background: var(--black);
+            color: var(--white);
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        .paid-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 1rem 0;
+            padding: 1rem;
+            background: var(--white);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border);
+            cursor: pointer;
+        }
+
+        /* ===== Step 3-5: Form Steps ===== */
+        .form-step {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 0;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: var(--gray-700);
+            font-size: 0.875rem;
+        }
+
+        .form-input,
+        .form-textarea {
+            width: 100%;
+            padding: 0.875rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            font-size: 1rem;
+            background: var(--white);
+            color: var(--gray-900);
+        }
+
+        .form-input:focus,
+        .form-textarea:focus {
+            outline: none;
+            border-color: var(--black);
+        }
+
+        /* ===== Step 6: Order Summary ===== */
+        .order-summary {
+            background: var(--gray-50);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .summary-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .summary-total {
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 2px solid var(--border);
+            color: var(--black);
+        }
+
+        /* ===== Notification ===== */
+        .notification {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--black);
+            color: var(--white);
+            padding: 1.25rem 1.75rem;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            z-index: 2000;
+            transform: translateX(150%);
+            opacity: 0;
+            transition: all var(--transition-base);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            max-width: 350px;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+            opacity: 1;
+        }
+
+        /* ===== Footer ===== */
+        footer {
+            background: var(--black);
+            color: var(--white);
+            padding: 3rem 0;
+            text-align: center;
+            margin-top: 4rem;
+        }
+
+        .footer-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .footer-logo {
+            font-size: 2rem;
+            font-weight: 900;
+            letter-spacing: 1px;
+            color: var(--white);
+        }
+
+        .tg-footer-link {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            color: var(--white);
+            text-decoration: none;
+            padding: 0.75rem 1.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: var(--radius-xl);
+            transition: all var(--transition-fast);
+        }
+
+        .tg-footer-link:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 1rem;
+            }
+            
+            section {
+                padding: 3rem 0;
+            }
+            
+            h1 {
+                font-size: 2.25rem;
+            }
+            
+            .products-grid {
+                grid-template-columns: 1fr;
+                gap: 2rem;
+            }
+            
+            .promo-container {
+                flex-direction: column;
+                text-align: center;
+                gap: 1rem;
+            }
+            
+            .cart-sidebar {
+                max-width: 100%;
+            }
+            
+            .header-actions {
+                gap: 1rem;
+            }
+            
+            .cart-btn span:first-child {
+                display: none;
+            }
+            
+            .step-actions {
+                flex-direction: column;
+            }
+        }
+
+        @media (max-width: 480px) {
+            h1 {
+                font-size: 1.875rem;
+            }
+            
+            .flavor-btn {
+                padding: 0.5rem 1rem;
+                font-size: 0.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="container header-inner">
+            <div class="logo-container">
+                <a href="#" class="logo">STEEL<span style="color: #666;">VAPE</span></a>
+            </div>
+            <div class="header-actions">
+                <a href="https://t.me/SteelVape_MGN" target="_blank" class="tg-link" title="Telegram канал">
+                    <i class="fab fa-telegram"></i>
+                </a>
+                <button class="cart-btn" id="cartBtn">
+                    <i class="fas fa-shopping-cart"></i>
+                    <span>Корзина</span>
+                    <span class="cart-count" id="cartCount">0</span>
+                </button>
+            </div>
+        </div>
+    </header>
+    <!-- Products -->
+    <section class="products">
+        <div class="container">
+            <h1>Лучшие одноразочки Магнитки</h1>
+            <p style="color: var(--gray-600); margin-bottom: 2rem; font-size: 1.125rem;">
+                Минималистичный дизайн, максимальная эффективность
+            </p>
+            
+            <div class="products-grid" id="productsGrid">
+                <!-- Products loaded by JavaScript -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Cart Overlay -->
+    <div class="cart-overlay" id="cartOverlay">
+        <div class="cart-sidebar">
+            <div class="cart-header">
+                <h3>Оформление заказа</h3>
+                <button class="close-cart" id="closeCart">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="cart-content" id="cartContent">
+                <!-- Step 1: Cart Items -->
+                <div class="cart-step active" id="step1">
+                    <div class="step-header">
+                        <h4>1. Проверьте товары</h4>
+                        <p class="step-desc">Убедитесь, что выбраны правильные вкусы и количество</p>
+                    </div>
+                    <div class="step-content" id="cartItems">
+                        <!-- Cart items loaded here -->
+                    </div>
+                    <div class="step-actions">
+                        <button class="step-btn prev" onclick="closeCartFn()">Закрыть</button>
+                        <button class="step-btn next" id="nextToStep2" disabled>Далее →</button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Payment Method -->
+                <div class="cart-step" id="step2">
+                    <div class="step-header">
+                        <h4>2. Способ оплаты</h4>
+                        <p class="step-desc">Выберите удобный способ оплаты заказа</p>
+                    </div>
+                    <div class="step-content">
+                        <div class="payment-methods">
+                            <div class="payment-method active" data-method="transfer">
+                                <input type="radio" name="payment" value="transfer" checked>
+                                <div>
+                                    <strong>Перевод на карту</strong>
+                                    <div style="font-size: 0.875rem; color: var(--gray-600); margin-top: 0.25rem;">
+                                        Быстрое подтверждение заказа
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="payment-method" data-method="cash">
+                                <input type="radio" name="payment" value="cash">
+                                <div>
+                                    <strong>Наличные при получении</strong>
+                                    <div style="font-size: 0.875rem; color: var(--gray-600); margin-top: 0.25rem;">
+                                        Оплата курьеру
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Transfer Info -->
+                        <div class="transfer-info active" id="transferInfo">
+                            <h4 style="margin-bottom: 0.5rem; color: var(--gray-900);">
+                                <i class="fas fa-credit-card"></i> Реквизиты для перевода
+                            </h4>
+                            <p style="font-size: 0.875rem; color: var(--gray-600); margin-bottom: 0.5rem;">
+                                Переведите сумму заказа на:
+                            </p>
+                            
+                            <div class="bank-name">АЛЬФА БАНК</div>
+                            
+                            <div class="phone-number">
+                                <span style="font-weight: 700; font-size: 1.25rem;">+7 982 274-41-22</span>
+                                <button class="copy-btn" id="copyPhone">
+                                    <i class="fas fa-copy"></i> Копировать
+                                </button>
+                            </div>
+                            
+                            <label class="paid-checkbox">
+                                <input type="checkbox" id="paidCheckbox">
+                                <span>Я оплатил заказ</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="step-actions">
+                        <button class="step-btn prev" onclick="prevStep(2)">← Назад</button>
+                        <button class="step-btn next" id="nextToStep3">Далее →</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Telegram -->
+                <div class="cart-step" id="step3">
+                    <div class="step-header">
+                        <h4>3. Контактные данные</h4>
+                        <p class="step-desc">Укажите Telegram для связи по заказу</p>
+                    </div>
+                    <div class="step-content">
+                        <div class="form-step">
+                            <div class="form-group">
+                                <label for="tg" class="form-label">
+                                    <i class="fas fa-paper-plane"></i> Telegram для связи
+                                </label>
+                                <input type="text" id="tg" class="form-input" placeholder="@username или номер телефона">
+                                <p style="font-size: 0.875rem; color: var(--gray-600); margin-top: 0.5rem;">
+                                    Если будут вопросы, мы свяжемся с вами в Telegram.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="step-actions">
+                        <button class="step-btn prev" onclick="prevStep(3)">← Назад</button>
+                        <button class="step-btn next" id="nextToStep4" disabled>Далее →</button>
+                    </div>
+                </div>
+
+                <!-- Step 4: Delivery Time -->
+                <div class="cart-step" id="step4">
+                    <div class="step-header">
+                        <h4>4. Время и место доставки</h4>
+                        <p class="step-desc">Когда вам удобно получить заказ?</p>
+                    </div>
+                    <div class="step-content">
+                        <div class="form-step">
+                            <div class="form-group">
+                                <label for="time" class="form-label">
+                                    <i class="fas fa-clock"></i> Удобное время доставки и место.
+                                </label>
+                                <input type="text" id="time" class="form-input" placeholder="Сегодня после 18:00">
+                                <p style="font-size: 0.875rem; color: var(--gray-600); margin-top: 0.5rem;">
+                                    Пример: "Сегодня в 19:00 на гд" или "Завтра в 11:00 у паллады"
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="step-actions">
+                        <button class="step-btn prev" onclick="prevStep(4)">← Назад</button>
+                        <button class="step-btn next" id="nextToStep5" disabled>Далее →</button>
+                    </div>
+                </div>
+
+                <!-- Step 5: Comment -->
+                <div class="cart-step" id="step5">
+                    <div class="step-header">
+                        <h4>5. Комментарий к заказу</h4>
+                        <p class="step-desc">Дополнительная информация для доставки (необязательно)</p>
+                    </div>
+                    <div class="step-content">
+                        <div class="form-step">
+                            <div class="form-group">
+                                <label for="comment" class="form-label">
+                                    <i class="fas fa-comment"></i> Комментарий к заказу
+                                </label>
+                                <textarea id="comment" class="form-textarea" placeholder="Адрес, подъезд, этаж, домофон и т.д." rows="4"></textarea>
+                                <p style="font-size: 0.875rem; color: var(--gray-600); margin-top: 0.5rem;">
+                                    Эта информация поможет курьеру быстрее найти вас
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="step-actions">
+                        <button class="step-btn prev" onclick="prevStep(5)">← Назад</button>
+                        <button class="step-btn next" id="nextToStep6">Далее →</button>
+                    </div>
+                </div>
+
+                <!-- Step 6: Order Summary -->
+                <div class="cart-step" id="step6">
+                    <div class="step-header">
+                        <h4>6. Подтверждение заказа</h4>
+                        <p class="step-desc">Проверьте данные заказа перед отправкой</p>
+                    </div>
+                    <div class="step-content">
+                        <div class="order-summary">
+                            <h4 style="margin-bottom: 1rem;">Детали заказа:</h4>
+                            
+                            <div id="orderItems">
+                                <!-- Order items loaded here -->
+                            </div>
+                            
+                            <div class="summary-total">
+                                <span>Итого:</span>
+                                <span id="orderTotal">0</span> ₽
+                            </div>
+                        </div>
+                        
+                        <div style="margin-top: 1.5rem;">
+                            <h4 style="margin-bottom: 1rem;">Контактные данные:</h4>
+                            <div class="form-step">
+                                <div class="summary-item">
+                                    <span>Telegram:</span>
+                                    <span id="summaryTg">—</span>
+                                </div>
+                                <div class="summary-item">
+                                    <span>Время доставки:</span>
+                                    <span id="summaryTime">—</span>
+                                </div>
+                                <div class="summary-item">
+                                    <span>Способ оплаты:</span>
+                                    <span id="summaryPayment">—</span>
+                                </div>
+                                <div class="summary-item">
+                                    <span>Комментарий:</span>
+                                    <span id="summaryComment">—</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="step-actions">
+                        <button class="step-btn prev" onclick="prevStep(6)">← Назад</button>
+                        <button class="step-btn next" id="confirmOrder">✅ Подтвердить заказ</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification -->
+    <div class="notification" id="notification"></div>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container footer-content">
+            <div class="footer-logo">STEEL VAPE</div>
+            <a href="https://t.me/SteelVape_MGN" target="_blank" class="tg-footer-link">
+                <i class="fab fa-telegram"></i>
+                <span>Наш Telegram канал</span>
+            </a>
+            <p style="color: rgba(255,255,255,0.7); font-size: 0.875rem;">
+                © 2026 STEEL VAPE.
+            </p>
+        </div>
+    </footer>
+
+    <script>
+        // Configuration
+        const BOT_TOKEN = "7866892277:AAGXHLaMqRRQjCuWf_o3QzPy9ewrvr-SnoY";
+        const CHAT_ID = "-1003879176073";
+        const PHONE_NUMBER = "+7 982 274-41-22";
+        const PROMO_CODE = "STEEL2024";
+
+        // Product Data
+        const products = [
+            {
+                name: "PUFFMI PURE",
+                price: 700,
+                img: "https://i.ibb.co/mrwhQhLL/9955-big-1.png",
+                flavors: ["Малиновая-кола", "Асаи-Персик-Питахайя", "Имбирное пиво", "Табак", "Яблоко-Гуава"]
+            }
+        ];
+
+        // Shopping Cart
+        let cart = [];
+        let currentStep = 1;
+
+        // DOM Elements
+        const cartBtn = document.getElementById('cartBtn');
+        const cartOverlay = document.getElementById('cartOverlay');
+        const closeCart = document.getElementById('closeCart');
+        const cartItems = document.getElementById('cartItems');
+        const cartCount = document.getElementById('cartCount');
+        const productsGrid = document.getElementById('productsGrid');
+        const notification = document.getElementById('notification');
+        const transferInfo = document.getElementById('transferInfo');
+        const paidCheckbox = document.getElementById('paidCheckbox');
+        const copyPhoneBtn = document.getElementById('copyPhone');
+        const promoCodeElement = document.getElementById('promoCode');
+        
+        // Step buttons
+        const nextToStep2 = document.getElementById('nextToStep2');
+        const nextToStep3 = document.getElementById('nextToStep3');
+        const nextToStep4 = document.getElementById('nextToStep4');
+        const nextToStep5 = document.getElementById('nextToStep5');
+        const nextToStep6 = document.getElementById('nextToStep6');
+        const confirmOrder = document.getElementById('confirmOrder');
+        
+        // Form inputs
+        const tgInput = document.getElementById('tg');
+        const timeInput = document.getElementById('time');
+        const commentInput = document.getElementById('comment');
+        
+        // Summary elements
+        const orderItems = document.getElementById('orderItems');
+        const orderTotal = document.getElementById('orderTotal');
+        const summaryTg = document.getElementById('summaryTg');
+        const summaryTime = document.getElementById('summaryTime');
+        const summaryPayment = document.getElementById('summaryPayment');
+        const summaryComment = document.getElementById('summaryComment');
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            renderProducts();
+            updateCart();
+            setupEventListeners();
+        });
+
+        // Setup Event Listeners
+        function setupEventListeners() {
+            // Cart buttons
+            cartBtn.addEventListener('click', openCart);
+            closeCart.addEventListener('click', closeCartFn);
+            
+            // Copy buttons
+            copyPhoneBtn.addEventListener('click', copyPhoneNumber);
+            promoCodeElement.addEventListener('click', copyPromoCode);
+            
+            // Payment methods
+            document.querySelectorAll('.payment-method').forEach(method => {
+                method.addEventListener('click', function() {
+                    selectPaymentMethod(this.dataset.method);
+                });
+            });
+            
+            // Step navigation
+            nextToStep2.addEventListener('click', () => nextStep(2));
+            nextToStep3.addEventListener('click', () => nextStep(3));
+            nextToStep4.addEventListener('click', () => nextStep(4));
+            nextToStep5.addEventListener('click', () => nextStep(5));
+            nextToStep6.addEventListener('click', () => nextStep(6));
+            confirmOrder.addEventListener('click', sendOrder);
+            
+            // Form validation
+            tgInput.addEventListener('input', () => validateStep3());
+            timeInput.addEventListener('input', () => validateStep4());
+            paidCheckbox.addEventListener('change', () => validateStep2());
+            
+            // Close cart on overlay click
+            cartOverlay.addEventListener('click', function(e) {
+                if (e.target === cartOverlay) closeCartFn();
+            });
+        }
+
+        // Render Products
+        function renderProducts() {
+            productsGrid.innerHTML = '';
+            
+            products.forEach((product, index) => {
+                const productCard = document.createElement('div');
+                productCard.className = 'product-card';
+                
+                productCard.innerHTML = `
+                    <img src="${product.img}" alt="${product.name}" class="product-image">
+                    <div class="product-body">
+                        <h3 class="product-name">${product.name}</h3>
+                        <div class="product-price">${product.price.toLocaleString()} ₽</div>
+                        <div class="flavors" id="flavors-${index}">
+                            ${product.flavors.map((flavor, i) => `
+                                <button class="flavor-btn ${i === 0 ? 'active' : ''}" 
+                                        data-flavor="${flavor}"
+                                        data-product="${index}">
+                                    ${flavor}
+                                </button>
+                            `).join('')}
+                        </div>
+                        <button class="add-btn" data-id="${index}">
+                            <i class="fas fa-plus"></i> Добавить в корзину
+                        </button>
+                    </div>
+                `;
+                
+                productsGrid.appendChild(productCard);
+            });
+            
+            // Add event listeners to flavor buttons
+            document.querySelectorAll('.flavor-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    const productId = this.dataset.product;
+                    const parent = document.getElementById(`flavors-${productId}`);
+                    
+                    parent.querySelectorAll('.flavor-btn').forEach(btn => {
+                        btn.classList.remove('active');
+                    });
+                    
+                    this.classList.add('active');
+                });
+            });
+            
+            // Add event listeners to add buttons
+            document.querySelectorAll('.add-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    const productId = parseInt(this.dataset.id);
+                    const product = products[productId];
+                    const flavorBtn = document.querySelector(`#flavors-${productId} .flavor-btn.active`);
+                    
+                    if (!flavorBtn) {
+                        showNotification('Пожалуйста, выберите вкус');
+                        return;
+                    }
+                    
+                    const flavor = flavorBtn.dataset.flavor;
+                    addToCart(productId, flavor);
+                });
+            });
+        }
+
+        // Add to Cart
+        function addToCart(productId, flavor) {
+            const product = products[productId];
+            
+            const existingItemIndex = cart.findIndex(item => 
+                item.name === product.name && item.flavor === flavor
+            );
+            
+            if (existingItemIndex !== -1) {
+                cart[existingItemIndex].quantity += 1;
+            } else {
+                cart.push({
+                    name: product.name,
+                    price: product.price,
+                    flavor: flavor,
+                    quantity: 1
+                });
+            }
+            
+            updateCart();
+            showNotification(`${product.name} (${flavor}) добавлен в корзину`);
+            
+            // Update step 1 button
+            validateStep1();
+        }
+
+        // Update Cart
+        function updateCart() {
+            updateCartCount();
+            renderCartItems();
+            validateStep1();
+        }
+
+        // Update Cart Count
+        function updateCartCount() {
+            const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+            cartCount.textContent = totalItems;
+        }
+
+        // Render Cart Items
+        function renderCartItems() {
+            if (cart.length === 0) {
+                cartItems.innerHTML = `
+                    <div class="empty-cart">
+                        <i class="fas fa-shopping-cart"></i>
+                        <p>Корзина пуста</p>
+                    </div>
+                `;
+                nextToStep2.disabled = true;
+                return;
+            }
+            
+            let itemsHTML = '';
+            
+            cart.forEach((item, index) => {
+                const itemTotal = item.price * item.quantity;
+                
+                itemsHTML += `
+                    <div class="cart-item">
+                        <div class="item-info">
+                            <h4>${item.name}</h4>
+                            <div class="item-flavor">${item.flavor}</div>
+                        </div>
+                        <div class="item-actions">
+                            <button class="quantity-btn" onclick="updateQuantity(${index}, -1)">-</button>
+                            <span style="min-width: 30px; text-align: center;">${item.quantity}</span>
+                            <button class="quantity-btn" onclick="updateQuantity(${index}, 1)">+</button>
+                            <button class="remove-item" onclick="removeFromCart(${index})">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            cartItems.innerHTML = itemsHTML;
+        }
+
+        // Update Quantity
+        function updateQuantity(index, change) {
+            if (index >= 0 && index < cart.length) {
+                cart[index].quantity += change;
+                
+                if (cart[index].quantity <= 0) {
+                    removeFromCart(index);
+                } else {
+                    updateCart();
+                }
+            }
+        }
+
+        // Remove from Cart
+        function removeFromCart(index) {
+            if (index >= 0 && index < cart.length) {
+                const item = cart[index];
+                cart.splice(index, 1);
+                updateCart();
+                showNotification(`${item.name} удалён из корзины`);
+            }
+        }
+
+        // Open Cart
+        function openCart() {
+            if (cart.length === 0) {
+                showNotification('Добавьте товары в корзину');
+                return;
+            }
+            
+            cartOverlay.classList.add('active');
+            document.body.style.overflow = 'hidden';
+            goToStep(1);
+        }
+
+        // Close Cart
+        function closeCartFn() {
+            cartOverlay.classList.remove('active');
+            document.body.style.overflow = '';
+            goToStep(1);
+        }
+
+        // Step Navigation
+        function goToStep(step) {
+            currentStep = step;
+            
+            // Hide all steps
+            document.querySelectorAll('.cart-step').forEach(stepEl => {
+                stepEl.classList.remove('active');
+            });
+            
+            // Show current step
+            document.getElementById(`step${step}`).classList.add('active');
+            
+            // Update validation
+            if (step === 1) validateStep1();
+            if (step === 2) validateStep2();
+            if (step === 3) validateStep3();
+            if (step === 4) validateStep4();
+            if (step === 6) updateOrderSummary();
+        }
+
+        function nextStep(next) {
+            goToStep(next);
+        }
+
+        function prevStep(current) {
+            goToStep(current - 1);
+        }
+
+        // Step Validation
+        function validateStep1() {
+            nextToStep2.disabled = cart.length === 0;
+        }
+
+        function validateStep2() {
+            const paymentMethod = document.querySelector('input[name="payment"]:checked');
+            const isTransfer = paymentMethod && paymentMethod.value === 'transfer';
+            
+            if (isTransfer) {
+                nextToStep3.disabled = !paidCheckbox.checked;
+            } else {
+                nextToStep3.disabled = false;
+            }
+        }
+
+        function validateStep3() {
+            nextToStep4.disabled = tgInput.value.trim().length === 0;
+        }
+
+        function validateStep4() {
+            nextToStep5.disabled = timeInput.value.trim().length === 0;
+        }
+
+        // Select Payment Method
+        function selectPaymentMethod(method) {
+            document.querySelectorAll('.payment-method').forEach(el => {
+                el.classList.remove('active');
+            });
+            
+            const selectedMethod = document.querySelector(`.payment-method[data-method="${method}"]`);
+            if (selectedMethod) {
+                selectedMethod.classList.add('active');
+                selectedMethod.querySelector('input').checked = true;
+            }
+            
+            if (method === 'transfer') {
+                transferInfo.classList.add('active');
+            } else {
+                transferInfo.classList.remove('active');
+            }
+            
+            validateStep2();
+        }
+
+        // Copy Phone Number
+        function copyPhoneNumber() {
+            navigator.clipboard.writeText(PHONE_NUMBER)
+                .then(() => {
+                    showNotification('Номер скопирован');
+                    copyPhoneBtn.innerHTML = '<i class="fas fa-check"></i> Скопировано';
+                    setTimeout(() => {
+                        copyPhoneBtn.innerHTML = '<i class="fas fa-copy"></i> Копировать';
+                    }, 2000);
+                })
+                .catch(err => {
+                    showNotification('Не удалось скопировать');
+                });
+        }
+
+        // Copy Promo Code
+        function copyPromoCode() {
+            navigator.clipboard.writeText(PROMO_CODE)
+                .then(() => {
+                    showNotification('Промокод скопирован');
+                    promoCodeElement.style.background = 'var(--black)';
+                    promoCodeElement.style.color = 'var(--white)';
+                    setTimeout(() => {
+                        promoCodeElement.style.background = 'var(--white)';
+                        promoCodeElement.style.color = 'var(--black)';
+                    }, 2000);
+                })
+                .catch(err => {
+                    showNotification('Не удалось скопировать');
+                });
+        }
+
+        // Update Order Summary
+        function updateOrderSummary() {
+            // Update items
+            let itemsHTML = '';
+            let total = 0;
+            
+            cart.forEach(item => {
+                const itemTotal = item.price * item.quantity;
+                total += itemTotal;
+                
+                itemsHTML += `
+                    <div class="summary-item">
+                        <span>${item.name} (${item.flavor}) × ${item.quantity}</span>
+                        <span>${itemTotal.toLocaleString()} ₽</span>
+                    </div>
+                `;
+            });
+            
+            orderItems.innerHTML = itemsHTML;
+            orderTotal.textContent = total.toLocaleString();
+            
+            // Update contact info
+            summaryTg.textContent = tgInput.value.trim() || '—';
+            summaryTime.textContent = timeInput.value.trim() || '—';
+            summaryComment.textContent = commentInput.value.trim() || '—';
+            
+            // Update payment method
+            const paymentMethod = document.querySelector('input[name="payment"]:checked');
+            summaryPayment.textContent = paymentMethod.value === 'transfer' ? 'Перевод на карту' : 'Наличные при получении';
+        }
+
+        // Send Order
+        async function sendOrder() {
+            if (cart.length === 0) {
+                showNotification('Корзина пуста');
+                return;
+            }
+            
+            const paymentMethod = document.querySelector('input[name="payment"]:checked');
+            const tg = tgInput.value.trim();
+            const time = timeInput.value.trim();
+            const comment = commentInput.value.trim() || '—';
+            
+            if (!paymentMethod || !tg || !time) {
+                showNotification('Заполните все обязательные поля');
+                return;
+            }
+            
+            if (paymentMethod.value === 'transfer' && !paidCheckbox.checked) {
+                showNotification('Подтвердите оплату');
+                return;
+            }
+            
+            // Calculate total
+            const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+            
+            // Build order message
+            let orderText = `🛒 <b>НОВЫЙ ЗАКАЗ</b>\n\n`;
+            
+            cart.forEach(item => {
+                orderText += `• ${item.name} (${item.flavor}) — ${item.quantity} × ${item.price}₽\n`;
+            });
+            
+            orderText += `\n💰 <b>Сумма:</b> ${total.toLocaleString()}₽\n`;
+            orderText += `💳 <b>Оплата:</b> ${paymentMethod.value === 'transfer' ? 'Перевод ✅' : 'Наличные при получении'}\n`;
+            orderText += `📲 <b>Telegram:</b> ${tg}\n`;
+            orderText += `⏰ <b>Время доставки:</b> ${time}\n`;
+            orderText += `💬 <b>Комментарий:</b> ${comment}\n\n`;
+            orderText += `#заказ #новый_заказ`;
+            
+            try {
+                confirmOrder.disabled = true;
+                confirmOrder.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Отправка...';
+                
+                const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        chat_id: CHAT_ID,
+                        text: orderText,
+                        parse_mode: 'HTML'
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.ok) {
+                    showNotification('✅ Заказ отправлен! Мы свяжемся с вами в Telegram.');
+                    
+                    // Clear cart and form
+                    cart = [];
+                    tgInput.value = '';
+                    timeInput.value = '';
+                    commentInput.value = '';
+                    paidCheckbox.checked = false;
+                    
+                    // Update UI
+                    updateCart();
+                    
+                    // Close cart after delay
+                    setTimeout(() => {
+                        closeCartFn();
+                        confirmOrder.disabled = false;
+                        confirmOrder.innerHTML = '✅ Подтвердить заказ';
+                    }, 2000);
+                } else {
+                    showNotification('❌ Ошибка отправки. Попробуйте еще раз.');
+                    confirmOrder.disabled = false;
+                    confirmOrder.innerHTML = '✅ Подтвердить заказ';
+                }
+                
+            } catch (error) {
+                showNotification('❌ Ошибка сети. Проверьте подключение.');
+                confirmOrder.disabled = false;
+                confirmOrder.innerHTML = '✅ Подтвердить заказ';
+            }
+        }
+
+        // Show Notification
+        function showNotification(message) {
+            notification.textContent = message;
+            notification.className = 'notification';
+            notification.classList.add('show');
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
