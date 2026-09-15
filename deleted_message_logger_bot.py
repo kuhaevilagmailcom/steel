@@ -42,6 +42,16 @@ MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
 FORWARD_ALL_BUSINESS_MEDIA = os.getenv("FORWARD_ALL_BUSINESS_MEDIA", "0").strip() == "1"
 
+# --- подписки / рефералка ---
+# цена в Telegram Stars (XTR): сколько звёзд за сколько дней
+SUB_PLANS = {
+    15: 50,   # 15 дней — 50 звёзд
+    30: 100,  # месяц  — 100 звёзд
+}
+REF_REQUIRED = int(os.getenv("REF_REQUIRED", "3"))   # сколько друзей позвать
+REF_DAYS = int(os.getenv("REF_DAYS", "3"))           # за это дают дней триала
+PROMPT_COOLDOWN_SEC = 6 * 3600                       # напоминать о подписке не чаще раза в 6 часов
+
 if not BOT_TOKEN:
     raise RuntimeError("Set LOGGER_BOT_TOKEN in .env.deleted_logger")
 
@@ -51,6 +61,8 @@ FILE_API_URL = f"https://api.telegram.org/file/bot{BOT_TOKEN}/"
 ALLOWED_UPDATES = [
     "message",
     "edited_message",
+    "callback_query",
+    "pre_checkout_query",
     "business_connection",
     "business_message",
     "edited_business_message",
@@ -233,18 +245,27 @@ def telegram_multipart_call(
         raise TelegramApiError(f"{method}: {exc.reason}") from exc
 
 
-def send_message(chat_id: int, text: str, parse_mode: str | None = None) -> None:
+def send_message(
+    chat_id: int,
+    text: str,
+    parse_mode: str | None = None,
+    reply_markup: dict | None = None,
+) -> None:
     max_len = 3900
     chunks = [text[i : i + max_len] for i in range(0, len(text), max_len)] or [text]
-    for chunk in chunks:
-        payload = {"chat_id": chat_id, "text": chunk}
+    for index, chunk in enumerate(chunks):
+        payload: dict[str, object] = {"chat_id": chat_id, "text": chunk}
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        # клавиатуру вешаем только на последнее сообщение, если текст разрезали
+        if reply_markup and index == len(chunks) - 1:
+            payload["reply_markup"] = reply_markup
         try:
             telegram_call("sendMessage", payload)
         except TelegramApiError as exc:
             if parse_mode:
                 fallback = html.unescape(chunk.replace("<blockquote>", "> ").replace("</blockquote>", ""))
+                fallback = re.sub(r"</?tg-emoji[^>]*>", "", fallback)
                 try:
                     telegram_call("sendMessage", {"chat_id": chat_id, "text": fallback})
                     continue
@@ -407,6 +428,40 @@ def init_db() -> None:
         ensure_column(conn, "messages", "ttl_seconds", "INTEGER")
         ensure_column(conn, "messages", "updated_at", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "messages", "deleted_at", "INTEGER")
+
+        # --- подписки, рефералы, платежи (Stars) ---
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subs (
+                user_id INTEGER PRIMARY KEY,
+                until_ts INTEGER NOT NULL DEFAULT 0,
+                trial_used INTEGER NOT NULL DEFAULT 0,
+                last_prompt_ts INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referrals (
+                referrer_id INTEGER NOT NULL,
+                invitee_id INTEGER NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                tg_payment_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                days INTEGER NOT NULL,
+                stars INTEGER NOT NULL,
+                payload TEXT,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
 
 
 def register_user(user_id: int, private_chat_id: int | None = None) -> None:
@@ -603,6 +658,624 @@ def is_admin_user(user_id: int | None) -> bool:
 
 def deny_admin_command(chat_id: int) -> None:
     send_message(chat_id, "Эта команда доступна только владельцу бота.")
+
+
+# ============================================================================
+# ГЛАВНОЕ МЕНЮ · ПОДПИСКА (Telegram Stars) · РЕФЕРАЛКА · ПОМОЩЬ · АДМИН-ПАНЕЛЬ
+# Премиум-эмодзи из пака https://t.me/addemoji/NewsEmoji — id как в
+# limuzinov_shop_bot: в тексте через <tg-emoji emoji-id="…">, в кнопках через
+# icon_custom_emoji_id.
+# ============================================================================
+
+NEWS = {
+    "home":    ("🏠", "5416041192905265756"),
+    "stars":   ("⭐️", "5438496463044752972"),
+    "invite":  ("🔗", "5271604874419647061"),
+    "support": ("💬", "5443038326535759644"),
+    "check":   ("✔️", "5206607081334906820"),
+    "pay":     ("💵", "5409048419211682843"),
+    "gift":    ("🎉", "5461151367559141950"),
+    "admin":   ("⚙️", "5341715473882955310"),
+    "view":    ("👀", "5210956306952758910"),
+    "refresh": ("🔄", "5375338737028841420"),
+    "bonus":   ("💎", "5427168083074628963"),
+    "promo":   ("💯", "5341498088408234504"),
+    "history": ("📊", "5231200819986047254"),
+    "add":     ("➕", "5397916757333654639"),
+    "warning": ("⚠️", "5447644880824181073"),
+    "back":    ("➡️", "5416117059207572332"),
+    "orders":  ("🛍", "5229064374403998351"),
+    "profile": ("🙂", "5461117441612462242"),
+}
+
+
+def pe(name: str) -> str:
+    """Премиум-эмодзи пака News в HTML-тексте с unicode-фолбэком."""
+    fallback, emoji_id = NEWS[name]
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+_ME_USERNAME: str | None = None
+
+
+def bot_username() -> str:
+    global _ME_USERNAME
+    if BOT_USERNAME:
+        return BOT_USERNAME
+    if _ME_USERNAME is None:
+        try:
+            _ME_USERNAME = str((telegram_call("getMe") or {}).get("username") or "")
+        except TelegramApiError:
+            _ME_USERNAME = ""
+    return _ME_USERNAME
+
+
+def btn(
+    text: str,
+    cb: str | None = None,
+    url: str | None = None,
+    copy: str | None = None,
+    emoji: str | None = None,
+    style: str | None = None,
+) -> dict:
+    item: dict[str, object] = {"text": text}
+    if cb:
+        item["callback_data"] = cb
+    if url:
+        item["url"] = url
+    if copy:
+        # Bot API требует RichText-объект, а не голую строку
+        item["copy_text"] = {"text": copy}
+    if emoji:
+        item["icon_custom_emoji_id"] = NEWS[emoji][1]
+    if style:
+        item["style"] = style
+    return item
+
+
+def kb(rows: list[list[dict]]) -> dict:
+    return {"inline_keyboard": rows}
+
+
+BACK_HOME = [btn("Назад в меню", "home", emoji="home")]
+
+# chat_id -> до этого момента ждём «ID дней» от админа
+PENDING_GRANT: dict[int, float] = {}
+
+
+def referral_link(user_id: int) -> str:
+    username = bot_username() or "hollyboot_bot"
+    return f"https://t.me/{username}?start=ref_{user_id}"
+
+
+# --- подписка ----------------------------------------------------------------
+
+def get_sub(user_id: int) -> tuple[int, int]:
+    """(until_ts, trial_used)"""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT until_ts, trial_used FROM subs WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    return (int(row[0]), int(row[1] or 0)) if row else (0, 0)
+
+
+def set_until(user_id: int, until_ts: int, trial_used: int | None = None) -> None:
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO subs (user_id, until_ts, trial_used, last_prompt_ts, updated_at)
+            VALUES (?, ?, COALESCE(?, 0), 0, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                until_ts = excluded.until_ts,
+                trial_used = COALESCE(?, subs.trial_used),
+                updated_at = excluded.updated_at
+            """,
+            (user_id, until_ts, trial_used, now, trial_used),
+        )
+
+
+def add_days(user_id: int, days: int) -> int:
+    current, trial_used = get_sub(user_id)
+    until = max(int(time.time()), current) + days * 86400
+    set_until(user_id, until, trial_used)
+    return until
+
+
+def sub_active(user_id: int | None) -> bool:
+    if user_id is None or is_admin_user(user_id):
+        return True
+    return get_sub(user_id)[0] > int(time.time())
+
+
+def sub_days_left(user_id: int) -> int:
+    left = get_sub(user_id)[0] - int(time.time())
+    return max(0, (left + 86399) // 86400)
+
+
+def format_until(until_ts: int) -> str:
+    return time.strftime("%d.%m.%Y", time.localtime(until_ts)) if until_ts else "—"
+
+
+def status_line(user_id: int) -> str:
+    if is_admin_user(user_id):
+        return f"{pe('check')} <b>бессрочная</b> (админ)"
+    until, _ = get_sub(user_id)
+    if until > int(time.time()):
+        return f"{pe('check')} активна до <b>{format_until(until)}</b> ({sub_days_left(user_id)} дн.)"
+    return f"{pe('warning')} <b>не активна</b>"
+
+
+def user_exists(user_id: int) -> bool:
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)).fetchone() is not None
+
+
+def owner_can_log(owner_id: int | None) -> bool:
+    """Есть подписка — логируем. Нет — молчим и раз в cooldown шлём напоминание."""
+    if owner_id is None or sub_active(owner_id):
+        return True
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT last_prompt_ts FROM subs WHERE user_id = ?", (owner_id,)).fetchone()
+    last_prompt = int(row[0]) if row and row[0] else 0
+    if now - last_prompt >= PROMPT_COOLDOWN_SEC:
+        set_until(owner_id, get_sub(owner_id)[0], None)
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("UPDATE subs SET last_prompt_ts = ? WHERE user_id = ?", (now, owner_id))
+        text, markup = page_buy(owner_id)
+        send_message(
+            owner_id,
+            f"{pe('warning')} <b>Подписка закончилась</b> — бот ничего не теряет "
+            f"и сразу продолжит слать уведомления, как только оплатишь.\n\n{text}",
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+    return False
+
+
+# --- рефералы -----------------------------------------------------------------
+
+def ref_count(user_id: int) -> int:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,)).fetchone()
+    return int(row[0])
+
+
+def add_referral(referrer_id: int, invitee_id: int) -> bool:
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO referrals (referrer_id, invitee_id, created_at) VALUES (?, ?, ?)",
+            (referrer_id, invitee_id, int(time.time())),
+        )
+        return cur.rowcount > 0
+
+
+def check_trial(referrer_id: int) -> None:
+    """Пригласил REF_REQUIRED друзей — одноразово даём REF_DAYS дней."""
+    until, trial_used = get_sub(referrer_id)
+    if trial_used or ref_count(referrer_id) < REF_REQUIRED:
+        return
+    new_until = max(int(time.time()), until) + REF_DAYS * 86400
+    set_until(referrer_id, new_until, 1)
+    send_message(
+        get_private_chat_id(referrer_id),
+        f"{pe('gift')} Ты пригласил(а) {REF_REQUIRED} друзей — лови пробную подписку "
+        f"на <b>{REF_DAYS} дня</b> (до {format_until(new_until)}).\n"
+        f"Закончится — продли в меню: {pe('stars')} «Купить подписку».",
+        parse_mode="HTML",
+    )
+
+
+# --- страницы меню ------------------------------------------------------------
+
+def page_home(user_id: int) -> tuple[str, dict]:
+    rows = [
+        [
+            btn("Купить подписку", "buy", emoji="stars", style="success"),
+            btn("Пригласить друзей", "ref", emoji="invite"),
+        ],
+        [
+            btn("Помощь", "help", emoji="support"),
+            btn("Мои подключения", "conns", emoji="view"),
+        ],
+    ]
+    if is_admin_user(user_id):
+        rows.append([btn("Панель админа", "panel", emoji="admin")])
+    text = (
+        f"{pe('home')} <b>Holly Bot</b> — от тебя больше ничего не скроют\n\n"
+        f"{pe('check')} удалённые сообщения — сохраним и пришлём\n"
+        f"{pe('check')} правки сообщений — покажем «было / стало»\n"
+        f"{pe('check')} сгоревшие фото и видео — в архив\n"
+        f"{pe('check')} кружки, голосовые, файлы, стикеры — тоже\n\n"
+        f"{pe('stars')} Подписка: {status_line(user_id)}\n"
+        f"{pe('invite')} Приглашено: {ref_count(user_id)}/{REF_REQUIRED} — за {REF_REQUIRED} друзей дадим {REF_DAYS} дня бесплатно"
+    )
+    return text, kb(rows)
+
+
+def page_buy(user_id: int) -> tuple[str, dict]:
+    text = (
+        f"{pe('stars')} <b>Подписка Holly Bot</b>\n\n"
+        f"Сейчас: {status_line(user_id)}\n\n"
+        f"<b>15 дней</b> — 50 ⭐\n"
+        f"<b>30 дней</b> — 100 ⭐\n\n"
+        f"Оплата звёздами прямо в Telegram, доступ продлевается сразу.\n"
+        f"Хочешь бесплатно? Пригласи {REF_REQUIRED} друзей — {REF_DAYS} дня в подарок "
+        f"(кнопка «Пригласить друзей»)."
+    )
+    rows = [
+        [btn("15 дней — 50 ⭐", "buy:15", emoji="stars", style="success")],
+        [btn("30 дней — 100 ⭐", "buy:30", emoji="stars", style="success")],
+        [btn("Пригласить друзей", "ref", emoji="invite")],
+        BACK_HOME,
+    ]
+    return text, kb(rows)
+
+
+def page_ref(user_id: int) -> tuple[str, dict]:
+    link = referral_link(user_id)
+    count = ref_count(user_id)
+    _, trial_used = get_sub(user_id)
+    progress = "·".join("●" if i < min(count, REF_REQUIRED) else "○" for i in range(REF_REQUIRED))
+    trial_note = (
+        f"{pe('check')} пробная уже активирована"
+        if trial_used
+        else f"{pe('gift')} за {REF_REQUIRED} приглашённых — {REF_DAYS} дня бесплатно"
+    )
+    text = (
+        f"{pe('invite')} <b>Пригласи друзей</b>\n\n"
+        f"Твоя ссылка:\n<code>{link}</code>\n\n"
+        f"Приглашено: <b>{count}</b>\n"
+        f"Прогресс: {progress} ({min(count, REF_REQUIRED)}/{REF_REQUIRED})\n"
+        f"{trial_note}\n\n"
+        f"Друг открывает ссылку и нажимает /start — приглашение засчитается."
+    )
+    rows = [
+        [btn("Скопировать ссылку", copy=link, emoji="invite", style="primary")],
+        [btn("Поделиться", url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Хочу%20попробовать%20Holly%20Bot", emoji="support")],
+        BACK_HOME,
+    ]
+    return text, kb(rows)
+
+
+def page_help(user_id: int) -> tuple[str, dict]:
+    username = bot_username()
+    text = (
+        f"{pe('support')} <b>Как подключить бота</b>\n\n"
+        f"<b>1.</b> Открой Telegram → <b>Настройки</b> → <b>Telegram Business</b>\n"
+        f"<b>2.</b> Раздел <b>Chatbots</b> (помощник в личных чатах)\n"
+        f"<b>3.</b> Нажми «Добавить бота» и вбей <code>@{username}</code>\n"
+        f"<b>4.</b> Разреши доступ — выбери чаты, за которыми следим\n"
+        f"<b>5.</b> Готово: всё удалённое и исправленное прилетает сюда\n\n"
+        f"<b>Обычная группа:</b> добавь бота в группу и напиши там /watch\n"
+        f"(отключить — /stop, статус — /status)\n\n"
+        f"{pe('stars')} Работает по подписке: 15 дней — 50 ⭐, 30 дней — 100 ⭐.\n"
+        f"{pe('gift')} Не хочешь платить? Пригласи {REF_REQUIRED} друзей — {REF_DAYS} дня бесплатно."
+    )
+    rows = [
+        [btn("Купить подписку", "buy", emoji="stars", style="success")],
+        BACK_HOME,
+    ]
+    return text, kb(rows)
+
+
+def page_connections(user_id: int) -> tuple[str, dict]:
+    rows = list_business_connections(None if is_admin_user(user_id) else user_id)
+    if rows:
+        scope = "все" if is_admin_user(user_id) else "твои"
+        body = "\n".join(html_text(line) for line in format_connection_lines(rows))
+        text = f"{pe('view')} <b>Business-подключения</b> ({scope}):\n\n{body}"
+    else:
+        text = (
+            f"{pe('view')} <b>Business-подключений пока нет.</b>\n\n"
+            f"Подключи бота: Настройки → Telegram Business → Chatbots → @{bot_username()}\n"
+            f"Инструкция с шагами — в разделе «Помощь»."
+        )
+    markup = kb([[btn("Включить выключенные", "restore", emoji="refresh")], BACK_HOME])
+    return text, markup
+
+
+def page_panel(user_id: int) -> tuple[str, dict]:
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        actives = conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > ?", (now,)).fetchone()[0]
+        refs = conn.execute("SELECT COUNT(*) FROM referrals").fetchone()[0]
+        pays = conn.execute("SELECT COUNT(*), COALESCE(SUM(stars), 0) FROM payments").fetchone()
+    text = (
+        f"{pe('admin')} <b>Админ-панель</b>\n\n"
+        f"Пользователей: <b>{users}</b>\n"
+        f"Активных подписок: <b>{actives}</b>\n"
+        f"Реферальных связок: <b>{refs}</b>\n"
+        f"Платежей: <b>{pays[0]}</b> на <b>{pays[1]} ⭐</b>\n\n"
+        f"Быстрая выдача: <code>/sub ID_ПОЛЬЗОВАТЕЛЯ ДНЕЙ</code> (например <code>/sub 123456 30</code>), "
+        f"снять — <code>/sub ID_ДНЯХ 0</code>."
+    )
+    rows = [
+        [btn("Выдать подписку", "grant", emoji="add", style="success")],
+        [btn("Обновить", "panel", emoji="refresh")],
+        BACK_HOME,
+    ]
+    return text, kb(rows)
+
+
+# --- транспорт для кнопок ------------------------------------------------------
+
+def answer_callback(query_id: str, text: str | None = None, show_alert: bool = False) -> None:
+    if not query_id:
+        return
+    payload: dict[str, object] = {"callback_query_id": query_id}
+    if text:
+        payload["text"] = text
+        payload["show_alert"] = show_alert
+    try:
+        telegram_call("answerCallbackQuery", payload)
+    except TelegramApiError as exc:
+        log(f"answerCallbackQuery failed: {exc}")
+
+
+def edit_page(chat_id: int, message_id: int, text: str, markup: dict) -> None:
+    if message_id:
+        try:
+            telegram_call(
+                "editMessageText",
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "reply_markup": markup,
+                },
+            )
+            return
+        except TelegramApiError as exc:
+            if "message is not modified" in str(exc):
+                return
+            log(f"editMessageText failed: {exc}")
+    send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+
+# --- оплата звёздами -----------------------------------------------------------
+
+def send_subscription_invoice(user_id: int, chat_id: int, days: int) -> None:
+    stars = SUB_PLANS[days]
+    try:
+        telegram_call(
+            "sendInvoice",
+            {
+                "chat_id": chat_id,
+                "title": f"Подписка Holly Bot — {days} дней",
+                "description": "Доступ ко всем функциям бота. Остаток суммируется при продлении.",
+                "payload": f"sub:{user_id}:{days}:{stars}",
+                "provider_token": "",
+                "currency": "XTR",
+                "prices": [{"label": f"{days} дней подписки", "amount": stars}],
+            },
+        )
+    except TelegramApiError as exc:
+        log(f"sendInvoice failed for {user_id}: {exc}")
+        send_message(chat_id, "Не удалось создать счёт на оплату. Попробуй ещё раз через минуту.")
+
+
+def handle_pre_checkout_query(query: dict) -> None:
+    qid = str(query.get("id") or "")
+    parts = str(query.get("invoice_payload") or "").split(":")
+    valid = False
+    if len(parts) == 4 and parts[0] == "sub" and query.get("currency") == "XTR":
+        try:
+            uid, days, stars = int(parts[1]), int(parts[2]), int(parts[3])
+        except ValueError:
+            uid = days = stars = 0
+        payer_id = (query.get("from") or {}).get("id")
+        valid = (
+            uid
+            and uid == payer_id
+            and SUB_PLANS.get(days) == stars
+            and int(query.get("total_amount") or 0) == stars
+        )
+    if valid:
+        telegram_call("answerPreCheckoutQuery", {"pre_checkout_query_id": qid, "ok": True})
+    else:
+        telegram_call(
+            "answerPreCheckoutQuery",
+            {"pre_checkout_query_id": qid, "ok": False, "error_message": "Тариф устарел — открой меню заново"},
+        )
+
+
+def notify_admins_payment(user_id: int, days: int, stars: int) -> None:
+    line = (
+        f"{pe('pay')} Оплата: <code>{user_id}</code> купил {days} дн. за {stars} ⭐"
+    )
+    with sqlite3.connect(DB_PATH) as conn:
+        total = conn.execute("SELECT COALESCE(SUM(stars), 0) FROM payments").fetchone()[0]
+    line += f"\nВсего собрано: {total} ⭐"
+    for admin_id in sorted(ADMIN_USER_IDS):
+        try:
+            send_message(admin_id, line, parse_mode="HTML")
+        except TelegramApiError:
+            pass
+
+
+def handle_successful_payment(message: dict) -> None:
+    payment = message.get("successful_payment") or {}
+    parts = str(payment.get("invoice_payload") or "").split(":")
+    if len(parts) != 4 or parts[0] != "sub" or payment.get("currency") != "XTR":
+        return
+    try:
+        uid, days, stars = int(parts[1]), int(parts[2]), int(parts[3])
+    except ValueError:
+        return
+    if SUB_PLANS.get(days) != stars or int(payment.get("total_amount") or 0) != stars:
+        log(f"Rejected payment payload: {payment.get('invoice_payload')}")
+        return
+
+    payer_id = int((message.get("from") or {}).get("id") or uid)
+    tg_charge = str(payment.get("telegram_charge_id") or f"manual:{int(time.time())}:{payer_id}")
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO payments (tg_payment_id, user_id, days, stars, payload, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (tg_charge, payer_id, days, stars, payment.get("invoice_payload"), now),
+        )
+        if cur.rowcount == 0:
+            return  # такой платёж уже обработан
+    until = add_days(payer_id, days)
+    chat_id = int(message.get("chat", {}).get("id") or get_private_chat_id(payer_id))
+    send_message(
+        chat_id,
+        f"{pe('check')} <b>Оплачено!</b> Подписка активна до <b>{format_until(until)}</b>.\n"
+        f"Спасибо! {pe('home')} Меню — /start",
+        parse_mode="HTML",
+    )
+    notify_admins_payment(payer_id, days, stars)
+
+
+# --- выдача подписки админом ----------------------------------------------------
+
+def grant_subscription(admin_id: int, chat_id: int, target_id: int, days: int) -> None:
+    if not 1 <= days <= 3650:
+        send_message(chat_id, "Дней должно быть от 1 до 3650.")
+        return
+    until = add_days(target_id, days)
+    send_message(
+        chat_id,
+        f"{pe('check')} Выдал <b>{days} дн.</b> пользователю <code>{target_id}</code> "
+        f"(до {format_until(until)}).",
+        parse_mode="HTML",
+    )
+    if target_id != admin_id:
+        try:
+            send_message(
+                get_private_chat_id(target_id),
+                f"{pe('gift')} Администратор активировал тебе подписку на <b>{days} дн.</b> "
+                f"— до {format_until(until)}.",
+                parse_mode="HTML",
+            )
+        except TelegramApiError:
+            pass
+
+
+def handle_sub_command(message: dict, args: list[str]) -> None:
+    user_id = int(message["from"]["id"])
+    chat_id = int(message["chat"]["id"])
+    if not is_admin_user(user_id):
+        deny_admin_command(chat_id)
+        return
+    if not args:
+        send_message(chat_id, "Формат: /sub <ID> <дней>. Снять подписку: /sub <ID> 0")
+        return
+    try:
+        target_id = int(args[0])
+        days = int(args[1]) if len(args) > 1 else 30
+    except ValueError:
+        send_message(chat_id, "ID и количество дней должны быть числами. Пример: /sub 123456789 30")
+        return
+    if days <= 0:
+        set_until(target_id, 0)
+        send_message(chat_id, f"Снял подписку у {target_id}.")
+        return
+    grant_subscription(user_id, chat_id, target_id, days)
+
+
+def handle_grant_input(user_id: int, chat_id: int, text: str) -> bool:
+    """Ответ админа на «напиши ID и дни» после кнопки «Выдать подписку»."""
+    deadline = PENDING_GRANT.get(chat_id)
+    if deadline is None:
+        return False
+    PENDING_GRANT.pop(chat_id, None)
+    if deadline < time.time():
+        send_message(chat_id, "Окно выдачи закрылось — нажми кнопку заново.")
+        return True
+    parts = text.strip().replace(";", ",").replace(",", " ").split()
+    if not parts:
+        return False
+    if parts[0].lower() in {"me", "я", "мне"}:
+        days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 30
+        grant_subscription(user_id, chat_id, user_id, days)
+        return True
+    if len(parts) < 2 or not parts[0].lstrip("-").isdigit() or not parts[1].isdigit():
+        send_message(chat_id, "Формат: <code>ID число_дней</code>. Например: <code>123456789 30</code>", parse_mode="HTML")
+        return True
+    grant_subscription(user_id, chat_id, int(parts[0]), int(parts[1]))
+    return True
+
+
+# --- роутер колбэков -------------------------------------------------------------
+
+def handle_callback_query(query: dict) -> None:
+    query_id = str(query.get("id") or "")
+    data = str(query.get("data") or "")
+    message = query.get("message") or {}
+    chat = message.get("chat") or {}
+    from_user = query.get("from") or {}
+    try:
+        user_id = int(from_user["id"])
+        chat_id = int(chat.get("id") or user_id)
+    except (KeyError, TypeError, ValueError):
+        return
+
+    if str(chat.get("type") or "private") != "private":
+        answer_callback(query_id, text="Меню работает в личных сообщениях со мной", show_alert=True)
+        return
+
+    register_user(user_id, chat_id)
+
+    page: tuple[str, dict] | None = None
+    alert: str | None = None
+
+    if data == "home":
+        page = page_home(user_id)
+    elif data == "buy":
+        page = page_buy(user_id)
+    elif data.startswith("buy:"):
+        try:
+            days = int(data.split(":", 1)[1])
+        except ValueError:
+            days = 0
+        if days not in SUB_PLANS:
+            answer_callback(query_id, text="Тариф закончился — обнови меню", show_alert=True)
+            return
+        send_subscription_invoice(user_id, chat_id, days)
+        alert = "Открываю оплату ⭐"
+    elif data == "ref":
+        page = page_ref(user_id)
+    elif data == "help":
+        page = page_help(user_id)
+    elif data == "conns":
+        page = page_connections(user_id)
+    elif data == "restore":
+        restored = restore_business_connections(None if is_admin_user(user_id) else user_id)
+        alert = f"Включил подключений: {len(restored)}" if restored else "Отключённых не нашёл"
+        page = page_connections(user_id)
+    elif data == "panel":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_panel(user_id)
+    elif data == "grant":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        PENDING_GRANT[chat_id] = time.time() + 300
+        page = page_panel(user_id)
+        send_message(
+            chat_id,
+            f"{pe('add')} Кому выдаём подписку? Напиши сообщением:\n"
+            f"<code>ID_пользователя число_дней</code>\n"
+            f"Или <code>me 30</code> — себе. Отмена — /cancel",
+            parse_mode="HTML",
+        )
+    else:
+        answer_callback(query_id)
+        return
+
+    if page:
+        edit_page(chat_id, int(message.get("message_id") or 0), page[0], page[1])
+    answer_callback(query_id, text=alert)
 
 
 def format_user(user: dict | None) -> str:
@@ -948,22 +1621,34 @@ def is_chat_admin(chat_id: int, user_id: int) -> bool:
     return member.get("status") in {"creator", "administrator"}
 
 
-def handle_start(message: dict) -> None:
+def handle_start(message: dict, args: list[str] | None = None) -> None:
     user = message.get("from") or {}
     user_id = int(user["id"])
     chat_id = int(message["chat"]["id"])
+    new_user = not user_exists(user_id)
     register_user(user_id, chat_id if is_private_chat(message) else None)
 
-    send_message(
-        chat_id,
-        "Возможности бота:\n"
-        "• Отслеживание удаленных сообщений\n"
-        "• Отслеживание изменения сообщений\n"
-        "• Сохранение одноразовых фото и видео\n"
-        "• Сохранение кружков, голосовых, файлов и стикеров\n\n"
-        "От вас больше ничего не скроют.\n\n"
-        "Приятного пользования!",
-    )
+    # приход по реферальной ссылке: /start ref_<id>
+    args = args or []
+    if args and args[0].startswith("ref_"):
+        try:
+            referrer_id = int(args[0][4:])
+        except ValueError:
+            referrer_id = 0
+        if referrer_id and referrer_id != user_id and new_user and user_exists(referrer_id):
+            if add_referral(referrer_id, user_id):
+                check_trial(referrer_id)
+
+    if is_private_chat(message):
+        text, markup = page_home(user_id)
+        send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+    else:
+        send_message(
+            chat_id,
+            f"{pe('home')} Меню, подписка и помощь — в личных сообщениях со мной.\n"
+            f"Этот чат подключить можно командой /watch.",
+            parse_mode="HTML",
+        )
 
 
 def handle_watch(message: dict) -> None:
@@ -1158,11 +1843,38 @@ def handle_reply_to_message_media(
 
 
 def handle_regular_message(message: dict) -> None:
+    if message.get("successful_payment"):
+        handle_successful_payment(message)
+        return
+
+    text = message.get("text") or ""
+    user_id = int((message.get("from") or {}).get("id") or 0)
+    chat_id = int(message["chat"]["id"])
+
+    # ответ админа на выдачу подписки («ID дней») — до разбора команд
+    if text and not text.startswith("/") and chat_id in PENDING_GRANT and is_admin_user(user_id):
+        if handle_grant_input(user_id, chat_id, text):
+            return
+    if text.strip() == "/cancel" and chat_id in PENDING_GRANT:
+        PENDING_GRANT.pop(chat_id, None)
+        send_message(chat_id, "Отоменил выдачу.")
+        return
+
     command = command_from_message(message)
     if command:
         name, args = command
         if name == "/start":
-            handle_start(message)
+            handle_start(message, args)
+        elif name == "/menu":
+            handle_start(message, [])
+        elif name == "/help":
+            if is_private_chat(message):
+                page_text, page_markup = page_help(user_id)
+                send_message(chat_id, page_text, parse_mode="HTML", reply_markup=page_markup)
+            else:
+                send_message(chat_id, "Помощь покажу в личных сообщениях со мной.")
+        elif name == "/sub":
+            handle_sub_command(message, args)
         elif name == "/watch":
             handle_watch(message)
         elif name == "/status":
@@ -1179,16 +1891,18 @@ def handle_regular_message(message: dict) -> None:
             handle_restore(message, restore_all=True)
         return
 
-    chat_id = int(message["chat"]["id"])
     owner_id = get_chat_owner(chat_id)
     if not owner_id:
         return
 
-    notify_chat_id = get_private_chat_id(owner_id)
-    handle_reply_to_message_media("regular", message, notify_chat_id, ignored_user_id=owner_id)
     saved = save_message("regular", message)
     if saved_message_is_from_user(saved, owner_id):
         return
+    if not owner_can_log(owner_id):
+        return
+
+    notify_chat_id = get_private_chat_id(owner_id)
+    handle_reply_to_message_media("regular", message, notify_chat_id, ignored_user_id=owner_id)
     if should_forward_media_immediately(saved):
         send_immediate_timer_media(notify_chat_id, saved)
 
@@ -1205,6 +1919,8 @@ def handle_edited_regular_message(message: dict) -> None:
         return
     if saved_message_is_from_user(old, owner_id):
         return
+    if not owner_can_log(owner_id):
+        return
 
     notify_chat_id = get_private_chat_id(owner_id)
     send_message(
@@ -1218,17 +1934,29 @@ def handle_edited_regular_message(message: dict) -> None:
 def handle_business_connection(connection: dict) -> None:
     raw_log("business_connection", connection)
     save_business_connection(connection)
-    notify_chat_id = connection.get("user_chat_id") or (connection.get("user") or {}).get("id")
+    owner_id = (connection.get("user") or {}).get("id")
+    notify_chat_id = connection.get("user_chat_id") or owner_id
     if not notify_chat_id:
         return
 
     if connection.get("is_enabled", True):
+        sub_note = status_line(int(owner_id)) if owner_id else "—"
         send_message(
             int(notify_chat_id),
-            "Telegram Business подключен.\n"
-            "Теперь бот получает сообщения, правки и удаления из выбранных личных чатов.\n"
-            "Медиа сохраняется в локальный архив, если Telegram отдает файл через Bot API.",
+            f"{pe('check')} <b>Telegram Business подключен.</b>\n\n"
+            f"Теперь всё удалённое и исправленное в выбранных чатах прилетает сюда.\n"
+            f"Медиа сохраняется в локальный архив, если Telegram отдаёт файл через Bot API.\n"
+            f"{pe('stars')} Подписка: {sub_note}",
+            parse_mode="HTML",
         )
+        if owner_id and not sub_active(int(owner_id)):
+            text, markup = page_buy(int(owner_id))
+            send_message(
+                int(notify_chat_id),
+                f"{pe('warning')} Уведомления пойдут сразу, как активировать подписку:\n\n{text}",
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
     else:
         send_message(int(notify_chat_id), "Telegram Business отключен для этого бота.")
 
@@ -1242,10 +1970,12 @@ def handle_business_message(message: dict) -> None:
     context = f"business:{connection_id}"
     notify_chat_id = get_business_notify_chat_id(connection_id)
     owner_id = get_business_owner_id(connection_id)
-    handle_reply_to_message_media(context, message, notify_chat_id, ignored_user_id=owner_id)
     saved = save_message(context, message)
     if saved_message_is_from_user(saved, owner_id):
         return
+    if not owner_can_log(owner_id):
+        return
+    handle_reply_to_message_media(context, message, notify_chat_id, ignored_user_id=owner_id)
     if notify_chat_id and should_forward_media_immediately(saved):
         send_immediate_timer_media(notify_chat_id, saved)
 
@@ -1269,6 +1999,8 @@ def handle_edited_business_message(message: dict) -> None:
         return
     owner_id = get_business_owner_id(connection_id)
     if saved_message_is_from_user(old, owner_id):
+        return
+    if not owner_can_log(owner_id):
         return
 
     send_message(
@@ -1295,6 +2027,11 @@ def handle_deleted_business_messages(deleted: dict) -> None:
     context = f"business:{connection_id}"
     chat_info = format_chat(chat)
     owner_id = get_business_owner_id(connection_id)
+    if not owner_can_log(owner_id):
+        # подписки нет — данные всё равно помечаем, уведомления не шлём
+        for message_id in message_ids:
+            mark_message_deleted(context, int(chat_id), int(message_id))
+        return
     for message_id in message_ids:
         old = get_saved_message(context, int(chat_id), int(message_id))
         if old:
@@ -1331,6 +2068,10 @@ def handle_update(update: dict) -> None:
         handle_regular_message(update["message"])
     elif "edited_message" in update:
         handle_edited_regular_message(update["edited_message"])
+    elif "callback_query" in update:
+        handle_callback_query(update["callback_query"])
+    elif "pre_checkout_query" in update:
+        handle_pre_checkout_query(update["pre_checkout_query"])
     elif "business_connection" in update:
         handle_business_connection(update["business_connection"])
     elif "business_message" in update:
@@ -1347,7 +2088,10 @@ def configure_bot() -> None:
             "setMyCommands",
             {
                 "commands": [
-                    {"command": "start", "description": "Описание и подключение"},
+                    {"command": "start", "description": "Главное меню"},
+                    {"command": "menu", "description": "Открыть меню"},
+                    {"command": "help", "description": "Как подключить бота"},
+                    {"command": "sub", "description": "Выдать подписку (админ)"},
                     {"command": "watch", "description": "Включить обычный чат"},
                     {"command": "status", "description": "Статус обычного чата"},
                     {"command": "list", "description": "Список обычных чатов"},
