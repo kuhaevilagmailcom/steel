@@ -1,0 +1,28 @@
+Ubuntu 24 deploy commands:
+
+git clone https://github.com/kuhaevilagmailcom/steel.git ~/steel
+cd ~/steel
+chmod +x install_ubuntu24.sh run_bot.sh
+./install_ubuntu24.sh
+
+Check status:
+sudo systemctl status mishka-business-bot --no-pager
+
+Show logs:
+sudo journalctl -u mishka-business-bot -f
+
+Restart:
+sudo systemctl restart mishka-business-bot
+
+Stop:
+sudo systemctl stop mishka-business-bot
+
+To update code:
+cd ~/steel
+git pull
+sudo systemctl restart mishka-business-bot
+
+Important:
+- Run only one copy of this bot.
+- Before running it on the server, stop the local Windows copy.
+- Keep .env.deleted_logger and logger_data/bot_test.sqlite3 with the bot folder.
