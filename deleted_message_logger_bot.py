@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "logger_data"
+DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "logger_data"))).expanduser().resolve()
 MEDIA_DIR = DATA_DIR / "media"
 DB_PATH = DATA_DIR / "bot_test.sqlite3"
 LOG_PATH = DATA_DIR / "bot.log"
@@ -31,7 +31,7 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 load_dotenv(BASE_DIR / ".env.deleted_logger", encoding="utf-8-sig", override=True)
 
-BOT_TOKEN = os.getenv("LOGGER_BOT_TOKEN", "").strip()
+BOT_TOKEN = (os.getenv("LOGGER_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
 BOT_USERNAME = os.getenv("LOGGER_BOT_USERNAME", "").strip().lstrip("@")
 ADMIN_USER_IDS = {
     int(item.strip())
@@ -60,7 +60,7 @@ REF_DAYS = int(os.getenv("REF_DAYS", "3"))           # за это дают дн
 PROMPT_COOLDOWN_SEC = 6 * 3600                       # напоминать о подписке не чаще раза в 6 часов
 
 if not BOT_TOKEN:
-    raise RuntimeError("Set LOGGER_BOT_TOKEN in .env.deleted_logger")
+    raise RuntimeError("Set LOGGER_BOT_TOKEN or BOT_TOKEN")
 
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
 FILE_API_URL = f"https://api.telegram.org/file/bot{BOT_TOKEN}/"

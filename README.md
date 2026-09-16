@@ -77,13 +77,15 @@ docker run -d --name hollybot -v $PWD/logger_data:/app/logger_data hollybot   # 
 
 | Переменная | Что делает |
 |---|---|
-| `LOGGER_BOT_TOKEN` | Токен бота от @BotFather |
+| `LOGGER_BOT_TOKEN` | Токен бота от @BotFather (локальный запуск) |
+| `BOT_TOKEN` | Токен, который автоматически передаёт BotHost; используется как запасной вариант |
 | `LOGGER_BOT_USERNAME` | Username бота без `@` |
 | `ADMIN_USER_IDS` | ID админов через запятую |
 | `ROLLYPAY_API_BASE` | адрес API RollyPay |
 | `ROLLYPAY_TERMINAL_ID` | ID терминала RollyPay (если выдан) |
 | `ROLLYPAY_API_KEY` | ключ RollyPay; пустое значение отключает СБП |
 | `ROLLYPAY_TEST_MODE` | `false` для боевых платежей (значение по умолчанию) |
+| `DATA_DIR` | каталог постоянных данных; Docker использует `/app/data` |
 | `MAX_MEDIA_ARCHIVE_MB` | Лимит архива медиа (по умолчанию 50) |
 | `FORWARD_TIMER_MEDIA` | 1/0 — пересылать медиа таймеров |
 | `FORWARD_ALL_BUSINESS_MEDIA` | 1/0 — пересылать всё бизнес-медиа |
