@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -42,12 +43,15 @@ MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
 FORWARD_ALL_BUSINESS_MEDIA = os.getenv("FORWARD_ALL_BUSINESS_MEDIA", "0").strip() == "1"
 
-# --- подписки / рефералка ---
-# цена в Telegram Stars (XTR): сколько звёзд за сколько дней
-SUB_PLANS = {
-    15: 50,   # 15 дней — 50 звёзд
-    30: 100,  # месяц  — 100 звёзд
+# --- подписки / рефералка / СБП ---
+DEFAULT_SUB_PLANS = {
+    15: {"stars": 50, "rub": 40},
+    30: {"stars": 100, "rub": 80},
 }
+ROLLYPAY_API_BASE = os.getenv("ROLLYPAY_API_BASE", "https://api.rollypay.io").strip().rstrip("/")
+ROLLYPAY_TERMINAL_ID = os.getenv("ROLLYPAY_TERMINAL_ID", "").strip()
+ROLLYPAY_API_KEY = os.getenv("ROLLYPAY_API_KEY", "").strip()
+ROLLYPAY_TEST_MODE = os.getenv("ROLLYPAY_TEST_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
 REF_REQUIRED = int(os.getenv("REF_REQUIRED", "3"))   # сколько друзей позвать
 REF_DAYS = int(os.getenv("REF_DAYS", "3"))           # за это дают дней триала
 PROMPT_COOLDOWN_SEC = 6 * 3600                       # напоминать о подписке не чаще раза в 6 часов
@@ -429,7 +433,7 @@ def init_db() -> None:
         ensure_column(conn, "messages", "updated_at", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "messages", "deleted_at", "INTEGER")
 
-        # --- подписки, рефералы, платежи (Stars) ---
+        # --- подписки, рефералы и платежи ---
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS subs (
@@ -459,6 +463,40 @@ def init_db() -> None:
                 stars INTEGER NOT NULL,
                 payload TEXT,
                 created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_plans (
+                days INTEGER PRIMARY KEY,
+                price_stars INTEGER NOT NULL,
+                price_rub INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO subscription_plans (days, price_stars, price_rub, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (days, prices["stars"], prices["rub"], int(time.time()))
+                for days, prices in DEFAULT_SUB_PLANS.items()
+            ],
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sbp_payments (
+                payment_id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                days INTEGER NOT NULL,
+                rub INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'created',
+                created_at INTEGER NOT NULL,
+                paid_at INTEGER
             )
             """
         )
@@ -741,6 +779,8 @@ BACK_HOME = [btn("Назад в меню", "home", emoji="home")]
 
 # chat_id -> до этого момента ждём «ID дней» от админа
 PENDING_GRANT: dict[int, float] = {}
+# chat_id -> (дни, stars|rub, срок ожидания)
+PENDING_PRICE: dict[int, tuple[int, str, float]] = {}
 
 
 def referral_link(user_id: int) -> str:
@@ -749,6 +789,26 @@ def referral_link(user_id: int) -> str:
 
 
 # --- подписка ----------------------------------------------------------------
+
+def get_plans() -> dict[int, dict[str, int]]:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT days, price_stars, price_rub FROM subscription_plans ORDER BY days"
+        ).fetchall()
+    return {int(days): {"stars": int(stars), "rub": int(rub)} for days, stars, rub in rows}
+
+
+def get_plan(days: int) -> dict[str, int] | None:
+    return get_plans().get(days)
+
+
+def set_plan_price(days: int, kind: str, value: int) -> None:
+    column = "price_stars" if kind == "stars" else "price_rub"
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            f"UPDATE subscription_plans SET {column} = ?, updated_at = ? WHERE days = ?",
+            (value, int(time.time()), days),
+        )
 
 def get_sub(user_id: int) -> tuple[int, int]:
     """(until_ts, trial_used)"""
@@ -895,18 +955,26 @@ def page_home(user_id: int) -> tuple[str, dict]:
 
 
 def page_buy(user_id: int) -> tuple[str, dict]:
+    plans = get_plans()
+    p15, p30 = plans[15], plans[30]
     text = (
         f"{pe('stars')} <b>Подписка Holly Bot</b>\n\n"
         f"Сейчас: {status_line(user_id)}\n\n"
-        f"<b>15 дней</b> — 50 ⭐\n"
-        f"<b>30 дней</b> — 100 ⭐\n\n"
-        f"Оплата звёздами прямо в Telegram, доступ продлевается сразу.\n"
+        f"<b>15 дней</b> — {p15['rub']} ₽ или {p15['stars']} ⭐\n"
+        f"<b>30 дней</b> — {p30['rub']} ₽ или {p30['stars']} ⭐\n\n"
+        f"Выбери СБП или Telegram Stars — доступ продлевается сразу после подтверждения оплаты.\n"
         f"Хочешь бесплатно? Пригласи {REF_REQUIRED} друзей — {REF_DAYS} дня в подарок "
         f"(кнопка «Пригласить друзей»)."
     )
     rows = [
-        [btn("15 дней — 50 ⭐", "buy:15", emoji="stars", style="success")],
-        [btn("30 дней — 100 ⭐", "buy:30", emoji="stars", style="success")],
+        [
+            btn(f"15 дней — {p15['rub']} ₽", "buy:sbp:15", emoji="pay", style="success"),
+            btn(f"{p15['stars']} ⭐", "buy:stars:15", emoji="stars", style="success"),
+        ],
+        [
+            btn(f"30 дней — {p30['rub']} ₽", "buy:sbp:30", emoji="pay", style="success"),
+            btn(f"{p30['stars']} ⭐", "buy:stars:30", emoji="stars", style="success"),
+        ],
         [btn("Пригласить друзей", "ref", emoji="invite")],
         BACK_HOME,
     ]
@@ -941,6 +1009,7 @@ def page_ref(user_id: int) -> tuple[str, dict]:
 
 def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
+    plans = get_plans()
     text = (
         f"{pe('support')} <b>Как подключить бота</b>\n\n"
         f"<b>1.</b> Открой Telegram → <b>Настройки</b> → <b>Telegram Business</b>\n"
@@ -950,7 +1019,8 @@ def page_help(user_id: int) -> tuple[str, dict]:
         f"<b>5.</b> Готово: всё удалённое и исправленное прилетает сюда\n\n"
         f"<b>Обычная группа:</b> добавь бота в группу и напиши там /watch\n"
         f"(отключить — /stop, статус — /status)\n\n"
-        f"{pe('stars')} Работает по подписке: 15 дней — 50 ⭐, 30 дней — 100 ⭐.\n"
+        f"{pe('stars')} Подписка: 15 дней — {plans[15]['rub']} ₽ / {plans[15]['stars']} ⭐, "
+        f"30 дней — {plans[30]['rub']} ₽ / {plans[30]['stars']} ⭐.\n"
         f"{pe('gift')} Не хочешь платить? Пригласи {REF_REQUIRED} друзей — {REF_DAYS} дня бесплатно."
     )
     rows = [
@@ -983,21 +1053,47 @@ def page_panel(user_id: int) -> tuple[str, dict]:
         actives = conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > ?", (now,)).fetchone()[0]
         refs = conn.execute("SELECT COUNT(*) FROM referrals").fetchone()[0]
         pays = conn.execute("SELECT COUNT(*), COALESCE(SUM(stars), 0) FROM payments").fetchone()
+        sbp = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(rub), 0) FROM sbp_payments WHERE status = 'paid'"
+        ).fetchone()
     text = (
         f"{pe('admin')} <b>Админ-панель</b>\n\n"
         f"Пользователей: <b>{users}</b>\n"
         f"Активных подписок: <b>{actives}</b>\n"
         f"Реферальных связок: <b>{refs}</b>\n"
-        f"Платежей: <b>{pays[0]}</b> на <b>{pays[1]} ⭐</b>\n\n"
+        f"Stars-платежей: <b>{pays[0]}</b> на <b>{pays[1]} ⭐</b>\n"
+        f"СБП-платежей: <b>{sbp[0]}</b> на <b>{sbp[1]} ₽</b>\n\n"
         f"Быстрая выдача: <code>/sub ID_ПОЛЬЗОВАТЕЛЯ ДНЕЙ</code> (например <code>/sub 123456 30</code>), "
         f"снять — <code>/sub ID_ДНЯХ 0</code>."
     )
     rows = [
         [btn("Выдать подписку", "grant", emoji="add", style="success")],
+        [btn("Изменить цены", "prices", emoji="pay")],
         [btn("Обновить", "panel", emoji="refresh")],
         BACK_HOME,
     ]
     return text, kb(rows)
+
+
+def page_prices(user_id: int) -> tuple[str, dict]:
+    plans = get_plans()
+    lines = [
+        f"<b>{days} дней</b>: {prices['rub']} ₽ / {prices['stars']} ⭐"
+        for days, prices in plans.items()
+    ]
+    rows: list[list[dict]] = []
+    for days, prices in plans.items():
+        rows.append(
+            [
+                btn(f"{days} дн. · {prices['rub']} ₽", f"price:{days}:rub", emoji="pay"),
+                btn(f"{days} дн. · {prices['stars']} ⭐", f"price:{days}:stars", emoji="stars"),
+            ]
+        )
+    rows.extend([[btn("Назад в админ-панель", "panel", emoji="home")], BACK_HOME])
+    return (
+        f"{pe('pay')} <b>Цены подписки</b>\n\n" + "\n".join(lines) + "\n\nНажми цену, которую хочешь изменить.",
+        kb(rows),
+    )
 
 
 # --- транспорт для кнопок ------------------------------------------------------
@@ -1036,10 +1132,125 @@ def edit_page(chat_id: int, message_id: int, text: str, markup: dict) -> None:
     send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
 
 
-# --- оплата звёздами -----------------------------------------------------------
+# --- оплата СБП и звёздами ----------------------------------------------------
+
+def rollypay_call(method: str, path: str, payload: dict | None = None) -> dict:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"X-API-Key": ROLLYPAY_API_KEY, "X-Nonce": str(uuid.uuid4())}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    request = Request(ROLLYPAY_API_BASE + path, data=data, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, ValueError) as exc:
+        raise RuntimeError(f"RollyPay request failed: {exc}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("RollyPay returned invalid response")
+    return result
+
+
+def send_sbp_payment(user_id: int, chat_id: int, days: int) -> None:
+    plan = get_plan(days)
+    if not plan:
+        send_message(chat_id, "Тариф больше не доступен. Обнови меню.")
+        return
+    if not ROLLYPAY_API_KEY:
+        send_message(chat_id, "Оплата по СБП временно недоступна. Выбери Telegram Stars.")
+        return
+    rub = plan["rub"]
+    order_id = f"sub-{uuid.uuid4()}"
+    payload: dict[str, object] = {
+        "amount": f"{rub:.2f}",
+        "payment_currency": "RUB",
+        "order_id": order_id,
+        "description": f"Подписка Holly Bot на {days} дней",
+        "customer_id": str(user_id),
+        "metadata": {"telegram_user_id": str(user_id), "days": str(days)},
+        "test": ROLLYPAY_TEST_MODE,
+    }
+    if ROLLYPAY_TERMINAL_ID:
+        payload["terminal_id"] = ROLLYPAY_TERMINAL_ID
+    try:
+        payment = rollypay_call("POST", "/api/v1/payments", payload)
+        payment_id = str(payment["payment_id"])
+        pay_url = str(payment["pay_url"])
+        if not payment_id or payment_id == "None" or not pay_url.startswith("https://"):
+            raise KeyError("invalid payment response")
+    except (RuntimeError, KeyError) as exc:
+        log(f"SBP payment creation failed for {user_id}: {exc}")
+        send_message(chat_id, "Не удалось создать платёж СБП. Попробуй ещё раз через минуту.")
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO sbp_payments (payment_id, order_id, user_id, days, rub, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'created', ?)
+            """,
+            (payment_id, order_id, user_id, days, rub, int(time.time())),
+        )
+    markup = kb(
+        [
+            [btn(f"Оплатить {rub} ₽ по СБП", url=pay_url, emoji="pay", style="success")],
+            [btn("Проверить оплату", f"sbp:check:{order_id}", emoji="refresh")],
+            [btn("Назад к тарифам", "buy", emoji="home")],
+        ]
+    )
+    send_message(
+        chat_id,
+        f"{pe('pay')} <b>Счёт СБП создан</b>\n\n"
+        f"Тариф: <b>{days} дней</b>\nК оплате: <b>{rub} ₽</b>\n\n"
+        f"После оплаты вернись сюда и нажми «Проверить оплату».",
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+
+
+def check_sbp_payment(user_id: int, order_id: str) -> tuple[bool, str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT payment_id, user_id, days, rub, status FROM sbp_payments WHERE order_id = ?",
+            (order_id,),
+        ).fetchone()
+    if not row or int(row[1]) != user_id:
+        return False, "Платёж не найден"
+    payment_id, _, days, rub, status = row
+    if status == "paid":
+        return True, "Этот платёж уже зачислен"
+    try:
+        payment = rollypay_call("GET", f"/api/v1/payments/{quote(payment_id, safe='')}")
+    except RuntimeError as exc:
+        log(f"SBP payment check failed for {payment_id}: {exc}")
+        return False, "Не удалось проверить платёж. Попробуй ещё раз"
+    try:
+        amount_matches = Decimal(str(payment.get("amount") or "0")) == Decimal(int(rub))
+    except InvalidOperation:
+        amount_matches = False
+    matches = (
+        str(payment.get("payment_id") or "") == payment_id
+        and str(payment.get("order_id") or "") == order_id
+        and str(payment.get("payment_currency", payment.get("currency", ""))).upper() == "RUB"
+        and amount_matches
+    )
+    if payment.get("status") != "paid" or not matches:
+        return False, "Платёж пока не подтверждён"
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "UPDATE sbp_payments SET status = 'paid', paid_at = ? WHERE payment_id = ? AND status != 'paid'",
+            (int(time.time()), payment_id),
+        )
+    if cur.rowcount:
+        until = add_days(user_id, int(days))
+        notify_admins_sbp_payment(user_id, int(days), int(rub))
+        return True, f"Оплачено! Подписка активна до {format_until(until)}"
+    return True, "Этот платёж уже зачислен"
 
 def send_subscription_invoice(user_id: int, chat_id: int, days: int) -> None:
-    stars = SUB_PLANS[days]
+    plan = get_plan(days)
+    if not plan:
+        send_message(chat_id, "Тариф больше не доступен. Обнови меню.")
+        return
+    stars = plan["stars"]
     try:
         telegram_call(
             "sendInvoice",
@@ -1071,7 +1282,7 @@ def handle_pre_checkout_query(query: dict) -> None:
         valid = (
             uid
             and uid == payer_id
-            and SUB_PLANS.get(days) == stars
+            and (get_plan(days) or {}).get("stars") == stars
             and int(query.get("total_amount") or 0) == stars
         )
     if valid:
@@ -1097,6 +1308,16 @@ def notify_admins_payment(user_id: int, days: int, stars: int) -> None:
             pass
 
 
+def notify_admins_sbp_payment(user_id: int, days: int, rub: int) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        total = conn.execute(
+            "SELECT COALESCE(SUM(rub), 0) FROM sbp_payments WHERE status = 'paid'"
+        ).fetchone()[0]
+    line = f"{pe('pay')} Оплата: <code>{user_id}</code> купил {days} дн. за {rub} ₽\nВсего собрано: {total} ₽"
+    for admin_id in sorted(ADMIN_USER_IDS):
+        send_message(admin_id, line, parse_mode="HTML")
+
+
 def handle_successful_payment(message: dict) -> None:
     payment = message.get("successful_payment") or {}
     parts = str(payment.get("invoice_payload") or "").split(":")
@@ -1106,7 +1327,7 @@ def handle_successful_payment(message: dict) -> None:
         uid, days, stars = int(parts[1]), int(parts[2]), int(parts[3])
     except ValueError:
         return
-    if SUB_PLANS.get(days) != stars or int(payment.get("total_amount") or 0) != stars:
+    if (get_plan(days) or {}).get("stars") != stars or int(payment.get("total_amount") or 0) != stars:
         log(f"Rejected payment payload: {payment.get('invoice_payload')}")
         return
 
@@ -1204,6 +1425,28 @@ def handle_grant_input(user_id: int, chat_id: int, text: str) -> bool:
     return True
 
 
+def handle_price_input(chat_id: int, text: str) -> bool:
+    pending = PENDING_PRICE.pop(chat_id, None)
+    if pending is None:
+        return False
+    days, kind, deadline = pending
+    if deadline < time.time():
+        send_message(chat_id, "Окно изменения цены закрылось — нажми кнопку заново.")
+        return True
+    try:
+        value = int(text.strip())
+    except ValueError:
+        send_message(chat_id, "Цена должна быть целым числом больше нуля.")
+        return True
+    if not 1 <= value <= 1_000_000:
+        send_message(chat_id, "Цена должна быть от 1 до 1 000 000.")
+        return True
+    set_plan_price(days, kind, value)
+    unit = "⭐" if kind == "stars" else "₽"
+    send_message(chat_id, f"Цена тарифа на {days} дней изменена: {value} {unit}.")
+    return True
+
+
 # --- роутер колбэков -------------------------------------------------------------
 
 def handle_callback_query(query: dict) -> None:
@@ -1232,15 +1475,32 @@ def handle_callback_query(query: dict) -> None:
     elif data == "buy":
         page = page_buy(user_id)
     elif data.startswith("buy:"):
+        parts = data.split(":")
+        provider = "stars" if len(parts) == 2 else parts[1]
         try:
-            days = int(data.split(":", 1)[1])
+            days = int(parts[-1])
         except ValueError:
             days = 0
-        if days not in SUB_PLANS:
+        if not get_plan(days):
             answer_callback(query_id, text="Тариф закончился — обнови меню", show_alert=True)
             return
-        send_subscription_invoice(user_id, chat_id, days)
-        alert = "Открываю оплату ⭐"
+        if provider == "stars":
+            send_subscription_invoice(user_id, chat_id, days)
+            alert = "Открываю оплату ⭐"
+        elif provider == "sbp":
+            send_sbp_payment(user_id, chat_id, days)
+            alert = "Счёт СБП создан"
+        else:
+            answer_callback(query_id, text="Способ оплаты не найден", show_alert=True)
+            return
+    elif data.startswith("sbp:check:"):
+        paid, text = check_sbp_payment(user_id, data.split(":", 2)[2])
+        if paid:
+            page = page_home(user_id)
+            alert = text
+        else:
+            answer_callback(query_id, text=text, show_alert=True)
+            return
     elif data == "ref":
         page = page_ref(user_id)
     elif data == "help":
@@ -1256,6 +1516,27 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
         page = page_panel(user_id)
+    elif data == "prices":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_prices(user_id)
+    elif data.startswith("price:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) != 3 or not parts[1].isdigit() or parts[2] not in {"rub", "stars"}:
+            answer_callback(query_id, text="Неизвестная цена", show_alert=True)
+            return
+        days, kind = int(parts[1]), parts[2]
+        if not get_plan(days):
+            answer_callback(query_id, text="Тариф не найден", show_alert=True)
+            return
+        PENDING_PRICE[chat_id] = (days, kind, time.time() + 300)
+        unit = "звёздах" if kind == "stars" else "рублях"
+        send_message(chat_id, f"Введи новую цену тарифа на {days} дней в {unit}. Отмена — /cancel")
+        page = page_prices(user_id)
     elif data == "grant":
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
@@ -1852,12 +2133,16 @@ def handle_regular_message(message: dict) -> None:
     chat_id = int(message["chat"]["id"])
 
     # ответ админа на выдачу подписки («ID дней») — до разбора команд
+    if text and not text.startswith("/") and chat_id in PENDING_PRICE and is_admin_user(user_id):
+        if handle_price_input(chat_id, text):
+            return
     if text and not text.startswith("/") and chat_id in PENDING_GRANT and is_admin_user(user_id):
         if handle_grant_input(user_id, chat_id, text):
             return
-    if text.strip() == "/cancel" and chat_id in PENDING_GRANT:
+    if text.strip() == "/cancel" and (chat_id in PENDING_GRANT or chat_id in PENDING_PRICE):
         PENDING_GRANT.pop(chat_id, None)
-        send_message(chat_id, "Отоменил выдачу.")
+        PENDING_PRICE.pop(chat_id, None)
+        send_message(chat_id, "Отменено.")
         return
 
     command = command_from_message(message)

@@ -61,6 +61,7 @@ with __import__("sqlite3").connect(b.DB_PATH) as conn:
 cases = {
     "page_home": 111, "page_buy": 111, "page_ref": 111,
     "page_help": 111, "page_connections": 111, "page_panel": 999,
+    "page_prices": 999,
 }
 for name, uid in cases.items():
     text, markup = getattr(b, name)(uid)
@@ -75,10 +76,50 @@ _, m = b.page_ref(111)
 row0 = m["inline_keyboard"][0][0]
 assert row0["copy_text"]["text"].startswith("https://t.me/") and row0["icon_custom_emoji_id"]
 _, m = b.page_buy(111)
-assert m["inline_keyboard"][0][0]["callback_data"] == "buy:15"
-assert m["inline_keyboard"][1][0]["callback_data"] == "buy:30"
+assert m["inline_keyboard"][0][0]["callback_data"] == "buy:sbp:15"
+assert m["inline_keyboard"][0][1]["callback_data"] == "buy:stars:15"
+assert m["inline_keyboard"][1][0]["callback_data"] == "buy:sbp:30"
+assert m["inline_keyboard"][1][1]["callback_data"] == "buy:stars:30"
 
 # тарифы
-assert b.SUB_PLANS == {15: 50, 30: 100}
+assert b.get_plans() == {
+    15: {"stars": 50, "rub": 40},
+    30: {"stars": 100, "rub": 80},
+}
+b.set_plan_price(15, "rub", 41)
+assert b.get_plan(15)["rub"] == 41
+b.set_plan_price(15, "rub", 40)
+
+# СБП: создание, точная сверка и защита от повторного начисления
+sent = []
+b.send_message = lambda *a, **k: sent.append((a, k))
+b.ROLLYPAY_API_KEY = "test"
+b.rollypay_call = lambda method, path, payload=None: (
+    {"payment_id": "pay-1", "pay_url": "https://pay.example/1"}
+    if method == "POST"
+    else {
+        "payment_id": "pay-1", "order_id": path.rsplit("/", 1)[-1],
+        "payment_currency": "RUB", "amount": "40.00", "status": "paid",
+    }
+)
+b.send_sbp_payment(111, 111, 15)
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    payment_id, order_id = conn.execute(
+        "SELECT payment_id, order_id FROM sbp_payments"
+    ).fetchone()
+
+def paid_response(method, path, payload=None):
+    return {
+        "payment_id": payment_id, "order_id": order_id,
+        "payment_currency": "RUB", "amount": "40.00", "status": "paid",
+    }
+
+b.rollypay_call = paid_response
+b.set_until(111, 0, None)
+paid, _ = b.check_sbp_payment(111, order_id)
+first_until = b.get_sub(111)[0]
+assert paid and first_until > time.time()
+paid, _ = b.check_sbp_payment(111, order_id)
+assert paid and b.get_sub(111)[0] == first_until, "СБП не начисляется повторно"
 
 print("ALL TESTS PASSED")
