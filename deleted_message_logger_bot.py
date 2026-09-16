@@ -1657,8 +1657,34 @@ def message_media(message: dict) -> dict | None:
     return None
 
 
+def media_ttl_seconds(message: dict, value: dict | None = None) -> int | None:
+    """Read timer fields from Bot API payloads, including nested media objects."""
+    candidates = []
+    if isinstance(value, dict):
+        candidates.extend([value.get("ttl_seconds"), value.get("ttl_period")])
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            candidates.extend([node.get("ttl_seconds"), node.get("ttl_period")])
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(message)
+    for candidate in candidates:
+        try:
+            ttl = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if ttl > 0:
+            return ttl
+    return None
+
+
 def media_payload(media_type: str, value: dict, message: dict) -> dict:
-    ttl_seconds = value.get("ttl_seconds") or message.get("ttl_seconds")
+    ttl_seconds = media_ttl_seconds(message, value)
     return {
         "type": media_type,
         "file_id": value.get("file_id"),
