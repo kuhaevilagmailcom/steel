@@ -83,7 +83,7 @@ docker run -d --name hollybot -v $PWD/logger_data:/app/logger_data hollybot   # 
 | `ROLLYPAY_API_BASE` | адрес API RollyPay |
 | `ROLLYPAY_TERMINAL_ID` | ID терминала RollyPay (если выдан) |
 | `ROLLYPAY_API_KEY` | ключ RollyPay; пустое значение отключает СБП |
-| `ROLLYPAY_TEST_MODE` | `true` для тестовых платежей, `false` для боевых |
+| `ROLLYPAY_TEST_MODE` | `false` для боевых платежей (значение по умолчанию) |
 | `MAX_MEDIA_ARCHIVE_MB` | Лимит архива медиа (по умолчанию 50) |
 | `FORWARD_TIMER_MEDIA` | 1/0 — пересылать медиа таймеров |
 | `FORWARD_ALL_BUSINESS_MEDIA` | 1/0 — пересылать всё бизнес-медиа |
