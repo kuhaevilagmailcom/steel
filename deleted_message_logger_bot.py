@@ -52,6 +52,9 @@ ROLLYPAY_API_BASE = os.getenv("ROLLYPAY_API_BASE", "https://api.rollypay.io").st
 ROLLYPAY_TERMINAL_ID = os.getenv("ROLLYPAY_TERMINAL_ID", "").strip()
 ROLLYPAY_API_KEY = os.getenv("ROLLYPAY_API_KEY", "").strip()
 ROLLYPAY_TEST_MODE = os.getenv("ROLLYPAY_TEST_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+ROLLYPAY_ENABLED = bool(
+    ROLLYPAY_API_KEY and ROLLYPAY_API_KEY.upper() not in {"CHANGE_ME", "YOUR_TOKEN"}
+)
 REF_REQUIRED = int(os.getenv("REF_REQUIRED", "3"))   # сколько друзей позвать
 REF_DAYS = int(os.getenv("REF_DAYS", "3"))           # за это дают дней триала
 PROMPT_COOLDOWN_SEC = 6 * 3600                       # напоминать о подписке не чаще раза в 6 часов
@@ -1155,7 +1158,7 @@ def send_sbp_payment(user_id: int, chat_id: int, days: int) -> None:
     if not plan:
         send_message(chat_id, "Тариф больше не доступен. Обнови меню.")
         return
-    if not ROLLYPAY_API_KEY:
+    if not ROLLYPAY_ENABLED:
         send_message(chat_id, "Оплата по СБП временно недоступна. Выбери Telegram Stars.")
         return
     rub = plan["rub"]

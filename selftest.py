@@ -94,6 +94,7 @@ b.set_plan_price(15, "rub", 40)
 sent = []
 b.send_message = lambda *a, **k: sent.append((a, k))
 b.ROLLYPAY_API_KEY = "test"
+b.ROLLYPAY_ENABLED = True
 b.rollypay_call = lambda method, path, payload=None: (
     {"payment_id": "pay-1", "pay_url": "https://pay.example/1"}
     if method == "POST"
