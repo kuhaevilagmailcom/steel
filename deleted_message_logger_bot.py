@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import csv
 import json
 import mimetypes
 import os
@@ -21,6 +22,7 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "logger_data"))).expanduser().resolve()
 MEDIA_DIR = DATA_DIR / "media"
+BACKUP_DIR = DATA_DIR / "backups"
 DB_PATH = DATA_DIR / "bot_test.sqlite3"
 LOG_PATH = DATA_DIR / "bot.log"
 LOCK_PATH = DATA_DIR / "bot.lock"
@@ -28,6 +30,7 @@ RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 load_dotenv(BASE_DIR / ".env.deleted_logger", encoding="utf-8-sig", override=True)
 
@@ -58,6 +61,8 @@ ROLLYPAY_ENABLED = bool(
 REF_REQUIRED = int(os.getenv("REF_REQUIRED", "3"))   # сколько друзей позвать
 REF_DAYS = int(os.getenv("REF_DAYS", "3"))           # за это дают дней триала
 PROMPT_COOLDOWN_SEC = 6 * 3600                       # напоминать о подписке не чаще раза в 6 часов
+MAINTENANCE_INTERVAL_SEC = 300
+BACKUP_KEEP = 7
 
 if not BOT_TOKEN:
     raise RuntimeError("Set LOGGER_BOT_TOKEN or BOT_TOKEN")
@@ -279,6 +284,13 @@ def send_message(
                 except TelegramApiError:
                     pass
             log(f"sendMessage failed for {chat_id}: {exc}")
+
+
+def send_document(chat_id: int, path: Path, caption: str = "") -> None:
+    fields: dict[str, object] = {"chat_id": chat_id}
+    if caption:
+        fields["caption"] = caption
+    telegram_multipart_call("sendDocument", fields, {"document": path}, timeout=60)
 
 
 def html_text(value: object) -> str:
@@ -503,6 +515,89 @@ def init_db() -> None:
                 status TEXT NOT NULL DEFAULT 'created',
                 created_at INTEGER NOT NULL,
                 paid_at INTEGER
+            )
+            """
+        )
+        ensure_column(conn, "payments", "payer_id", "INTEGER")
+        ensure_column(conn, "payments", "promo_code", "TEXT")
+        ensure_column(conn, "sbp_payments", "payer_id", "INTEGER")
+        ensure_column(conn, "sbp_payments", "promo_code", "TEXT")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                user_id INTEGER PRIMARY KEY,
+                reason TEXT,
+                blocked_by INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target_id INTEGER,
+                details TEXT,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code TEXT PRIMARY KEY,
+                discount_percent INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                max_uses INTEGER NOT NULL,
+                uses INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_activations (
+                user_id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL,
+                activated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_text TEXT NOT NULL,
+                admin_id INTEGER,
+                admin_reply TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at INTEGER NOT NULL,
+                replied_at INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_reminders (
+                user_id INTEGER NOT NULL,
+                until_ts INTEGER NOT NULL,
+                days_before INTEGER NOT NULL,
+                sent_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, until_ts, days_before)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS maintenance_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
             )
             """
         )
@@ -806,6 +901,17 @@ BACK_HOME = [btn("Назад в меню", "home", emoji="home")]
 PENDING_GRANT: dict[int, float] = {}
 # chat_id -> (дни, stars|rub, срок ожидания)
 PENDING_PRICE: dict[int, tuple[int, str, float]] = {}
+# admin chat_id -> (scope, deadline); preview is stored after the message arrives
+PENDING_BROADCAST: dict[int, tuple[str, float]] = {}
+BROADCAST_PREVIEWS: dict[int, tuple[str, str, float]] = {}
+PENDING_PROMO_CREATE: dict[int, float] = {}
+PENDING_PROMO_ACTIVATE: dict[int, float] = {}
+PENDING_GIFT: dict[int, float] = {}
+PENDING_SUPPORT: dict[int, float] = {}
+PENDING_SUPPORT_REPLY: dict[int, tuple[int, int, float]] = {}
+PENDING_BLOCK_REASON: dict[int, tuple[int, int, float]] = {}
+LAST_MAINTENANCE_TS = 0.0
+POLLING_ERROR_COUNT = 0
 
 
 def referral_link(user_id: int) -> str:
@@ -870,6 +976,8 @@ def add_days(user_id: int, days: int) -> int:
 def sub_active(user_id: int | None) -> bool:
     if user_id is None or is_admin_user(user_id):
         return True
+    if is_blocked(user_id):
+        return False
     return get_sub(user_id)[0] > int(time.time())
 
 
@@ -894,6 +1002,78 @@ def status_line(user_id: int) -> str:
 def user_exists(user_id: int) -> bool:
     with sqlite3.connect(DB_PATH) as conn:
         return conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)).fetchone() is not None
+
+
+def is_blocked(user_id: int) -> bool:
+    if is_admin_user(user_id):
+        return False
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute("SELECT 1 FROM blocked_users WHERE user_id = ?", (user_id,)).fetchone() is not None
+
+
+def audit_admin(admin_id: int, action: str, target_id: int | None = None, details: str = "") -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO admin_actions (admin_id, action, target_id, details, created_at) VALUES (?, ?, ?, ?, ?)",
+            (admin_id, action, target_id, details[:1000], int(time.time())),
+        )
+
+
+def active_promo(user_id: int) -> tuple[str, int] | None:
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            """
+            SELECT p.code, p.discount_percent
+            FROM promo_activations AS a
+            JOIN promo_codes AS p ON p.code = a.code
+            WHERE a.user_id = ? AND p.active = 1 AND p.expires_at >= ? AND p.uses < p.max_uses
+            """,
+            (user_id, now),
+        ).fetchone()
+    return (str(row[0]), int(row[1])) if row else None
+
+
+def discounted_price(user_id: int, base_price: int) -> tuple[int, str | None]:
+    promo = active_promo(user_id)
+    if not promo:
+        return base_price, None
+    code, discount = promo
+    return max(1, (base_price * (100 - discount) + 99) // 100), code
+
+
+def activate_promo(user_id: int, code: str) -> tuple[bool, str]:
+    code = code.strip().upper()
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT discount_percent, expires_at, max_uses, uses, active FROM promo_codes WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if not row or not int(row[4]) or int(row[1]) < now or int(row[3]) >= int(row[2]):
+            return False, "Промокод не найден, закончился или исчерпан."
+        conn.execute(
+            """
+            INSERT INTO promo_activations (user_id, code, activated_at) VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET code = excluded.code, activated_at = excluded.activated_at
+            """,
+            (user_id, code, now),
+        )
+    return True, f"Промокод {code} активирован: скидка {int(row[0])}%."
+
+
+def consume_promo(user_id: int, code: str | None) -> None:
+    if not code:
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE promo_codes SET uses = uses + 1
+            WHERE code = ? AND active = 1 AND uses < max_uses AND expires_at >= ?
+            """,
+            (code, int(time.time())),
+        )
+        conn.execute("DELETE FROM promo_activations WHERE user_id = ? AND code = ?", (user_id, code))
 
 
 def owner_can_log(owner_id: int | None) -> bool:
@@ -964,6 +1144,7 @@ def page_home(user_id: int) -> tuple[str, dict]:
             btn("Помощь", "help", emoji="support"),
             btn("Мои подключения", "conns", emoji="view"),
         ],
+        [btn("Написать в поддержку", "support", emoji="support")],
     ]
     if is_admin_user(user_id):
         rows.append([btn("Панель админа", "panel", emoji="admin")])
@@ -982,25 +1163,37 @@ def page_home(user_id: int) -> tuple[str, dict]:
 def page_buy(user_id: int) -> tuple[str, dict]:
     plans = get_plans()
     p15, p30 = plans[15], plans[30]
+    p15_rub, _ = discounted_price(user_id, p15["rub"])
+    p15_stars, _ = discounted_price(user_id, p15["stars"])
+    p30_rub, _ = discounted_price(user_id, p30["rub"])
+    p30_stars, _ = discounted_price(user_id, p30["stars"])
+    promo = active_promo(user_id)
+    gift_link = f"https://t.me/{bot_username() or 'hollyboot_bot'}?start=gift_{user_id}"
+    promo_text = f"\nПромокод: <b>{html_text(promo[0])}</b> (скидка {promo[1]}%)\n" if promo else ""
     text = (
         f"{pe('stars')} <b>Подписка Holly Bot</b>\n\n"
-        f"Сейчас: {status_line(user_id)}\n\n"
-        f"<b>15 дней</b> — {p15['rub']} ₽ или {p15['stars']} ⭐\n"
-        f"<b>30 дней</b> — {p30['rub']} ₽ или {p30['stars']} ⭐\n\n"
+        f"Сейчас: {status_line(user_id)}\n{promo_text}\n"
+        f"<b>15 дней</b> — {p15_rub} ₽ или {p15_stars} ⭐\n"
+        f"<b>30 дней</b> — {p30_rub} ₽ или {p30_stars} ⭐\n\n"
         f"Выбери СБП или Telegram Stars — доступ продлевается сразу после подтверждения оплаты.\n"
         f"Хочешь бесплатно? Пригласи {REF_REQUIRED} друзей — {REF_DAYS} дня в подарок "
         f"(кнопка «Пригласить друзей»)."
     )
     rows = [
         [
-            btn(f"15 дней — {p15['rub']} ₽", "buy:sbp:15", emoji="pay", style="success"),
-            btn(f"{p15['stars']} ⭐", "buy:stars:15", emoji="stars", style="success"),
+            btn(f"15 дней — {p15_rub} ₽", "buy:sbp:15", emoji="pay", style="success"),
+            btn(f"{p15_stars} ⭐", "buy:stars:15", emoji="stars", style="success"),
         ],
         [
-            btn(f"30 дней — {p30['rub']} ₽", "buy:sbp:30", emoji="pay", style="success"),
-            btn(f"{p30['stars']} ⭐", "buy:stars:30", emoji="stars", style="success"),
+            btn(f"30 дней — {p30_rub} ₽", "buy:sbp:30", emoji="pay", style="success"),
+            btn(f"{p30_stars} ⭐", "buy:stars:30", emoji="stars", style="success"),
         ],
         [btn("Пригласить друзей", "ref", emoji="invite")],
+        [
+            btn("Ввести промокод", "promo:activate", emoji="promo"),
+            btn("Подарить подписку", "gift:start", emoji="gift"),
+        ],
+        [btn("Моя ссылка для подарка", copy=gift_link, emoji="gift")],
         BACK_HOME,
     ]
     return text, kb(rows)
@@ -1143,10 +1336,146 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
     if page_number + 1 < page_count:
         navigation.append(btn("Дальше", f"users:{page_number + 1}", emoji="view"))
     buttons: list[list[dict]] = []
+    for row in rows:
+        uid, first_name, last_name, username, *_ = row
+        short_name = f"@{username}" if username else (first_name or str(uid))
+        buttons.append([btn(f"{short_name} · {uid}", f"user:{uid}:{page_number}", emoji="view")])
     if navigation:
         buttons.append(navigation)
     buttons.extend([[btn("Обновить", f"users:{page_number}", emoji="refresh")], [btn("Админ-панель", "panel", emoji="admin")], BACK_HOME])
     return text, kb(buttons)
+
+
+def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
+    if not is_admin_user(admin_id):
+        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        user = conn.execute(
+            "SELECT first_name, last_name, username, created_at, updated_at FROM users WHERE user_id = ?",
+            (target_id,),
+        ).fetchone()
+        stars = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(stars), 0) FROM payments WHERE user_id = ?", (target_id,)
+        ).fetchone()
+        rub = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(rub), 0) FROM sbp_payments WHERE user_id = ? AND status = 'paid'",
+            (target_id,),
+        ).fetchone()
+        regular_chats = conn.execute("SELECT COUNT(*) FROM chat_owners WHERE owner_id = ?", (target_id,)).fetchone()[0]
+        business_chats = conn.execute("SELECT COUNT(*) FROM business_connections WHERE owner_id = ?", (target_id,)).fetchone()[0]
+        blocked = conn.execute("SELECT reason FROM blocked_users WHERE user_id = ?", (target_id,)).fetchone()
+        history = conn.execute(
+            """
+            SELECT method, days, amount, created_at FROM (
+                SELECT 'Stars' AS method, days, stars AS amount, created_at FROM payments WHERE user_id = ?
+                UNION ALL
+                SELECT 'СБП', days, rub, COALESCE(paid_at, created_at) FROM sbp_payments
+                WHERE user_id = ? AND status = 'paid'
+            ) ORDER BY created_at DESC LIMIT 5
+            """,
+            (target_id, target_id),
+        ).fetchall()
+    if not user:
+        return "Пользователь не найден.", kb([[btn("Назад", f"users:{return_page}", emoji="home")]])
+    until, _ = get_sub(target_id)
+    history_text = "\n".join(
+        f"• {method}: {days} дн., {amount} {'⭐' if method == 'Stars' else '₽'} — {time.strftime('%d.%m.%Y', time.localtime(created))}"
+        for method, days, amount, created in history
+    ) or "покупок нет"
+    text = (
+        f"{pe('view')} <b>Карточка пользователя</b>\n\n"
+        f"{stored_user_label(target_id, user[0], user[1], user[2])}\n"
+        f"ID: <code>{target_id}</code>\n"
+        f"Подписка: <b>{'до ' + format_until(until) if until > int(time.time()) else 'нет'}</b>\n"
+        f"Статус: <b>{'заблокирован' if blocked else 'активен'}</b>"
+        f"{f' ({html_text(blocked[0])})' if blocked and blocked[0] else ''}\n"
+        f"Подключений: <b>{int(regular_chats) + int(business_chats)}</b> "
+        f"(обычных {regular_chats}, Business {business_chats})\n"
+        f"Рефералов: <b>{ref_count(target_id)}</b>\n"
+        f"Покупок: <b>{stars[0]}</b> на {stars[1]} ⭐, <b>{rub[0]}</b> на {rub[1]} ₽\n\n"
+        f"<b>Последние покупки:</b>\n{history_text}"
+    )
+    block_button = btn("Разблокировать", f"unblock:{target_id}:{return_page}", emoji="check", style="success") if blocked else btn("Заблокировать", f"block:{target_id}:{return_page}", emoji="warning", style="danger")
+    rows = [
+        [btn("+15 дней", f"useradd:{target_id}:15:{return_page}", emoji="add"), btn("+30 дней", f"useradd:{target_id}:30:{return_page}", emoji="add")],
+        [block_button],
+        [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
+        BACK_HOME,
+    ]
+    return text, kb(rows)
+
+
+def page_stats(user_id: int) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Только для админов.", kb([BACK_HOME])
+    now = int(time.time())
+    day_start = now - (now % 86400)
+    with sqlite3.connect(DB_PATH) as conn:
+        total_users = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+        active = int(conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > ?", (now,)).fetchone()[0])
+        expired = int(conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > 0 AND until_ts <= ?", (now,)).fetchone()[0])
+        buyers = int(conn.execute("SELECT COUNT(DISTINCT user_id) FROM (SELECT user_id FROM payments UNION ALL SELECT user_id FROM sbp_payments WHERE status='paid')").fetchone()[0])
+        stars = conn.execute("SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments").fetchone()
+        rub = conn.execute("SELECT COUNT(*), COALESCE(SUM(rub),0) FROM sbp_payments WHERE status='paid'").fetchone()
+        daily = []
+        for ago in range(6, -1, -1):
+            start = day_start - ago * 86400
+            users_count = int(conn.execute("SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?", (start, start + 86400)).fetchone()[0])
+            pay_count = int(conn.execute("SELECT COUNT(*) FROM (SELECT created_at FROM payments UNION ALL SELECT paid_at FROM sbp_payments WHERE status='paid') WHERE created_at >= ? AND created_at < ?", (start, start + 86400)).fetchone()[0])
+            daily.append((start, users_count, pay_count))
+        periods = []
+        for label, seconds in (("24 часа", 86400), ("7 дней", 7 * 86400), ("30 дней", 30 * 86400)):
+            count = int(conn.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (now - seconds,)).fetchone()[0])
+            periods.append(f"Новые за {label}: <b>{count}</b>")
+    peak = max([max(u, p) for _, u, p in daily] + [1])
+    chart = "\n".join(
+        f"{time.strftime('%d.%m', time.localtime(ts))}  {'█' * max(1, round(u / peak * 8)) if u else '·'} {u} новых | {'▓' * max(1, round(p / peak * 8)) if p else '·'} {p} оплат"
+        for ts, u, p in daily
+    )
+    conversion = round(buyers * 100 / total_users, 1) if total_users else 0
+    text = (
+        f"{pe('admin')} <b>Статистика</b>\n\n" + "\n".join(periods) +
+        f"\nВсего пользователей: <b>{total_users}</b>\nАктивных подписок: <b>{active}</b>\n"
+        f"Истёкших подписок: <b>{expired}</b>\nПокупателей: <b>{buyers}</b>\n"
+        f"Конверсия в покупку: <b>{conversion}%</b>\n\n"
+        f"Stars: <b>{stars[0]}</b> оплат на <b>{stars[1]} ⭐</b>\n"
+        f"СБП: <b>{rub[0]}</b> оплат на <b>{rub[1]} ₽</b>\n\n"
+        f"<b>График за 7 дней</b>\n<code>{chart}</code>"
+    )
+    return text, kb([[btn("Обновить", "stats", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+
+
+def page_promos(user_id: int) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Только для админов.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT code, discount_percent, expires_at, max_uses, uses, active FROM promo_codes ORDER BY created_at DESC LIMIT 20").fetchall()
+    lines = [f"<b>{html_text(code)}</b> — {discount}% · {uses}/{limit} · до {format_until(expires)} · {'включён' if active else 'выключен'}" for code, discount, expires, limit, uses, active in rows]
+    buttons = [[btn("Создать промокод", "promo:create", emoji="add", style="success")]]
+    buttons.extend([[btn(f"{'Выключить' if active else 'Включить'} {code}", f"promo:toggle:{code}", emoji="promo")] for code, _, _, _, _, active in rows[:10]])
+    buttons.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    return f"{pe('promo')} <b>Промокоды</b>\n\n" + ("\n".join(lines) if lines else "Промокодов пока нет."), kb(buttons)
+
+
+def page_admin_log(user_id: int) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Только для админов.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT admin_id, action, target_id, details, created_at FROM admin_actions ORDER BY id DESC LIMIT 30").fetchall()
+    lines = [f"{time.strftime('%d.%m %H:%M', time.localtime(ts))} · <code>{admin}</code> · <b>{html_text(action)}</b>{f' · {target}' if target else ''}{f' · {html_text(details)}' if details else ''}" for admin, action, target, details, ts in rows]
+    return f"{pe('admin')} <b>Журнал администраторов</b>\n\n" + ("\n".join(lines) if lines else "Действий пока нет."), kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+
+
+def page_gift_buy(payer_id: int, target_id: int) -> tuple[str, dict]:
+    plans = get_plans()
+    target = stored_user_payment_label(target_id)
+    rows = []
+    for days, prices in plans.items():
+        rub, _ = discounted_price(payer_id, prices["rub"])
+        stars, _ = discounted_price(payer_id, prices["stars"])
+        rows.append([btn(f"{days} дн. · {rub} ₽", f"gift:sbp:{target_id}:{days}", emoji="pay"), btn(f"{stars} ⭐", f"gift:stars:{target_id}:{days}", emoji="stars")])
+    rows.extend([[btn("Другой получатель", "gift:start", emoji="gift")], [btn("К тарифам", "buy", emoji="home")], BACK_HOME])
+    return f"{pe('gift')} <b>Подарочная подписка</b>\n\nПолучатель:\n{target}\n\nВыбери тариф и способ оплаты.", kb(rows)
 
 
 def page_panel(user_id: int) -> tuple[str, dict]:
@@ -1171,6 +1500,10 @@ def page_panel(user_id: int) -> tuple[str, dict]:
     )
     rows = [
         [btn("Все пользователи", "users:0", emoji="view")],
+        [btn("Рассылка", "broadcast", emoji="support"), btn("Статистика", "stats", emoji="admin")],
+        [btn("Промокоды", "promos", emoji="promo"), btn("Экспорт CSV", "export", emoji="view")],
+        [btn("Резервная копия", "backup", emoji="refresh"), btn("Проверка работы", "health", emoji="check")],
+        [btn("Журнал действий", "audit", emoji="view")],
         [btn("Выдать подписку", "grant", emoji="add", style="success")],
         [btn("Изменить цены", "prices", emoji="pay")],
         [btn("Обновить", "panel", emoji="refresh")],
@@ -1254,7 +1587,7 @@ def rollypay_call(method: str, path: str, payload: dict | None = None) -> dict:
     return result
 
 
-def send_sbp_payment(user_id: int, chat_id: int, days: int) -> None:
+def send_sbp_payment(user_id: int, chat_id: int, days: int, target_id: int | None = None) -> None:
     plan = get_plan(days)
     if not plan:
         send_message(chat_id, "Тариф больше не доступен. Обнови меню.")
@@ -1262,15 +1595,16 @@ def send_sbp_payment(user_id: int, chat_id: int, days: int) -> None:
     if not ROLLYPAY_ENABLED:
         send_message(chat_id, "Оплата по СБП временно недоступна. Выбери Telegram Stars.")
         return
-    rub = plan["rub"]
+    beneficiary_id = target_id or user_id
+    rub, promo_code = discounted_price(user_id, plan["rub"])
     order_id = f"sub-{uuid.uuid4()}"
     payload: dict[str, object] = {
         "amount": f"{rub:.2f}",
         "payment_currency": "RUB",
         "order_id": order_id,
-        "description": f"Подписка Holly Bot на {days} дней",
+        "description": f"Подписка Holly Bot на {days} дней" + (" в подарок" if beneficiary_id != user_id else ""),
         "customer_id": str(user_id),
-        "metadata": {"telegram_user_id": str(user_id), "days": str(days)},
+        "metadata": {"telegram_user_id": str(user_id), "beneficiary_id": str(beneficiary_id), "days": str(days), "promo_code": promo_code or ""},
         "test": ROLLYPAY_TEST_MODE,
     }
     if ROLLYPAY_TERMINAL_ID:
@@ -1283,15 +1617,16 @@ def send_sbp_payment(user_id: int, chat_id: int, days: int) -> None:
             raise KeyError("invalid payment response")
     except (RuntimeError, KeyError) as exc:
         log(f"SBP payment creation failed for {user_id}: {exc}")
+        report_technical_issue("sbp_create", f"СБП не создаёт платежи: {exc}")
         send_message(chat_id, "Не удалось создать платёж СБП. Попробуй ещё раз через минуту.")
         return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
-            INSERT INTO sbp_payments (payment_id, order_id, user_id, days, rub, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'created', ?)
+            INSERT INTO sbp_payments (payment_id, order_id, user_id, days, rub, status, created_at, payer_id, promo_code)
+            VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?)
             """,
-            (payment_id, order_id, user_id, days, rub, int(time.time())),
+            (payment_id, order_id, beneficiary_id, days, rub, int(time.time()), user_id, promo_code),
         )
     markup = kb(
         [
@@ -1300,10 +1635,11 @@ def send_sbp_payment(user_id: int, chat_id: int, days: int) -> None:
             [btn("Назад к тарифам", "buy", emoji="home")],
         ]
     )
+    gift_line = f"\nПодарок пользователю: <code>{beneficiary_id}</code>" if beneficiary_id != user_id else ""
     send_message(
         chat_id,
         f"{pe('pay')} <b>Счёт СБП создан</b>\n\n"
-        f"Тариф: <b>{days} дней</b>\nК оплате: <b>{rub} ₽</b>\n\n"
+        f"Тариф: <b>{days} дней</b>\nК оплате: <b>{rub} ₽</b>{gift_line}\n\n"
         f"После оплаты вернись сюда и нажми «Проверить оплату».",
         parse_mode="HTML",
         reply_markup=markup,
@@ -1313,18 +1649,19 @@ def send_sbp_payment(user_id: int, chat_id: int, days: int) -> None:
 def check_sbp_payment(user_id: int, order_id: str) -> tuple[bool, str]:
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
-            "SELECT payment_id, user_id, days, rub, status FROM sbp_payments WHERE order_id = ?",
+            "SELECT payment_id, user_id, days, rub, status, COALESCE(payer_id,user_id), promo_code FROM sbp_payments WHERE order_id = ?",
             (order_id,),
         ).fetchone()
-    if not row or int(row[1]) != user_id:
+    if not row or int(row[5]) != user_id:
         return False, "Платёж не найден"
-    payment_id, _, days, rub, status = row
+    payment_id, beneficiary_id, days, rub, status, payer_id, promo_code = row
     if status == "paid":
         return True, "Этот платёж уже зачислен"
     try:
         payment = rollypay_call("GET", f"/api/v1/payments/{quote(payment_id, safe='')}")
     except RuntimeError as exc:
         log(f"SBP payment check failed for {payment_id}: {exc}")
+        report_technical_issue("sbp_check", f"СБП не проверяет платежи: {exc}")
         return False, "Не удалось проверить платёж. Попробуй ещё раз"
     try:
         amount_matches = Decimal(str(payment.get("amount") or "0")) == Decimal(int(rub))
@@ -1344,25 +1681,29 @@ def check_sbp_payment(user_id: int, order_id: str) -> tuple[bool, str]:
             (int(time.time()), payment_id),
         )
     if cur.rowcount:
-        until = add_days(user_id, int(days))
-        notify_admins_sbp_payment(user_id, int(days), int(rub))
-        return True, f"Оплачено! Подписка активна до {format_until(until)}"
+        until = add_days(int(beneficiary_id), int(days))
+        consume_promo(int(payer_id), promo_code)
+        notify_admins_sbp_payment(int(beneficiary_id), int(days), int(rub), int(payer_id))
+        if int(beneficiary_id) != int(payer_id):
+            send_message(get_private_chat_id(int(beneficiary_id)), f"{pe('gift')} Тебе подарили подписку на <b>{days} дней</b> — до {format_until(until)}.", parse_mode="HTML")
+        return True, f"Оплачено! Подписка {'получателя ' if int(beneficiary_id) != int(payer_id) else ''}активна до {format_until(until)}"
     return True, "Этот платёж уже зачислен"
 
-def send_subscription_invoice(user_id: int, chat_id: int, days: int) -> None:
+def send_subscription_invoice(user_id: int, chat_id: int, days: int, target_id: int | None = None) -> None:
     plan = get_plan(days)
     if not plan:
         send_message(chat_id, "Тариф больше не доступен. Обнови меню.")
         return
-    stars = plan["stars"]
+    beneficiary_id = target_id or user_id
+    stars, promo_code = discounted_price(user_id, plan["stars"])
     try:
         telegram_call(
             "sendInvoice",
             {
                 "chat_id": chat_id,
-                "title": f"Подписка Holly Bot — {days} дней",
+                "title": f"{'Подарочная подписка' if beneficiary_id != user_id else 'Подписка Holly Bot'} — {days} дней",
                 "description": "Доступ ко всем функциям бота. Остаток суммируется при продлении.",
-                "payload": f"sub:{user_id}:{days}:{stars}",
+                "payload": f"sub:{user_id}:{beneficiary_id}:{days}:{stars}:{promo_code or '-'}",
                 "provider_token": "",
                 "currency": "XTR",
                 "prices": [{"label": f"{days} дней подписки", "amount": stars}],
@@ -1370,23 +1711,48 @@ def send_subscription_invoice(user_id: int, chat_id: int, days: int) -> None:
         )
     except TelegramApiError as exc:
         log(f"sendInvoice failed for {user_id}: {exc}")
+        report_technical_issue("stars_invoice", f"Telegram Stars не создаёт счёт: {exc}")
         send_message(chat_id, "Не удалось создать счёт на оплату. Попробуй ещё раз через минуту.")
+
+
+def parse_subscription_payload(payload: str) -> tuple[int, int, int, int, str | None] | None:
+    parts = payload.split(":")
+    try:
+        if len(parts) == 4 and parts[0] == "sub":
+            payer, days, amount = int(parts[1]), int(parts[2]), int(parts[3])
+            return payer, payer, days, amount, None
+        if len(parts) == 6 and parts[0] == "sub":
+            return int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), None if parts[5] == "-" else parts[5]
+    except ValueError:
+        return None
+    return None
+
+
+def valid_subscription_amount(payer_id: int, days: int, amount: int, promo_code: str | None) -> bool:
+    plan = get_plan(days)
+    if not plan:
+        return False
+    expected = plan["stars"]
+    if promo_code:
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute("SELECT discount_percent FROM promo_codes WHERE code=?", (promo_code,)).fetchone()
+        if not row:
+            return False
+        expected = max(1, (expected * (100 - int(row[0])) + 99) // 100)
+    return amount == expected
 
 
 def handle_pre_checkout_query(query: dict) -> None:
     qid = str(query.get("id") or "")
-    parts = str(query.get("invoice_payload") or "").split(":")
+    parsed = parse_subscription_payload(str(query.get("invoice_payload") or ""))
     valid = False
-    if len(parts) == 4 and parts[0] == "sub" and query.get("currency") == "XTR":
-        try:
-            uid, days, stars = int(parts[1]), int(parts[2]), int(parts[3])
-        except ValueError:
-            uid = days = stars = 0
+    if parsed and query.get("currency") == "XTR":
+        payer, _, days, stars, promo_code = parsed
         payer_id = (query.get("from") or {}).get("id")
         valid = (
-            uid
-            and uid == payer_id
-            and (get_plan(days) or {}).get("stars") == stars
+            payer
+            and payer == payer_id
+            and valid_subscription_amount(payer, days, stars, promo_code)
             and int(query.get("total_amount") or 0) == stars
         )
     if valid:
@@ -1398,13 +1764,15 @@ def handle_pre_checkout_query(query: dict) -> None:
         )
 
 
-def notify_admins_payment(user_id: int, days: int, stars: int) -> None:
+def notify_admins_payment(user_id: int, days: int, stars: int, payer_id: int | None = None) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         total = conn.execute("SELECT COALESCE(SUM(stars), 0) FROM payments").fetchone()[0]
     until = get_sub(user_id)[0]
+    payer_line = f"Покупатель: <code>{payer_id}</code>\n" if payer_id and payer_id != user_id else ""
     line = (
         f"{pe('pay')} <b>Новая покупка подписки</b>\n\n"
         f"{stored_user_payment_label(user_id)}\n"
+        f"{payer_line}"
         f"Способ: <b>Telegram Stars</b>\n"
         f"Тариф: <b>{days} дней</b>\n"
         f"Оплачено: <b>{stars} ⭐</b>\n"
@@ -1418,15 +1786,17 @@ def notify_admins_payment(user_id: int, days: int, stars: int) -> None:
             pass
 
 
-def notify_admins_sbp_payment(user_id: int, days: int, rub: int) -> None:
+def notify_admins_sbp_payment(user_id: int, days: int, rub: int, payer_id: int | None = None) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         total = conn.execute(
             "SELECT COALESCE(SUM(rub), 0) FROM sbp_payments WHERE status = 'paid'"
         ).fetchone()[0]
     until = get_sub(user_id)[0]
+    payer_line = f"Покупатель: <code>{payer_id}</code>\n" if payer_id and payer_id != user_id else ""
     line = (
         f"{pe('pay')} <b>Новая покупка подписки</b>\n\n"
         f"{stored_user_payment_label(user_id)}\n"
+        f"{payer_line}"
         f"Способ: <b>СБП</b>\n"
         f"Тариф: <b>{days} дней</b>\n"
         f"Оплачено: <b>{rub} ₽</b>\n"
@@ -1442,41 +1812,43 @@ def notify_admins_sbp_payment(user_id: int, days: int, rub: int) -> None:
 
 def handle_successful_payment(message: dict) -> None:
     payment = message.get("successful_payment") or {}
-    parts = str(payment.get("invoice_payload") or "").split(":")
-    if len(parts) != 4 or parts[0] != "sub" or payment.get("currency") != "XTR":
+    parsed = parse_subscription_payload(str(payment.get("invoice_payload") or ""))
+    if not parsed or payment.get("currency") != "XTR":
         return
-    try:
-        uid, days, stars = int(parts[1]), int(parts[2]), int(parts[3])
-    except ValueError:
-        return
-    if (get_plan(days) or {}).get("stars") != stars or int(payment.get("total_amount") or 0) != stars:
+    expected_payer, beneficiary_id, days, stars, promo_code = parsed
+    if not valid_subscription_amount(expected_payer, days, stars, promo_code) or int(payment.get("total_amount") or 0) != stars:
         log(f"Rejected payment payload: {payment.get('invoice_payload')}")
         return
 
     payer = message.get("from") or {}
-    payer_id = int(payer.get("id") or uid)
+    payer_id = int(payer.get("id") or expected_payer)
+    if payer_id != expected_payer:
+        return
     register_user(payer_id, int((message.get("chat") or {}).get("id") or payer_id), payer)
     tg_charge = str(payment.get("telegram_charge_id") or f"manual:{int(time.time())}:{payer_id}")
     now = int(time.time())
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             """
-            INSERT OR IGNORE INTO payments (tg_payment_id, user_id, days, stars, payload, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO payments (tg_payment_id, user_id, days, stars, payload, created_at, payer_id, promo_code)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (tg_charge, payer_id, days, stars, payment.get("invoice_payload"), now),
+            (tg_charge, beneficiary_id, days, stars, payment.get("invoice_payload"), now, payer_id, promo_code),
         )
         if cur.rowcount == 0:
             return  # такой платёж уже обработан
-    until = add_days(payer_id, days)
+    until = add_days(beneficiary_id, days)
+    consume_promo(payer_id, promo_code)
     chat_id = int(message.get("chat", {}).get("id") or get_private_chat_id(payer_id))
     send_message(
         chat_id,
-        f"{pe('check')} <b>Оплачено!</b> Подписка активна до <b>{format_until(until)}</b>.\n"
+        f"{pe('check')} <b>Оплачено!</b> Подписка {'получателя ' if beneficiary_id != payer_id else ''}активна до <b>{format_until(until)}</b>.\n"
         f"Спасибо! {pe('home')} Меню — /start",
         parse_mode="HTML",
     )
-    notify_admins_payment(payer_id, days, stars)
+    if beneficiary_id != payer_id:
+        send_message(get_private_chat_id(beneficiary_id), f"{pe('gift')} Тебе подарили подписку на <b>{days} дней</b> — до {format_until(until)}.", parse_mode="HTML")
+    notify_admins_payment(beneficiary_id, days, stars, payer_id)
 
 
 # --- выдача подписки админом ----------------------------------------------------
@@ -1486,6 +1858,7 @@ def grant_subscription(admin_id: int, chat_id: int, target_id: int, days: int) -
         send_message(chat_id, "Дней должно быть от 1 до 3650.")
         return
     until = add_days(target_id, days)
+    audit_admin(admin_id, "выдача подписки", target_id, f"{days} дней")
     send_message(
         chat_id,
         f"{pe('check')} Выдал <b>{days} дн.</b> пользователю <code>{target_id}</code> "
@@ -1521,6 +1894,7 @@ def handle_sub_command(message: dict, args: list[str]) -> None:
         return
     if days <= 0:
         set_until(target_id, 0)
+        audit_admin(user_id, "снятие подписки", target_id)
         send_message(chat_id, f"Снял подписку у {target_id}.")
         return
     grant_subscription(user_id, chat_id, target_id, days)
@@ -1549,7 +1923,7 @@ def handle_grant_input(user_id: int, chat_id: int, text: str) -> bool:
     return True
 
 
-def handle_price_input(chat_id: int, text: str) -> bool:
+def handle_price_input(admin_id: int, chat_id: int, text: str) -> bool:
     pending = PENDING_PRICE.pop(chat_id, None)
     if pending is None:
         return False
@@ -1566,9 +1940,337 @@ def handle_price_input(chat_id: int, text: str) -> bool:
         send_message(chat_id, "Цена должна быть от 1 до 1 000 000.")
         return True
     set_plan_price(days, kind, value)
+    audit_admin(admin_id, "изменение цены", None, f"{days} дней, {kind}={value}")
     unit = "⭐" if kind == "stars" else "₽"
     send_message(chat_id, f"Цена тарифа на {days} дней изменена: {value} {unit}.")
     return True
+
+
+def handle_broadcast_input(admin_id: int, chat_id: int, text: str) -> bool:
+    pending = PENDING_BROADCAST.pop(chat_id, None)
+    if not pending:
+        return False
+    scope, deadline = pending
+    if deadline < time.time():
+        send_message(chat_id, "Окно рассылки закрылось — начни заново.")
+        return True
+    BROADCAST_PREVIEWS[chat_id] = (scope, text[:3900], time.time() + 600)
+    audience = "всем пользователям" if scope == "all" else "только с активной подпиской"
+    send_message(
+        chat_id,
+        f"{pe('support')} <b>Предпросмотр рассылки</b>\nПолучатели: <b>{audience}</b>\n\n{html_quote(text)}",
+        parse_mode="HTML",
+        reply_markup=kb([[btn("Отправить", "broadcast:send", emoji="check", style="success"), btn("Отмена", "broadcast:cancel", emoji="warning", style="danger")]]),
+    )
+    return True
+
+
+def execute_broadcast(admin_id: int, chat_id: int) -> tuple[int, int]:
+    preview = BROADCAST_PREVIEWS.pop(chat_id, None)
+    if not preview or preview[2] < time.time():
+        return 0, 0
+    scope, text, _ = preview
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        if scope == "active":
+            rows = conn.execute(
+                """
+                SELECT DISTINCT u.private_chat_id FROM users AS u
+                JOIN subs AS s ON s.user_id = u.user_id
+                LEFT JOIN blocked_users AS b ON b.user_id = u.user_id
+                WHERE u.private_chat_id IS NOT NULL AND s.until_ts > ? AND b.user_id IS NULL
+                """,
+                (now,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT u.private_chat_id FROM users AS u
+                LEFT JOIN blocked_users AS b ON b.user_id = u.user_id
+                WHERE u.private_chat_id IS NOT NULL AND b.user_id IS NULL
+                """
+            ).fetchall()
+    sent = failed = 0
+    for (target_chat,) in rows:
+        try:
+            telegram_call("sendMessage", {"chat_id": int(target_chat), "text": text})
+            sent += 1
+        except TelegramApiError:
+            failed += 1
+        time.sleep(0.04)
+    audit_admin(admin_id, "рассылка", None, f"scope={scope}, sent={sent}, failed={failed}")
+    return sent, failed
+
+
+def handle_promo_create_input(admin_id: int, chat_id: int, text: str) -> bool:
+    deadline = PENDING_PROMO_CREATE.pop(chat_id, None)
+    if deadline is None:
+        return False
+    if deadline < time.time():
+        send_message(chat_id, "Окно создания промокода закрылось.")
+        return True
+    parts = text.strip().upper().split()
+    if len(parts) != 4:
+        send_message(chat_id, "Формат: <code>КОД СКИДКА ДНЕЙ ЛИМИТ</code>. Пример: <code>START20 20 30 100</code>", parse_mode="HTML")
+        return True
+    code = re.sub(r"[^A-Z0-9_-]", "", parts[0])[:32]
+    try:
+        discount, valid_days, max_uses = map(int, parts[1:])
+    except ValueError:
+        send_message(chat_id, "Скидка, срок и лимит должны быть числами.")
+        return True
+    if not code or not 1 <= discount <= 99 or not 1 <= valid_days <= 3650 or not 1 <= max_uses <= 1_000_000:
+        send_message(chat_id, "Проверь данные: скидка 1–99%, срок от 1 дня, лимит от 1.")
+        return True
+    now = int(time.time())
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO promo_codes (code, discount_percent, expires_at, max_uses, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (code, discount, now + valid_days * 86400, max_uses, admin_id, now),
+            )
+    except sqlite3.IntegrityError:
+        send_message(chat_id, "Такой промокод уже существует.")
+        return True
+    audit_admin(admin_id, "создание промокода", None, f"{code}, {discount}%, {valid_days} дней, лимит {max_uses}")
+    send_message(chat_id, f"Промокод <b>{code}</b> создан: скидка {discount}%, действует {valid_days} дней, лимит {max_uses}.", parse_mode="HTML")
+    return True
+
+
+def handle_promo_activate_input(user_id: int, chat_id: int, text: str) -> bool:
+    deadline = PENDING_PROMO_ACTIVATE.pop(chat_id, None)
+    if deadline is None:
+        return False
+    if deadline < time.time():
+        send_message(chat_id, "Окно ввода промокода закрылось.")
+        return True
+    ok, result = activate_promo(user_id, text)
+    send_message(chat_id, result, reply_markup=kb([[btn("К тарифам", "buy", emoji="stars")], BACK_HOME]))
+    return True
+
+
+def handle_gift_input(user_id: int, chat_id: int, text: str) -> bool:
+    deadline = PENDING_GIFT.pop(chat_id, None)
+    if deadline is None:
+        return False
+    if deadline < time.time():
+        send_message(chat_id, "Окно выбора получателя закрылось.")
+        return True
+    value = text.strip().lstrip("@")
+    with sqlite3.connect(DB_PATH) as conn:
+        if value.isdigit():
+            row = conn.execute("SELECT user_id FROM users WHERE user_id = ?", (int(value),)).fetchone()
+        else:
+            row = conn.execute("SELECT user_id FROM users WHERE lower(username) = lower(?)", (value,)).fetchone()
+    if not row:
+        send_message(chat_id, "Пользователь не найден. Он должен хотя бы один раз открыть этого бота.")
+        return True
+    target_id = int(row[0])
+    page_text, markup = page_gift_buy(user_id, target_id)
+    send_message(chat_id, page_text, parse_mode="HTML", reply_markup=markup)
+    return True
+
+
+def handle_support_input(user_id: int, chat_id: int, text: str) -> bool:
+    deadline = PENDING_SUPPORT.pop(chat_id, None)
+    if deadline is None:
+        return False
+    if deadline < time.time():
+        send_message(chat_id, "Окно обращения закрылось.")
+        return True
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT INTO support_tickets (user_id, user_text, created_at) VALUES (?, ?, ?)",
+            (user_id, text[:3900], now),
+        )
+        ticket_id = int(cur.lastrowid)
+    for admin_id in sorted(ADMIN_USER_IDS):
+        send_message(
+            admin_id,
+            f"{pe('support')} <b>Обращение #{ticket_id}</b>\n{stored_user_payment_label(user_id)}\n\n{html_quote(text)}",
+            parse_mode="HTML",
+            reply_markup=kb([[btn("Ответить", f"support:reply:{ticket_id}:{user_id}", emoji="support")]]),
+        )
+    send_message(chat_id, f"Обращение #{ticket_id} отправлено. Ответ придёт сюда.")
+    return True
+
+
+def handle_support_reply_input(admin_id: int, chat_id: int, text: str) -> bool:
+    pending = PENDING_SUPPORT_REPLY.pop(chat_id, None)
+    if pending is None:
+        return False
+    ticket_id, target_id, deadline = pending
+    if deadline < time.time():
+        send_message(chat_id, "Окно ответа закрылось.")
+        return True
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE support_tickets SET admin_id=?, admin_reply=?, status='closed', replied_at=? WHERE id=?",
+            (admin_id, text[:3900], int(time.time()), ticket_id),
+        )
+    send_message(get_private_chat_id(target_id), f"{pe('support')} <b>Ответ поддержки на обращение #{ticket_id}</b>\n\n{html_quote(text)}", parse_mode="HTML")
+    audit_admin(admin_id, "ответ поддержки", target_id, f"обращение #{ticket_id}")
+    send_message(chat_id, "Ответ отправлен пользователю.")
+    return True
+
+
+def handle_block_reason_input(admin_id: int, chat_id: int, text: str) -> bool:
+    pending = PENDING_BLOCK_REASON.pop(chat_id, None)
+    if pending is None:
+        return False
+    target_id, return_page, deadline = pending
+    if deadline < time.time():
+        send_message(chat_id, "Окно блокировки закрылось.")
+        return True
+    reason = text.strip()[:500] or "Причина не указана"
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO blocked_users (user_id,reason,blocked_by,created_at) VALUES (?,?,?,?)",
+            (target_id, reason, admin_id, int(time.time())),
+        )
+    audit_admin(admin_id, "блокировка", target_id, reason)
+    page_text, markup = page_user_card(admin_id, target_id, return_page)
+    send_message(chat_id, page_text, parse_mode="HTML", reply_markup=markup)
+    return True
+
+
+def export_users_csv(admin_id: int) -> Path:
+    path = DATA_DIR / f"users-{time.strftime('%Y%m%d-%H%M%S')}.csv"
+    with sqlite3.connect(DB_PATH) as conn, path.open("w", encoding="utf-8-sig", newline="") as file:
+        rows = conn.execute(
+            """
+            SELECT u.user_id, u.username, u.first_name, u.last_name, u.created_at,
+                   COALESCE(s.until_ts,0),
+                   COALESCE((SELECT SUM(stars) FROM payments p WHERE p.user_id=u.user_id),0),
+                   COALESCE((SELECT SUM(rub) FROM sbp_payments sp WHERE sp.user_id=u.user_id AND sp.status='paid'),0),
+                   CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END
+            FROM users u LEFT JOIN subs s ON s.user_id=u.user_id
+            LEFT JOIN blocked_users b ON b.user_id=u.user_id ORDER BY u.created_at
+            """
+        ).fetchall()
+        writer = csv.writer(file, delimiter=";")
+        writer.writerow(["user_id", "username", "first_name", "last_name", "registered", "subscription_until", "stars_total", "rub_total", "blocked"])
+        for row in rows:
+            writer.writerow([*row[:4], format_until(int(row[4])), format_until(int(row[5])), *row[6:]])
+    audit_admin(admin_id, "экспорт пользователей", None, path.name)
+    return path
+
+
+def create_backup(admin_id: int | None = None, send_to_admins: bool = True) -> Path:
+    path = BACKUP_DIR / f"holly-{time.strftime('%Y%m%d-%H%M%S')}.sqlite3"
+    with sqlite3.connect(DB_PATH) as source, sqlite3.connect(path) as destination:
+        source.backup(destination)
+    backups = sorted(BACKUP_DIR.glob("holly-*.sqlite3"), key=lambda item: item.stat().st_mtime, reverse=True)
+    for old in backups[BACKUP_KEEP:]:
+        old.unlink()
+    if send_to_admins:
+        for target in sorted(ADMIN_USER_IDS):
+            try:
+                send_document(target, path, "Резервная копия базы Holly Bot")
+            except TelegramApiError as exc:
+                log(f"Backup delivery failed for {target}: {exc}")
+    if admin_id:
+        audit_admin(admin_id, "резервная копия", None, path.name)
+    return path
+
+
+def maintenance_get(key: str) -> str | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT value FROM maintenance_state WHERE key=?", (key,)).fetchone()
+    return str(row[0]) if row else None
+
+
+def maintenance_set(key: str, value: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO maintenance_state (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, int(time.time())),
+        )
+
+
+def report_technical_issue(key: str, text: str) -> None:
+    try:
+        last = int(maintenance_get(f"issue:{key}") or 0)
+    except sqlite3.Error:
+        last = 0
+    now = int(time.time())
+    if now - last < 3600:
+        return
+    try:
+        maintenance_set(f"issue:{key}", str(now))
+    except sqlite3.Error:
+        pass
+    for admin_id in sorted(ADMIN_USER_IDS):
+        send_message(admin_id, f"{pe('warning')} <b>Техническое уведомление</b>\n\n{html_text(text)}", parse_mode="HTML")
+
+
+def health_report() -> tuple[bool, str]:
+    checks = []
+    ok = True
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            db_result = conn.execute("PRAGMA quick_check").fetchone()[0]
+        db_ok = db_result == "ok"
+    except Exception as exc:
+        db_ok = False
+        db_result = str(exc)
+    checks.append(f"База данных: {'✅ работает' if db_ok else '❌ ' + html_text(db_result)}")
+    ok = ok and db_ok
+    checks.append(f"Telegram API: ✅ бот получает обновления")
+    sbp_ok = ROLLYPAY_ENABLED
+    checks.append(f"СБП: {'✅ настроен' if sbp_ok else '❌ не настроен'}")
+    ok = ok and sbp_ok
+    checks.append(f"Каталог медиа: {'✅ доступен' if MEDIA_DIR.exists() and os.access(MEDIA_DIR, os.W_OK) else '❌ недоступен'}")
+    return ok, "\n".join(checks)
+
+
+def send_expiry_reminders() -> None:
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT s.user_id, s.until_ts, u.private_chat_id FROM subs s
+            JOIN users u ON u.user_id=s.user_id
+            LEFT JOIN blocked_users b ON b.user_id=s.user_id
+            WHERE s.until_ts > ? AND s.until_ts <= ? AND u.private_chat_id IS NOT NULL AND b.user_id IS NULL
+            """,
+            (now, now + 3 * 86400),
+        ).fetchall()
+    for user_id, until_ts, chat_id in rows:
+        remaining = int(until_ts) - now
+        days_before = 1 if remaining <= 86400 else 3
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO subscription_reminders (user_id,until_ts,days_before,sent_at) VALUES (?,?,?,?)",
+                (user_id, until_ts, days_before, now),
+            )
+        if cur.rowcount:
+            send_message(
+                int(chat_id),
+                f"{pe('warning')} Подписка закончится через <b>{days_before} {'день' if days_before == 1 else 'дня'}</b> — {format_until(int(until_ts))}.\nПродли сейчас, чтобы бот продолжал сохранять сообщения.",
+                parse_mode="HTML",
+                reply_markup=kb([[btn("Продлить подписку", "buy", emoji="stars", style="success")]]),
+            )
+
+
+def run_maintenance() -> None:
+    global LAST_MAINTENANCE_TS
+    if time.time() - LAST_MAINTENANCE_TS < MAINTENANCE_INTERVAL_SEC:
+        return
+    LAST_MAINTENANCE_TS = time.time()
+    try:
+        send_expiry_reminders()
+        today = time.strftime("%Y-%m-%d")
+        if maintenance_get("last_backup_date") != today:
+            create_backup(send_to_admins=True)
+            maintenance_set("last_backup_date", today)
+        healthy, report = health_report()
+        if not healthy:
+            report_technical_issue("health", report.replace("✅", "").replace("❌", ""))
+    except Exception as exc:
+        log(f"Maintenance failed: {type(exc).__name__}: {exc}")
+        report_technical_issue("maintenance", f"Ошибка автоматической проверки: {type(exc).__name__}: {exc}")
 
 
 # --- роутер колбэков -------------------------------------------------------------
@@ -1591,6 +2293,10 @@ def handle_callback_query(query: dict) -> None:
 
     register_user(user_id, chat_id, from_user)
 
+    if is_blocked(user_id):
+        answer_callback(query_id, text="Доступ к боту заблокирован администратором", show_alert=True)
+        return
+
     page: tuple[str, dict] | None = None
     alert: str | None = None
 
@@ -1598,6 +2304,29 @@ def handle_callback_query(query: dict) -> None:
         page = page_home(user_id)
     elif data == "buy":
         page = page_buy(user_id)
+    elif data == "promo:activate":
+        PENDING_PROMO_ACTIVATE[chat_id] = time.time() + 300
+        send_message(chat_id, "Отправь промокод одним сообщением. Отмена — /cancel")
+        alert = "Жду промокод"
+    elif data == "gift:start":
+        PENDING_GIFT[chat_id] = time.time() + 300
+        send_message(chat_id, "Отправь Telegram ID или @username получателя. Он должен хотя бы раз открыть бота. Отмена — /cancel")
+        alert = "Жду получателя"
+    elif data.startswith("gift:"):
+        parts = data.split(":")
+        if len(parts) != 4 or parts[1] not in {"sbp", "stars"} or not parts[2].isdigit() or not parts[3].isdigit():
+            answer_callback(query_id, text="Некорректный подарок", show_alert=True)
+            return
+        provider, target_id, days = parts[1], int(parts[2]), int(parts[3])
+        if not user_exists(target_id) or not get_plan(days):
+            answer_callback(query_id, text="Получатель или тариф не найден", show_alert=True)
+            return
+        if provider == "stars":
+            send_subscription_invoice(user_id, chat_id, days, target_id)
+            alert = "Открываю оплату подарка ⭐"
+        else:
+            send_sbp_payment(user_id, chat_id, days, target_id)
+            alert = "Счёт на подарок создан"
     elif data.startswith("buy:"):
         parts = data.split(":")
         provider = "stars" if len(parts) == 2 else parts[1]
@@ -1631,6 +2360,19 @@ def handle_callback_query(query: dict) -> None:
         page = page_help(user_id)
     elif data == "conns":
         page = page_connections(user_id)
+    elif data == "support":
+        PENDING_SUPPORT[chat_id] = time.time() + 600
+        send_message(chat_id, "Напиши вопрос одним сообщением. Его получат администраторы. Отмена — /cancel")
+        alert = "Жду сообщение"
+    elif data.startswith("support:reply:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
+            PENDING_SUPPORT_REPLY[chat_id] = (int(parts[2]), int(parts[3]), time.time() + 600)
+            send_message(chat_id, f"Напиши ответ на обращение #{parts[2]}. Отмена — /cancel")
+            alert = "Жду ответ"
     elif data == "restore":
         restored = restore_business_connections(None if is_admin_user(user_id) else user_id)
         alert = f"Включил подключений: {len(restored)}" if restored else "Отключённых не нашёл"
@@ -1649,6 +2391,119 @@ def handle_callback_query(query: dict) -> None:
         except ValueError:
             users_page = 0
         page = page_users(user_id, users_page)
+    elif data.startswith("user:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            page = page_user_card(user_id, int(parts[1]), int(parts[2]))
+    elif data.startswith("useradd:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 4 and all(part.isdigit() for part in parts[1:]):
+            target_id, days, return_page = map(int, parts[1:])
+            grant_subscription(user_id, chat_id, target_id, days)
+            page = page_user_card(user_id, target_id, return_page)
+    elif data.startswith("block:") or data.startswith("unblock:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            target_id, return_page = int(parts[1]), int(parts[2])
+            if data.startswith("block:"):
+                PENDING_BLOCK_REASON[chat_id] = (target_id, return_page, time.time() + 300)
+                send_message(chat_id, f"Напиши причину блокировки пользователя <code>{target_id}</code>. Отмена — /cancel", parse_mode="HTML")
+                page = page_user_card(user_id, target_id, return_page)
+                alert = "Жду причину"
+            else:
+                with sqlite3.connect(DB_PATH) as conn:
+                    conn.execute("DELETE FROM blocked_users WHERE user_id=?", (target_id,))
+                audit_admin(user_id, "разблокировка", target_id)
+                page = page_user_card(user_id, target_id, return_page)
+                alert = "Пользователь разблокирован"
+    elif data == "broadcast":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = (f"{pe('support')} <b>Рассылка</b>\n\nВыбери получателей.", kb([[btn("Всем", "broadcast:all", emoji="view")], [btn("С активной подпиской", "broadcast:active", emoji="check")], [btn("Админ-панель", "panel", emoji="home")]]))
+    elif data in {"broadcast:all", "broadcast:active"}:
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        PENDING_BROADCAST[chat_id] = (data.split(":")[1], time.time() + 600)
+        send_message(chat_id, "Отправь текст рассылки одним сообщением. Отмена — /cancel")
+        alert = "Жду текст"
+    elif data == "broadcast:send":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        sent, failed = execute_broadcast(user_id, chat_id)
+        send_message(chat_id, f"Рассылка завершена: отправлено {sent}, ошибок {failed}.")
+        page = page_panel(user_id)
+    elif data == "broadcast:cancel":
+        BROADCAST_PREVIEWS.pop(chat_id, None)
+        PENDING_BROADCAST.pop(chat_id, None)
+        page = page_panel(user_id)
+        alert = "Рассылка отменена"
+    elif data == "stats":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_stats(user_id)
+    elif data == "promos":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_promos(user_id)
+    elif data == "promo:create":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        PENDING_PROMO_CREATE[chat_id] = time.time() + 600
+        send_message(chat_id, "Введи: <code>КОД СКИДКА_ПРОЦЕНТОВ СРОК_В_ДНЯХ ЛИМИТ</code>\nПример: <code>START20 20 30 100</code>\nОтмена — /cancel", parse_mode="HTML")
+        alert = "Жду параметры"
+    elif data.startswith("promo:toggle:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        code = data.split(":", 2)[2]
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("UPDATE promo_codes SET active=CASE active WHEN 1 THEN 0 ELSE 1 END WHERE code=?", (code,))
+        audit_admin(user_id, "переключение промокода", None, code)
+        page = page_promos(user_id)
+    elif data == "export":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        path = export_users_csv(user_id)
+        try:
+            send_document(chat_id, path, "Экспорт пользователей Holly Bot")
+            alert = "CSV отправлен"
+        except TelegramApiError as exc:
+            alert = f"Ошибка экспорта: {exc}"[:180]
+        page = page_panel(user_id)
+    elif data == "backup":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        create_backup(user_id, send_to_admins=True)
+        page = page_panel(user_id)
+        alert = "Резервная копия отправлена"
+    elif data == "health":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        _, report = health_report()
+        page = (f"{pe('check')} <b>Проверка работы</b>\n\n{report}", kb([[btn("Проверить снова", "health", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME]))
+    elif data == "audit":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_admin_log(user_id)
     elif data == "prices":
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
@@ -1844,6 +2699,7 @@ def archive_media_file(context: str, chat_id: int, message_id: int, media: dict 
         file_info = telegram_call("getFile", {"file_id": file_id}, timeout=30)
     except TelegramApiError as exc:
         log(f"getFile failed for {media.get('type')} {chat_id}/{message_id}: {exc}")
+        report_technical_issue("media_getfile", f"Не удалось получить файл Telegram: {exc}")
         return None
 
     file_path = file_info.get("file_path")
@@ -1886,6 +2742,7 @@ def archive_media_file(context: str, chat_id: int, message_id: int, media: dict 
                 output.write(chunk)
     except Exception as exc:
         log(f"Media download failed for {media.get('type')} {chat_id}/{message_id}: {exc}")
+        report_technical_issue("media_download", f"Не удалось сохранить медиа: {type(exc).__name__}: {exc}")
         try:
             dest.unlink(missing_ok=True)
         except Exception:
@@ -2078,6 +2935,16 @@ def handle_start(message: dict, args: list[str] | None = None) -> None:
         if referrer_id and referrer_id != user_id and new_user and user_exists(referrer_id):
             if add_referral(referrer_id, user_id):
                 check_trial(referrer_id)
+
+    if args and args[0].startswith("gift_") and is_private_chat(message):
+        try:
+            gift_target = int(args[0][5:])
+        except ValueError:
+            gift_target = 0
+        if gift_target and user_exists(gift_target):
+            text, markup = page_gift_buy(user_id, gift_target)
+            send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+            return
 
     if is_private_chat(message):
         text, markup = page_home(user_id)
@@ -2291,18 +3158,52 @@ def handle_regular_message(message: dict) -> None:
     user_id = int((message.get("from") or {}).get("id") or 0)
     chat_id = int(message["chat"]["id"])
 
+    if is_private_chat(message):
+        register_user(user_id, chat_id, message.get("from") or {})
+        if is_blocked(user_id):
+            send_message(chat_id, "Доступ к боту заблокирован администратором.")
+            return
+
+    pending_maps = (
+        PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_PROMO_CREATE,
+        PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
+        PENDING_BLOCK_REASON,
+    )
+    if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
+        for pending in pending_maps:
+            pending.pop(chat_id, None)
+        BROADCAST_PREVIEWS.pop(chat_id, None)
+        send_message(chat_id, "Отменено.")
+        return
+
     # ответ админа на выдачу подписки («ID дней») — до разбора команд
+    if text and not text.startswith("/") and chat_id in PENDING_SUPPORT_REPLY and is_admin_user(user_id):
+        if handle_support_reply_input(user_id, chat_id, text):
+            return
+    if text and not text.startswith("/") and chat_id in PENDING_BLOCK_REASON and is_admin_user(user_id):
+        if handle_block_reason_input(user_id, chat_id, text):
+            return
+    if text and not text.startswith("/") and chat_id in PENDING_BROADCAST and is_admin_user(user_id):
+        if handle_broadcast_input(user_id, chat_id, text):
+            return
+    if text and not text.startswith("/") and chat_id in PENDING_PROMO_CREATE and is_admin_user(user_id):
+        if handle_promo_create_input(user_id, chat_id, text):
+            return
     if text and not text.startswith("/") and chat_id in PENDING_PRICE and is_admin_user(user_id):
-        if handle_price_input(chat_id, text):
+        if handle_price_input(user_id, chat_id, text):
             return
     if text and not text.startswith("/") and chat_id in PENDING_GRANT and is_admin_user(user_id):
         if handle_grant_input(user_id, chat_id, text):
             return
-    if text.strip() == "/cancel" and (chat_id in PENDING_GRANT or chat_id in PENDING_PRICE):
-        PENDING_GRANT.pop(chat_id, None)
-        PENDING_PRICE.pop(chat_id, None)
-        send_message(chat_id, "Отменено.")
-        return
+    if text and not text.startswith("/") and chat_id in PENDING_PROMO_ACTIVATE:
+        if handle_promo_activate_input(user_id, chat_id, text):
+            return
+    if text and not text.startswith("/") and chat_id in PENDING_GIFT:
+        if handle_gift_input(user_id, chat_id, text):
+            return
+    if text and not text.startswith("/") and chat_id in PENDING_SUPPORT:
+        if handle_support_input(user_id, chat_id, text):
+            return
 
     command = command_from_message(message)
     if command:
@@ -2317,6 +3218,19 @@ def handle_regular_message(message: dict) -> None:
                 send_message(chat_id, page_text, parse_mode="HTML", reply_markup=page_markup)
             else:
                 send_message(chat_id, "Помощь покажу в личных сообщениях со мной.")
+        elif name == "/support" and is_private_chat(message):
+            PENDING_SUPPORT[chat_id] = time.time() + 600
+            send_message(chat_id, "Напиши вопрос одним сообщением. Отмена — /cancel")
+        elif name == "/gift" and is_private_chat(message):
+            PENDING_GIFT[chat_id] = time.time() + 300
+            send_message(chat_id, "Отправь Telegram ID или @username получателя. Отмена — /cancel")
+        elif name == "/promo" and is_private_chat(message):
+            if args:
+                _, result = activate_promo(user_id, args[0])
+                send_message(chat_id, result)
+            else:
+                PENDING_PROMO_ACTIVATE[chat_id] = time.time() + 300
+                send_message(chat_id, "Отправь промокод одним сообщением. Отмена — /cancel")
         elif name == "/sub":
             handle_sub_command(message, args)
         elif name == "/watch":
@@ -2535,6 +3449,9 @@ def configure_bot() -> None:
                     {"command": "start", "description": "Главное меню"},
                     {"command": "menu", "description": "Открыть меню"},
                     {"command": "help", "description": "Как подключить бота"},
+                    {"command": "support", "description": "Написать в поддержку"},
+                    {"command": "gift", "description": "Подарить подписку"},
+                    {"command": "promo", "description": "Активировать промокод"},
                     {"command": "sub", "description": "Выдать подписку (админ)"},
                     {"command": "watch", "description": "Включить обычный чат"},
                     {"command": "status", "description": "Статус обычного чата"},
@@ -2551,6 +3468,7 @@ def configure_bot() -> None:
 
 
 def run_polling() -> None:
+    global POLLING_ERROR_COUNT
     init_db()
     telegram_call("deleteWebhook", {"drop_pending_updates": False})
     configure_bot()
@@ -2569,15 +3487,22 @@ def run_polling() -> None:
                 },
                 timeout=60,
             )
+            if POLLING_ERROR_COUNT:
+                for admin_id in sorted(ADMIN_USER_IDS):
+                    send_message(admin_id, f"{pe('check')} Telegram API снова работает после ошибок: {POLLING_ERROR_COUNT}.", parse_mode="HTML")
+                POLLING_ERROR_COUNT = 0
             for update in updates:
                 offset = int(update["update_id"]) + 1
                 try:
                     handle_update(update)
                 except Exception as exc:
                     log(f"Update handling failed: {type(exc).__name__}: {exc}")
+                    report_technical_issue("update", f"Ошибка обработки обновления: {type(exc).__name__}: {exc}")
+            run_maintenance()
         except KeyboardInterrupt:
             raise
         except Exception as exc:
+            POLLING_ERROR_COUNT += 1
             log(f"Polling failed: {type(exc).__name__}: {exc}")
             time.sleep(5)
 

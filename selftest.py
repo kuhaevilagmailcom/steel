@@ -5,7 +5,11 @@ sys.path.insert(0, REPO)
 import deleted_message_logger_bot as b
 
 # всё в временную базу, сеть не трогаем
-b.DB_PATH = __import__("pathlib").Path(tempfile.mkdtemp()) / "test.sqlite3"
+test_root = __import__("pathlib").Path(tempfile.mkdtemp())
+b.DATA_DIR = test_root
+b.BACKUP_DIR = test_root / "backups"
+b.BACKUP_DIR.mkdir()
+b.DB_PATH = test_root / "test.sqlite3"
 b.send_message = lambda *a, **k: None  # заглушка сети
 
 b.init_db()
@@ -54,15 +58,16 @@ b.set_until(600, 0, 0); b.register_user(600, 600)
 # idempotency payments
 now = int(time.time())
 with __import__("sqlite3").connect(b.DB_PATH) as conn:
-    conn.execute("INSERT INTO payments VALUES ('chg1',111,15,50,'sub:111:15:50',?)", (now,))
-    cur = conn.execute("INSERT OR IGNORE INTO payments VALUES ('chg1',111,15,50,'x',?)", (now,))
+    conn.execute("INSERT INTO payments (tg_payment_id,user_id,days,stars,payload,created_at) VALUES ('chg1',111,15,50,'sub:111:15:50',?)", (now,))
+    cur = conn.execute("INSERT OR IGNORE INTO payments (tg_payment_id,user_id,days,stars,payload,created_at) VALUES ('chg1',111,15,50,'x',?)", (now,))
     assert cur.rowcount == 0, "дубликат платежа не проходит"
 
 # --- страницы ---
 cases = {
     "page_home": 111, "page_buy": 111, "page_ref": 111,
     "page_help": 111, "page_connections": 111, "page_panel": 999,
-    "page_prices": 999, "page_users": 999,
+    "page_prices": 999, "page_users": 999, "page_stats": 999,
+    "page_promos": 999, "page_admin_log": 999,
 }
 for name, uid in cases.items():
     text, markup = getattr(b, name)(uid)
@@ -74,6 +79,10 @@ for name, uid in cases.items():
 
 users_text, _ = b.page_users(999)
 assert "Тест Пользователь" in users_text and "@tester" in users_text
+card_text, card_markup = b.page_user_card(999, 111)
+assert "Карточка пользователя" in card_text and "useradd:111:30:0" in json.dumps(card_markup)
+gift_text, gift_markup = b.page_gift_buy(111, 222)
+assert "Подарочная подписка" in gift_text and "gift:stars:222:15" in json.dumps(gift_markup)
 
 # кнопка копирования ссылки и иконки
 _, m = b.page_ref(111)
@@ -93,6 +102,54 @@ assert b.get_plans() == {
 b.set_plan_price(15, "rub", 41)
 assert b.get_plan(15)["rub"] == 41
 b.set_plan_price(15, "rub", 40)
+
+# промокоды и расчёт скидки
+b.PENDING_PROMO_CREATE[999] = time.time() + 60
+assert b.handle_promo_create_input(999, 999, "START20 20 30 10")
+ok, promo_message = b.activate_promo(111, "start20")
+assert ok and "20%" in promo_message
+assert b.discounted_price(111, 40) == (32, "START20")
+promo_buy_text, _ = b.page_buy(111)
+assert "32 ₽" in promo_buy_text and "40 ⭐" in promo_buy_text
+assert b.parse_subscription_payload("sub:111:222:15:40:START20") == (111, 222, 15, 40, "START20")
+assert b.valid_subscription_amount(111, 15, 40, "START20")
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    conn.execute("DELETE FROM promo_activations WHERE user_id=111")
+
+# блокировка с причиной и разблокировка
+b.PENDING_BLOCK_REASON[999] = (222, 0, time.time() + 60)
+assert b.handle_block_reason_input(999, 999, "нарушение правил")
+assert b.is_blocked(222) and not b.sub_active(222)
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    conn.execute("DELETE FROM blocked_users WHERE user_id=222")
+assert not b.is_blocked(222)
+
+# поддержка: обращение и ответ администратора
+sent_support = []
+b.send_message = lambda *a, **k: sent_support.append((a, k))
+b.PENDING_SUPPORT[111] = time.time() + 60
+assert b.handle_support_input(111, 111, "Нужна помощь")
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    ticket_id = conn.execute("SELECT id FROM support_tickets ORDER BY id DESC LIMIT 1").fetchone()[0]
+b.PENDING_SUPPORT_REPLY[999] = (ticket_id, 111, time.time() + 60)
+assert b.handle_support_reply_input(999, 999, "Всё исправили")
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    assert conn.execute("SELECT status FROM support_tickets WHERE id=?", (ticket_id,)).fetchone()[0] == "closed"
+
+# рассылка, CSV, резервная копия и напоминания
+b.BROADCAST_PREVIEWS[999] = ("all", "Тестовая рассылка", time.time() + 60)
+network_calls = []
+b.telegram_call = lambda method, payload=None, timeout=30: network_calls.append((method, payload)) or True
+sent_count, failed_count = b.execute_broadcast(999, 999)
+assert sent_count >= 1 and failed_count == 0
+csv_path = b.export_users_csv(999)
+assert csv_path.exists() and "user_id" in csv_path.read_text(encoding="utf-8-sig")
+backup_path = b.create_backup(999, send_to_admins=False)
+assert backup_path.exists()
+b.set_until(111, int(time.time()) + 23 * 3600)
+b.send_expiry_reminders()
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    assert conn.execute("SELECT 1 FROM subscription_reminders WHERE user_id=111 AND days_before=1").fetchone()
 
 # СБП: создание, точная сверка и защита от повторного начисления
 sent = []
@@ -126,5 +183,18 @@ first_until = b.get_sub(111)[0]
 assert paid and first_until > time.time()
 paid, _ = b.check_sbp_payment(111, order_id)
 assert paid and b.get_sub(111)[0] == first_until, "СБП не начисляется повторно"
+
+# миграция существующей базы без потери старых таблиц
+legacy_db = test_root / "legacy.sqlite3"
+with __import__("sqlite3").connect(legacy_db) as conn:
+    conn.execute("CREATE TABLE users (user_id INTEGER PRIMARY KEY, private_chat_id INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+    conn.execute("CREATE TABLE payments (tg_payment_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, days INTEGER NOT NULL, stars INTEGER NOT NULL, payload TEXT, created_at INTEGER NOT NULL)")
+    conn.execute("CREATE TABLE sbp_payments (payment_id TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL, days INTEGER NOT NULL, rub INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'created', created_at INTEGER NOT NULL, paid_at INTEGER)")
+b.DB_PATH = legacy_db
+b.init_db()
+with __import__("sqlite3").connect(legacy_db) as conn:
+    assert {"first_name", "last_name", "username"}.issubset({row[1] for row in conn.execute("PRAGMA table_info(users)")})
+    assert {"payer_id", "promo_code"}.issubset({row[1] for row in conn.execute("PRAGMA table_info(payments)")})
+    assert {"payer_id", "promo_code"}.issubset({row[1] for row in conn.execute("PRAGMA table_info(sbp_payments)")})
 
 print("ALL TESTS PASSED")
