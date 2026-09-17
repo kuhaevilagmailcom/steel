@@ -469,6 +469,9 @@ def init_db() -> None:
             )
             """
         )
+        ensure_column(conn, "users", "first_name", "TEXT")
+        ensure_column(conn, "users", "last_name", "TEXT")
+        ensure_column(conn, "users", "username", "TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS subscription_plans (
@@ -505,18 +508,37 @@ def init_db() -> None:
         )
 
 
-def register_user(user_id: int, private_chat_id: int | None = None) -> None:
+def register_user(
+    user_id: int,
+    private_chat_id: int | None = None,
+    profile: dict | None = None,
+) -> None:
     now = int(time.time())
+    profile = profile or {}
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
-            INSERT INTO users (user_id, private_chat_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (
+                user_id, private_chat_id, created_at, updated_at,
+                first_name, last_name, username
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 private_chat_id = COALESCE(excluded.private_chat_id, users.private_chat_id),
+                first_name = COALESCE(excluded.first_name, users.first_name),
+                last_name = COALESCE(excluded.last_name, users.last_name),
+                username = COALESCE(excluded.username, users.username),
                 updated_at = excluded.updated_at
             """,
-            (user_id, private_chat_id, now, now),
+            (
+                user_id,
+                private_chat_id,
+                now,
+                now,
+                profile.get("first_name"),
+                profile.get("last_name"),
+                profile.get("username"),
+            ),
         )
 
 
@@ -574,7 +596,7 @@ def save_business_connection(connection: dict) -> None:
     now = int(time.time())
 
     if owner_id:
-        register_user(int(owner_id), int(notify_chat_id) if notify_chat_id else None)
+        register_user(int(owner_id), int(notify_chat_id) if notify_chat_id else None, user)
 
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
@@ -1049,6 +1071,84 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     return text, markup
 
 
+USERS_PAGE_SIZE = 15
+
+
+def stored_user_label(
+    user_id: int,
+    first_name: str | None,
+    last_name: str | None,
+    username: str | None,
+) -> str:
+    name = " ".join(part for part in (first_name, last_name) if part).strip()
+    if username:
+        mention = f"@{html_text(username)}"
+        return f"{html_text(name)} ({mention})" if name else mention
+    return html_text(name) if name else f"Пользователь {user_id}"
+
+
+def stored_user_payment_label(user_id: int) -> str:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    label = stored_user_label(user_id, *(row or (None, None, None)))
+    return f"{label}\nID: <code>{user_id}</code>"
+
+
+def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+
+    with sqlite3.connect(DB_PATH) as conn:
+        total = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+        page_count = max(1, (total + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
+        page_number = min(max(0, page_number), page_count - 1)
+        rows = conn.execute(
+            """
+            SELECT u.user_id, u.first_name, u.last_name, u.username,
+                   u.created_at, u.updated_at, COALESCE(s.until_ts, 0)
+            FROM users AS u
+            LEFT JOIN subs AS s ON s.user_id = u.user_id
+            ORDER BY u.updated_at DESC, u.user_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (USERS_PAGE_SIZE, page_number * USERS_PAGE_SIZE),
+        ).fetchall()
+
+    lines = []
+    for index, row in enumerate(rows, start=page_number * USERS_PAGE_SIZE + 1):
+        uid, first_name, last_name, username, created_at, updated_at, until_ts = row
+        if is_admin_user(int(uid)):
+            subscription = "бессрочная (админ)"
+        elif int(until_ts or 0) > int(time.time()):
+            subscription = f"до {format_until(int(until_ts))}"
+        else:
+            subscription = "нет"
+        lines.append(
+            f"<b>{index}.</b> {stored_user_label(int(uid), first_name, last_name, username)}\n"
+            f"ID: <code>{uid}</code> · подписка: <b>{subscription}</b> · "
+            f"заходил: {time.strftime('%d.%m.%Y', time.localtime(int(updated_at or created_at)))}"
+        )
+
+    body = "\n\n".join(lines) if lines else "Пользователей пока нет."
+    text = (
+        f"{pe('view')} <b>Все пользователи</b>\n"
+        f"Всего: <b>{total}</b> · страница {page_number + 1}/{page_count}\n\n{body}"
+    )
+    navigation: list[dict] = []
+    if page_number > 0:
+        navigation.append(btn("Назад", f"users:{page_number - 1}", emoji="home"))
+    if page_number + 1 < page_count:
+        navigation.append(btn("Дальше", f"users:{page_number + 1}", emoji="view"))
+    buttons: list[list[dict]] = []
+    if navigation:
+        buttons.append(navigation)
+    buttons.extend([[btn("Обновить", f"users:{page_number}", emoji="refresh")], [btn("Админ-панель", "panel", emoji="admin")], BACK_HOME])
+    return text, kb(buttons)
+
+
 def page_panel(user_id: int) -> tuple[str, dict]:
     now = int(time.time())
     with sqlite3.connect(DB_PATH) as conn:
@@ -1070,6 +1170,7 @@ def page_panel(user_id: int) -> tuple[str, dict]:
         f"снять — <code>/sub ID_ДНЯХ 0</code>."
     )
     rows = [
+        [btn("Все пользователи", "users:0", emoji="view")],
         [btn("Выдать подписку", "grant", emoji="add", style="success")],
         [btn("Изменить цены", "prices", emoji="pay")],
         [btn("Обновить", "panel", emoji="refresh")],
@@ -1298,12 +1399,18 @@ def handle_pre_checkout_query(query: dict) -> None:
 
 
 def notify_admins_payment(user_id: int, days: int, stars: int) -> None:
-    line = (
-        f"{pe('pay')} Оплата: <code>{user_id}</code> купил {days} дн. за {stars} ⭐"
-    )
     with sqlite3.connect(DB_PATH) as conn:
         total = conn.execute("SELECT COALESCE(SUM(stars), 0) FROM payments").fetchone()[0]
-    line += f"\nВсего собрано: {total} ⭐"
+    until = get_sub(user_id)[0]
+    line = (
+        f"{pe('pay')} <b>Новая покупка подписки</b>\n\n"
+        f"{stored_user_payment_label(user_id)}\n"
+        f"Способ: <b>Telegram Stars</b>\n"
+        f"Тариф: <b>{days} дней</b>\n"
+        f"Оплачено: <b>{stars} ⭐</b>\n"
+        f"Подписка до: <b>{format_until(until)}</b>\n\n"
+        f"Всего собрано: <b>{total} ⭐</b>"
+    )
     for admin_id in sorted(ADMIN_USER_IDS):
         try:
             send_message(admin_id, line, parse_mode="HTML")
@@ -1316,9 +1423,21 @@ def notify_admins_sbp_payment(user_id: int, days: int, rub: int) -> None:
         total = conn.execute(
             "SELECT COALESCE(SUM(rub), 0) FROM sbp_payments WHERE status = 'paid'"
         ).fetchone()[0]
-    line = f"{pe('pay')} Оплата: <code>{user_id}</code> купил {days} дн. за {rub} ₽\nВсего собрано: {total} ₽"
+    until = get_sub(user_id)[0]
+    line = (
+        f"{pe('pay')} <b>Новая покупка подписки</b>\n\n"
+        f"{stored_user_payment_label(user_id)}\n"
+        f"Способ: <b>СБП</b>\n"
+        f"Тариф: <b>{days} дней</b>\n"
+        f"Оплачено: <b>{rub} ₽</b>\n"
+        f"Подписка до: <b>{format_until(until)}</b>\n\n"
+        f"Всего собрано: <b>{total} ₽</b>"
+    )
     for admin_id in sorted(ADMIN_USER_IDS):
-        send_message(admin_id, line, parse_mode="HTML")
+        try:
+            send_message(admin_id, line, parse_mode="HTML")
+        except TelegramApiError:
+            pass
 
 
 def handle_successful_payment(message: dict) -> None:
@@ -1334,7 +1453,9 @@ def handle_successful_payment(message: dict) -> None:
         log(f"Rejected payment payload: {payment.get('invoice_payload')}")
         return
 
-    payer_id = int((message.get("from") or {}).get("id") or uid)
+    payer = message.get("from") or {}
+    payer_id = int(payer.get("id") or uid)
+    register_user(payer_id, int((message.get("chat") or {}).get("id") or payer_id), payer)
     tg_charge = str(payment.get("telegram_charge_id") or f"manual:{int(time.time())}:{payer_id}")
     now = int(time.time())
     with sqlite3.connect(DB_PATH) as conn:
@@ -1468,7 +1589,7 @@ def handle_callback_query(query: dict) -> None:
         answer_callback(query_id, text="Меню работает в личных сообщениях со мной", show_alert=True)
         return
 
-    register_user(user_id, chat_id)
+    register_user(user_id, chat_id, from_user)
 
     page: tuple[str, dict] | None = None
     alert: str | None = None
@@ -1519,6 +1640,15 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
         page = page_panel(user_id)
+    elif data.startswith("users:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        try:
+            users_page = int(data.split(":", 1)[1])
+        except ValueError:
+            users_page = 0
+        page = page_users(user_id, users_page)
     elif data == "prices":
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
@@ -1936,7 +2066,7 @@ def handle_start(message: dict, args: list[str] | None = None) -> None:
     user_id = int(user["id"])
     chat_id = int(message["chat"]["id"])
     new_user = not user_exists(user_id)
-    register_user(user_id, chat_id if is_private_chat(message) else None)
+    register_user(user_id, chat_id if is_private_chat(message) else None, user)
 
     # приход по реферальной ссылке: /start ref_<id>
     args = args or []
@@ -1965,7 +2095,7 @@ def handle_watch(message: dict) -> None:
     user = message.get("from") or {}
     user_id = int(user["id"])
     chat_id = int(message["chat"]["id"])
-    register_user(user_id, chat_id if is_private_chat(message) else None)
+    register_user(user_id, chat_id if is_private_chat(message) else None, user)
 
     if not is_private_chat(message) and not is_chat_admin(chat_id, user_id):
         send_message(chat_id, "Команду /watch может включить только администратор чата.")

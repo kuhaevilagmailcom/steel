@@ -22,6 +22,7 @@ assert b.owner_can_log.__doc__  # exists
 b.ADMIN_USER_IDS.add(999)
 assert b.sub_active(999) and b.owner_can_log(999)
 assert b.owner_can_log(None)
+b.register_user(111, 111, {"first_name": "Тест", "last_name": "Пользователь", "username": "tester"})
 
 # продление суммируется
 t0 = b.add_days(111, 15)
@@ -61,7 +62,7 @@ with __import__("sqlite3").connect(b.DB_PATH) as conn:
 cases = {
     "page_home": 111, "page_buy": 111, "page_ref": 111,
     "page_help": 111, "page_connections": 111, "page_panel": 999,
-    "page_prices": 999,
+    "page_prices": 999, "page_users": 999,
 }
 for name, uid in cases.items():
     text, markup = getattr(b, name)(uid)
@@ -70,6 +71,9 @@ for name, uid in cases.items():
     cb = [btn.get("callback_data") for row in markup["inline_keyboard"] for btn in row]
     assert all((c or "").__len__() <= 64 for c in cb if c), "callback_data <=64"
     print(f"OK {name}: {len(text)} chars, {len(markup['inline_keyboard'])} rows")
+
+users_text, _ = b.page_users(999)
+assert "Тест Пользователь" in users_text and "@tester" in users_text
 
 # кнопка копирования ссылки и иконки
 _, m = b.page_ref(111)
