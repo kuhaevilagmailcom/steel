@@ -484,6 +484,7 @@ def init_db() -> None:
         ensure_column(conn, "users", "first_name", "TEXT")
         ensure_column(conn, "users", "last_name", "TEXT")
         ensure_column(conn, "users", "username", "TEXT")
+        ensure_column(conn, "users", "communication_style", "TEXT NOT NULL DEFAULT ''")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS subscription_plans (
@@ -981,6 +982,76 @@ def sub_active(user_id: int | None) -> bool:
     return get_sub(user_id)[0] > int(time.time())
 
 
+STYLE_LABELS = {
+    "cute": "🎀 Няшный",
+    "vasya": "🧢 Вася",
+    "brother": "🤝 Брат",
+    "dumb": "🧠 Тупой",
+}
+STYLE_PROTECTED_RE = re.compile(
+    r"(?i)(?:(?:https?|tg)://|www\.|(?:^|\s)(?:t\.me|telegram\.me)/|"
+    r"(?:^|\s)@[a-z0-9_]{3,32}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/\S*)?|"
+    r"(?<!\d)(?:\+?\d[\d\s()\-]{6,}\d)(?!\d))"
+)
+
+
+def get_communication_style(user_id: int) -> str:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT communication_style FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    return str(row[0] or "") if row else ""
+
+
+def set_communication_style(user_id: int, style: str) -> None:
+    if style not in {"", *STYLE_LABELS}:
+        raise ValueError("Неизвестный стиль общения")
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE users SET communication_style = ?, updated_at = ? WHERE user_id = ?",
+            (style, int(time.time()), user_id),
+        )
+
+
+def stylize_message_text(style: str, text: str) -> str:
+    value = (text or "").strip()
+    if (
+        style not in STYLE_LABELS
+        or not value
+        or value.startswith("/")
+        or STYLE_PROTECTED_RE.search(value)
+    ):
+        return text
+    lowered = value.casefold()
+    if style == "cute":
+        if ":3" in value or "💗" in value:
+            return value
+        result = re.sub(r"(?i)\bты где\b", "ты гдеее", value)
+        result = re.sub(r"(?i)\bпривет\b", "приветик", result)
+        result = re.sub(r"(?i)\bпожалуйста\b", "пожалуйстааа", result)
+        return f"{result} :3 💗"
+    if style == "vasya":
+        if lowered.startswith("вась,"):
+            return value
+        result = re.sub(r"(?i)\bили что\b", "или чё", value)
+        result = re.sub(r"(?i)\bчто\?", "чё?", result)
+        return f"вась, {result[0].lower() + result[1:] if result else result}"
+    if style == "brother":
+        if re.match(r"(?i)^(?:брат|братан|бро|родной)\b", value):
+            return value
+        return f"брат, {value[:-1].rstrip()}, родной?" if value.endswith("?") else f"брат, {value}"
+    if lowered.startswith("это..."):
+        return value
+    return f"это... {value[:-1].rstrip()}, получается?" if value.endswith("?") else f"это... {value}, короче"
+
+
+def transform_message_style(user_id: int, text: str, max_length: int = 4096) -> str:
+    if not sub_active(user_id):
+        return text
+    result = stylize_message_text(get_communication_style(user_id), text)
+    return text if len(result) > max_length else result
+
+
 def sub_days_left(user_id: int) -> int:
     left = get_sub(user_id)[0] - int(time.time())
     return max(0, (left + 86399) // 86400)
@@ -1194,8 +1265,33 @@ def page_buy(user_id: int) -> tuple[str, dict]:
             btn("Подарить подписку", "gift:start", emoji="gift"),
         ],
         [btn("Моя ссылка для подарка", copy=gift_link, emoji="gift")],
+        [btn("🎭 Стиль общения", "style", emoji="profile")],
         BACK_HOME,
     ]
+    return text, kb(rows)
+
+
+def page_communication_style(user_id: int) -> tuple[str, dict]:
+    current = get_communication_style(user_id)
+    current_label = STYLE_LABELS.get(current, "🚫 Отключён")
+    rows = [
+        [
+            btn(("✓ " if current == "cute" else "") + "🎀 Няшный", "style:cute"),
+            btn(("✓ " if current == "vasya" else "") + "🧢 Вася", "style:vasya"),
+        ],
+        [
+            btn(("✓ " if current == "brother" else "") + "🤝 Брат", "style:brother"),
+            btn(("✓ " if current == "dumb" else "") + "🧠 Тупой", "style:dumb"),
+        ],
+        [btn("🚫 Отключить стиль", "style:off", style="danger")],
+        [btn("К подписке", "buy", emoji="stars")],
+        BACK_HOME,
+    ]
+    text = (
+        "🎭 <b>Стиль общения</b>\n\n"
+        f"Текущий стиль: <b>{current_label}</b>\n\n"
+        "Стиль автоматически применяется к исходящим сообщениям Telegram Business."
+    )
     return text, kb(rows)
 
 
@@ -2304,6 +2400,25 @@ def handle_callback_query(query: dict) -> None:
         page = page_home(user_id)
     elif data == "buy":
         page = page_buy(user_id)
+    elif data == "style":
+        if sub_active(user_id):
+            page = page_communication_style(user_id)
+        else:
+            page = page_buy(user_id)
+            alert = "Нужна активная подписка Holly Bot"
+    elif data.startswith("style:"):
+        if not sub_active(user_id):
+            page = page_buy(user_id)
+            alert = "Нужна активная подписка Holly Bot"
+        else:
+            value = data.split(":", 1)[1]
+            style = "" if value == "off" else value
+            if style not in STYLE_LABELS and style:
+                answer_callback(query_id, text="Неизвестный стиль", show_alert=True)
+                return
+            set_communication_style(user_id, style)
+            page = page_communication_style(user_id)
+            alert = "Стиль отключён" if not style else f"Выбран: {STYLE_LABELS[style]}"
     elif data == "promo:activate":
         PENDING_PROMO_ACTIVATE[chat_id] = time.time() + 300
         send_message(chat_id, "Отправь промокод одним сообщением. Отмена — /cancel")
@@ -3319,6 +3434,30 @@ def handle_business_connection(connection: dict) -> None:
         send_message(int(notify_chat_id), "Telegram Business отключен для этого бота.")
 
 
+def apply_business_message_style(message: dict, owner_id: int | None) -> str | None:
+    if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
+        return None
+    field = "text" if message.get("text") is not None else "caption" if message.get("caption") is not None else ""
+    if not field:
+        return None
+    original = str(message[field])
+    transformed = transform_message_style(owner_id, original, 4096 if field == "text" else 1024)
+    if transformed == original:
+        return original
+    payload = {
+        "business_connection_id": message["business_connection_id"],
+        "chat_id": int(message["chat"]["id"]),
+        "message_id": int(message["message_id"]),
+        field: transformed,
+    }
+    try:
+        telegram_call("editMessageText" if field == "text" else "editMessageCaption", payload)
+    except TelegramApiError as exc:
+        log(f"Business style edit failed for {owner_id}: {exc}")
+        return original
+    return transformed
+
+
 def handle_business_message(message: dict) -> None:
     raw_log("business_message", message)
     connection_id = message.get("business_connection_id")
@@ -3328,6 +3467,7 @@ def handle_business_message(message: dict) -> None:
     context = f"business:{connection_id}"
     notify_chat_id = get_business_notify_chat_id(connection_id)
     owner_id = get_business_owner_id(connection_id)
+    apply_business_message_style(message, owner_id)
     saved = save_message(context, message)
     if saved_message_is_from_user(saved, owner_id):
         return

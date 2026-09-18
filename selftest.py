@@ -33,6 +33,36 @@ t0 = b.add_days(111, 15)
 t1 = b.add_days(111, 15)
 assert t1 >= t0 + 15 * 86400 - 2, "продление прибавляет дни"
 
+# --- стили общения подписки ---
+original = "ты где, скоро придешь?"
+for style, prefix in (("cute", "ты гдеее"), ("vasya", "вась,"), ("brother", "брат,"), ("dumb", "это...")):
+    b.set_communication_style(111, style)
+    styled = b.transform_message_style(111, original)
+    assert styled.startswith(prefix), style
+    assert b.stylize_message_text(style, styled) == styled, "стиль не должен накладываться дважды"
+for protected in ("/start", "https://example.com", "@username", "+7 999 123-45-67"):
+    assert b.transform_message_style(111, protected) == protected
+b.set_communication_style(111, "cute")
+assert b.transform_message_style(111, "а" * 1024, 1024) == "а" * 1024, "длинная подпись доставляется"
+b.set_until(111, 0, None)
+assert b.transform_message_style(111, original) == original
+assert b.get_communication_style(111) == "cute", "после окончания подписки стиль хранится"
+b.add_days(111, 15)
+assert b.transform_message_style(111, original) != original, "после продления стиль включается снова"
+
+style_calls = []
+b.telegram_call = lambda method, payload=None, timeout=30: style_calls.append((method, payload)) or True
+b.apply_business_message_style({
+    "business_connection_id": "connection-1", "message_id": 7,
+    "from": {"id": 111}, "chat": {"id": 222}, "text": original,
+}, 111)
+assert style_calls[-1][0] == "editMessageText" and ":3" in style_calls[-1][1]["text"]
+b.apply_business_message_style({
+    "business_connection_id": "connection-1", "message_id": 8,
+    "from": {"id": 111}, "chat": {"id": 222}, "photo": [{}], "caption": "Фото для тебя",
+}, 111)
+assert style_calls[-1][0] == "editMessageCaption" and ":3" in style_calls[-1][1]["caption"]
+
 # --- рефералка ---
 b.set_until(111, 0, 0)
 for inv in (222, 333):
@@ -77,6 +107,10 @@ for name, uid in cases.items():
     assert all((c or "").__len__() <= 64 for c in cb if c), "callback_data <=64"
     print(f"OK {name}: {len(text)} chars, {len(markup['inline_keyboard'])} rows")
 
+style_text, style_markup = b.page_communication_style(111)
+assert "🎭" in style_text and "Стиль общения" in style_text
+assert "style:cute" in json.dumps(style_markup, ensure_ascii=False)
+
 users_text, _ = b.page_users(999)
 assert "Тест Пользователь" in users_text and "@tester" in users_text
 card_text, card_markup = b.page_user_card(999, 111)
@@ -93,6 +127,7 @@ assert m["inline_keyboard"][0][0]["callback_data"] == "buy:sbp:15"
 assert m["inline_keyboard"][0][1]["callback_data"] == "buy:stars:15"
 assert m["inline_keyboard"][1][0]["callback_data"] == "buy:sbp:30"
 assert m["inline_keyboard"][1][1]["callback_data"] == "buy:stars:30"
+assert any(button.get("callback_data") == "style" for row in m["inline_keyboard"] for button in row)
 
 # тарифы
 assert b.get_plans() == {
@@ -193,7 +228,7 @@ with __import__("sqlite3").connect(legacy_db) as conn:
 b.DB_PATH = legacy_db
 b.init_db()
 with __import__("sqlite3").connect(legacy_db) as conn:
-    assert {"first_name", "last_name", "username"}.issubset({row[1] for row in conn.execute("PRAGMA table_info(users)")})
+    assert {"first_name", "last_name", "username", "communication_style"}.issubset({row[1] for row in conn.execute("PRAGMA table_info(users)")})
     assert {"payer_id", "promo_code"}.issubset({row[1] for row in conn.execute("PRAGMA table_info(payments)")})
     assert {"payer_id", "promo_code"}.issubset({row[1] for row in conn.execute("PRAGMA table_info(sbp_payments)")})
 
