@@ -9,4 +9,4 @@ fi
 
 . .venv/bin/activate
 pip install -r requirements.txt
-exec python deleted_message_logger_bot.py
+exec python run_bot_entry.py
