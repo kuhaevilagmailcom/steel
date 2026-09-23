@@ -380,6 +380,9 @@ def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition:
 
 def init_db() -> None:
     with sqlite3.connect(DB_PATH) as conn:
+        # Cleanup from the temporary internal multi-account test build.
+        conn.execute("DROP TABLE IF EXISTS test_accounts")
+        conn.execute("DROP TABLE IF EXISTS test_runtime_state")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -2810,9 +2813,29 @@ def archive_media_file(context: str, chat_id: int, message_id: int, media: dict 
         return None
 
     file_id = str(media["file_id"])
+    declared_size = media.get("file_size") or 0
+    try:
+        declared_size = int(declared_size)
+    except (TypeError, ValueError):
+        declared_size = 0
+
+    # Telegram Bot API getFile has a 20 MB download ceiling. This is an
+    # expected limitation, not a technical failure. Keep file_id in the DB so
+    # Telegram can still resend the media when possible.
+    getfile_limit = min(MAX_MEDIA_ARCHIVE_BYTES, 20 * 1024 * 1024)
+    if declared_size and declared_size > getfile_limit:
+        log(
+            "Media skipped before getFile by size: "
+            f"{media.get('type')} {chat_id}/{message_id}, {declared_size} bytes, limit {getfile_limit}"
+        )
+        return None
+
     try:
         file_info = telegram_call("getFile", {"file_id": file_id}, timeout=30)
     except TelegramApiError as exc:
+        if "file is too big" in str(exc).lower():
+            log(f"getFile skipped for oversized media {media.get('type')} {chat_id}/{message_id}")
+            return None
         log(f"getFile failed for {media.get('type')} {chat_id}/{message_id}: {exc}")
         report_technical_issue("media_getfile", f"Не удалось получить файл Telegram: {exc}")
         return None
@@ -2821,7 +2844,7 @@ def archive_media_file(context: str, chat_id: int, message_id: int, media: dict 
     if not file_path:
         return None
 
-    file_size = file_info.get("file_size") or media.get("file_size") or 0
+    file_size = file_info.get("file_size") or declared_size or 0
     if file_size and int(file_size) > MAX_MEDIA_ARCHIVE_BYTES:
         log(
             "Media skipped by size: "
@@ -3648,9 +3671,15 @@ def run_polling() -> None:
 
 
 if __name__ == "__main__":
-    # Always start through the runtime entrypoint so owner-only admin tools,
-    # TXT export and Telegram large-file guards are applied even on hosts
-    # that are still configured to launch this legacy filename directly.
-    import run_bot_entry
-
-    run_bot_entry.main()
+    lock_handle = None
+    try:
+        lock_handle = acquire_single_instance_lock()
+        run_polling()
+    except KeyboardInterrupt:
+        log("Stopped.")
+    except RuntimeError as exc:
+        log(str(exc))
+        raise SystemExit(1) from None
+    finally:
+        if lock_handle is not None:
+            release_single_instance_lock(lock_handle)
