@@ -77,7 +77,13 @@ def init_db_guard() -> None:
             )
 
         # Optional fixed allowlist for accounts that are not connected yet.
-        raw_ids = bot.os.getenv("TEST_ACCOUNT_IDS", "")
+        raw_ids = ",".join(
+            value for value in (
+                bot.os.getenv("OWN_ACCOUNT_IDS", ""),
+                bot.os.getenv("TEST_ACCOUNT_IDS", ""),
+            )
+            if value
+        )
         for item in raw_ids.replace(";", ",").split(","):
             item = item.strip()
             if item.isdigit():
@@ -106,31 +112,9 @@ def set_test_account(user_id: int, enabled: bool) -> None:
 
 
 def maybe_enroll_test_account(user_id: int | None) -> bool:
-    if not user_id:
-        return False
-    target_raw = bot.os.getenv("TEST_ACCOUNT_TARGET", "10").strip()
-    try:
-        target = max(0, int(target_raw))
-    except ValueError:
-        target = 10
-
-    with bot.sqlite3.connect(bot.DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT enabled FROM test_accounts WHERE user_id = ?",
-            (int(user_id),),
-        ).fetchone()
-        if row:
-            return bool(row[0])
-
-        count = int(
-            conn.execute("SELECT COUNT(*) FROM test_accounts WHERE enabled = 1").fetchone()[0]
-        )
-        if count >= target:
-            return False
-
-    set_test_account(int(user_id), True)
-    bot.log(f"Auto-enrolled test account {user_id} ({count + 1}/{target})")
-    return True
+    # Accounts are never enrolled merely because they connect.
+    # They must already be in the one-time startup snapshot or the explicit allowlist.
+    return is_test_account(user_id)
 
 
 def is_test_account(user_id: int | None) -> bool:
