@@ -899,37 +899,7 @@ def remove_bot_admin(owner_id: int, target_id: int) -> tuple[bool, str]:
     return True, f"Админка снята у пользователя {target_id}."
 
 def deny_admin_command(chat_id: int) -> None:
-    send_message(chat_id, "Эта команда доступна только владельцу бота.")
-
-
-# ============================================================================
-# ГЛАВНОЕ МЕНЮ · ПОДПИСКА (Telegram Stars) · РЕФЕРАЛКА · ПОМОЩЬ · АДМИН-ПАНЕЛЬ
-# Премиум-эмодзи из пака https://t.me/addemoji/NewsEmoji — id как в
-# limuzinov_shop_bot: в тексте через <tg-emoji emoji-id="…">, в кнопках через
-# icon_custom_emoji_id.
-# ============================================================================
-
-NEWS = {
-    "home":    ("🏠", "5416041192905265756"),
-    "stars":   ("⭐️", "5438496463044752972"),
-    "invite":  ("🔗", "5271604874419647061"),
-    "support": ("💬", "5443038326535759644"),
-    "check":   ("✔️", "5206607081334906820"),
-    "pay":     ("💵", "5409048419211682843"),
-    "gift":    ("🎉", "5461151367559141950"),
-    "admin":   ("⚙️", "5341715473882955310"),
-    "view":    ("👀", "5210956306952758910"),
-    "refresh": ("🔄", "5375338737028841420"),
-    "bonus":   ("💎", "5427168083074628963"),
-    "promo":   ("💯", "5341498088408234504"),
-    "history": ("📊", "5231200819986047254"),
-    "add":     ("➕", "5397916757333654639"),
-    "warning": ("⚠️", "5447644880824181073"),
-    "back":    ("➡️", "5416117059207572332"),
-    "orders":  ("🛍", "5229064374403998351"),
-    "profile": ("🙂", "5461117441612462242"),
-}
-
+    send_message(chat_id, "Эта команда доступна только администраторам.")
 
 def pe(name: str) -> str:
     """Премиум-эмодзи пака News в HTML-тексте с unicode-фолбэком."""
@@ -1147,11 +1117,7 @@ def _style_plain_segment(style: str, segment: str) -> str:
             "нет": "неа",
         }
         result = _replace_style_phrases(segment, replacements)
-        result = re.sub(r"(?<![!?])\?(?![!?])", "??", result)
-        if len(result.strip()) >= 8 and not re.search(r"(?i)(:3|♡|💗|🥺)\s*$", result):
-            ending = " :3" if sum(map(ord, result)) % 2 else " ♡"
-            result = result.rstrip() + ending
-        return result
+        return re.sub(r"(?<![!?])\?(?![!?])", "??", result)
 
     if style == "vasya":
         replacements = {
@@ -1171,10 +1137,7 @@ def _style_plain_segment(style: str, segment: str) -> str:
             "давай": "го",
         }
         result = _replace_style_phrases(segment, replacements)
-        result = re.sub(r"(?iu)\bне знаю\b", "хз", result)
-        if len(result.strip()) > 18 and not re.match(r"(?iu)^\s*(вась|бро)\b", result):
-            result = "вась, " + result.lstrip() if sum(map(ord, result)) % 3 == 0 else result
-        return result
+        return re.sub(r"(?iu)\bне знаю\b", "хз", result)
 
     if style == "brother":
         replacements = {
@@ -1190,11 +1153,7 @@ def _style_plain_segment(style: str, segment: str) -> str:
             "не переживай": "не кипишуй",
             "всё нормально": "всё ровно",
         }
-        result = _replace_style_phrases(segment, replacements)
-        if len(result.strip()) > 16 and not re.search(r"(?iu)\b(брат|братан|бро|родной)\b", result):
-            if sum(map(ord, result)) % 2:
-                result = result.rstrip() + ", брат"
-        return result
+        return _replace_style_phrases(segment, replacements)
 
     replacements = {
         "потому что": "патамушта",
@@ -1214,18 +1173,12 @@ def _style_plain_segment(style: str, segment: str) -> str:
     }
     result = _replace_style_phrases(segment, replacements)
     result = re.sub(r"(?iu)\bя не знаю\b", "я хз", result)
-    result = re.sub(r"(?iu)\bне знаю\b", "хз", result)
-    if len(result.strip()) > 20 and sum(map(ord, result)) % 3 == 1:
-        result = result.rstrip(" .") + " короч"
-    return result
-
+    return re.sub(r"(?iu)\bне знаю\b", "хз", result)
 
 def stylize_message_text(style: str, text: str) -> str:
     if style not in STYLE_LABELS or not text or not text.strip() or text.lstrip().startswith("/"):
         return text
 
-    # Transform around protected fragments instead of disabling the style for
-    # the whole message when it contains a URL, @username or phone number.
     parts: list[str] = []
     last = 0
     for match in STYLE_PROTECTED_RE.finditer(text):
@@ -1235,11 +1188,24 @@ def stylize_message_text(style: str, text: str) -> str:
     parts.append(_style_plain_segment(style, text[last:]))
     result = "".join(parts)
 
-    # Avoid accidental repeated suffixes after Telegram sends an edited update.
+    # One finishing touch for the entire message, not for every fragment around
+    # a protected URL/username/phone.
+    stripped = result.strip()
+    score = sum(map(ord, stripped)) if stripped else 0
+
+    if style == "cute" and len(stripped) >= 8 and not re.search(r"(?i)(:3|♡|💗|🥺)\s*$", result):
+        result = result.rstrip() + (" :3" if score % 2 else " ♡")
+    elif style == "vasya" and len(stripped) > 18 and score % 3 == 0 and not re.match(r"(?iu)^\s*(вась|бро)\b", result):
+        leading = result[: len(result) - len(result.lstrip())]
+        result = leading + "вась, " + result.lstrip()
+    elif style == "brother" and len(stripped) > 16 and score % 2 and not re.search(r"(?iu)\b(брат|братан|бро|родной)\b", result):
+        result = result.rstrip() + ", брат"
+    elif style == "dumb" and len(stripped) > 20 and score % 3 == 1 and not re.search(r"(?iu)\b(кароч|короч)\s*$", result):
+        result = result.rstrip(" .") + " кароч"
+
     result = re.sub(r"(?:\s+:3){2,}\s*$", " :3", result)
     result = re.sub(r"(?:\s+♡){2,}\s*$", " ♡", result)
     return result
-
 
 def transform_message_style(user_id: int, text: str, max_length: int = 4096) -> str:
     if not sub_active(user_id):
@@ -1599,7 +1565,7 @@ def stored_user_payment_label(user_id: int) -> str:
 
 def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
     if not is_admin_user(user_id):
-        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+        return "Эта страница доступна только администраторам.", kb([BACK_HOME])
 
     with sqlite3.connect(DB_PATH) as conn:
         total = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
@@ -1655,7 +1621,7 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
 
 def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
     if not is_admin_user(admin_id):
-        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+        return "Эта страница доступна только администраторам.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         user = conn.execute(
             "SELECT first_name, last_name, username, created_at, updated_at FROM users WHERE user_id = ?",
@@ -3962,33 +3928,47 @@ def handle_update(update: dict) -> None:
 
 
 def configure_bot() -> None:
+    user_commands = [
+        {"command": "start", "description": "Главное меню"},
+        {"command": "menu", "description": "Открыть меню"},
+        {"command": "help", "description": "Как подключить бота"},
+        {"command": "support", "description": "Написать в поддержку"},
+        {"command": "gift", "description": "Подарить подписку"},
+        {"command": "promo", "description": "Активировать промокод"},
+        {"command": "watch", "description": "Включить обычный чат"},
+        {"command": "status", "description": "Статус обычного чата"},
+        {"command": "list", "description": "Список обычных чатов"},
+        {"command": "stop", "description": "Отключить обычные чаты"},
+        {"command": "connections", "description": "Мои Business-подключения"},
+        {"command": "restore", "description": "Включить свои Business-подключения"},
+    ]
     try:
-        telegram_call(
-            "setMyCommands",
-            {
-                "commands": [
-                    {"command": "start", "description": "Главное меню"},
-                    {"command": "menu", "description": "Открыть меню"},
-                    {"command": "help", "description": "Как подключить бота"},
-                    {"command": "support", "description": "Написать в поддержку"},
-                    {"command": "gift", "description": "Подарить подписку"},
-                    {"command": "promo", "description": "Активировать промокод"},
-                    {"command": "sub", "description": "Выдать подписку (админ)"},
-                    {"command": "admins", "description": "Администраторы"},
-                    {"command": "admin_add", "description": "Выдать админку (владелец)"},
-                    {"command": "admin_del", "description": "Снять админку (владелец)"},
-                    {"command": "watch", "description": "Включить обычный чат"},
-                    {"command": "status", "description": "Статус обычного чата"},
-                    {"command": "list", "description": "Список обычных чатов"},
-                    {"command": "stop", "description": "Отключить обычные чаты"},
-                    {"command": "connections", "description": "Business-подключения"},
-                    {"command": "restore", "description": "Включить свои Business-подключения"},
-                ]
-            },
-        )
+        telegram_call("setMyCommands", {"commands": user_commands})
     except TelegramApiError as exc:
         log(f"setMyCommands failed: {exc}")
 
+    for admin_id in list_admin_ids():
+        admin_commands = list(user_commands) + [
+            {"command": "sub", "description": "Выдать подписку"},
+            {"command": "admins", "description": "Администраторы"},
+        ]
+        if is_owner_admin(admin_id):
+            admin_commands.extend(
+                [
+                    {"command": "admin_add", "description": "Выдать админку"},
+                    {"command": "admin_del", "description": "Снять админку"},
+                ]
+            )
+        try:
+            telegram_call(
+                "setMyCommands",
+                {
+                    "commands": admin_commands,
+                    "scope": {"type": "chat", "chat_id": admin_id},
+                },
+            )
+        except TelegramApiError as exc:
+            log(f"setMyCommands admin scope failed for {admin_id}: {exc}")
 
 def run_polling() -> None:
     global POLLING_ERROR_COUNT
