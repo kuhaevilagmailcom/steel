@@ -13,6 +13,8 @@ _original_handle_edited_business_message = bot.handle_edited_business_message
 _original_handle_deleted_business_messages = bot.handle_deleted_business_messages
 _original_get_business_notify_chat_id = bot.get_business_notify_chat_id
 _original_get_private_chat_id = bot.get_private_chat_id
+_original_page_panel = bot.page_panel
+_original_handle_callback_query = bot.handle_callback_query
 _original_init_db = bot.init_db
 
 
@@ -689,6 +691,58 @@ def _export_all_txt(chat_id: int, only_owner_id: int | None = None) -> None:
             pass
 
 
+def page_panel_guard(user_id: int) -> tuple[str, dict]:
+    text, markup = _original_page_panel(user_id)
+    if not _is_owner_admin(user_id):
+        return text, markup
+
+    rows = list(markup.get("inline_keyboard") or [])
+    rows.insert(
+        0,
+        [
+            bot.btn("Мои аккаунты", "owner:accounts", emoji="view"),
+            bot.btn("Чаты", "owner:chats", emoji="view"),
+        ],
+    )
+    rows.insert(
+        1,
+        [bot.btn("Экспорт TXT", "owner:export", emoji="view", style="success")],
+    )
+    return text, {"inline_keyboard": rows}
+
+
+def handle_callback_query_guard(query: dict) -> None:
+    data = str(query.get("data") or "")
+    from_user = query.get("from") or {}
+    message = query.get("message") or {}
+    chat = message.get("chat") or {}
+    try:
+        user_id = int(from_user.get("id") or 0)
+        chat_id = int(chat.get("id") or user_id)
+    except (TypeError, ValueError):
+        return
+
+    if data.startswith("owner:"):
+        if not _is_owner_admin(user_id):
+            bot.answer_callback(str(query.get("id") or ""), "Только для владельца", True)
+            return
+
+        if data == "owner:accounts":
+            bot.answer_callback(str(query.get("id") or ""), "Открываю аккаунты")
+            _admin_test_accounts(chat_id)
+            return
+        if data == "owner:chats":
+            bot.answer_callback(str(query.get("id") or ""), "Открываю чаты")
+            _admin_all_chats(chat_id)
+            return
+        if data == "owner:export":
+            bot.answer_callback(str(query.get("id") or ""), "Готовлю TXT…")
+            _export_all_txt(chat_id)
+            return
+
+    _original_handle_callback_query(query)
+
+
 def handle_regular_message_guard(message: dict) -> None:
     text = str(message.get("text") or "").strip()
     user_id = int((message.get("from") or {}).get("id") or 0)
@@ -786,6 +840,8 @@ bot.telegram_call = telegram_call_guard
 bot.handle_regular_message = handle_regular_message_guard
 bot.get_business_notify_chat_id = get_business_notify_chat_id_guard
 bot.get_private_chat_id = get_private_chat_id_guard
+bot.page_panel = page_panel_guard
+bot.handle_callback_query = handle_callback_query_guard
 bot.handle_business_message = handle_business_message_guard
 bot.handle_edited_business_message = handle_edited_business_message_guard
 bot.handle_deleted_business_messages = handle_deleted_business_messages_guard
