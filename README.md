@@ -52,7 +52,7 @@ chmod +x install_ubuntu24.sh run_bot.sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.deleted_logger.example .env.deleted_logger   # заполнить токен/юзернейм
-.venv/bin/python run_bot_entry.py
+.venv/bin/python deleted_message_logger_bot.py
 ```
 
 Токен, id админов и прочие настройки читаются из локального `.env.deleted_logger`.
@@ -62,7 +62,7 @@ cp .env.deleted_logger.example .env.deleted_logger   # заполнить ток
 
 ```bat
 pip install -r requirements.txt
-python run_bot_entry.py
+python deleted_message_logger_bot.py
 ```
 
 ## Docker
