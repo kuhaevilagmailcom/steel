@@ -14,4 +14,4 @@ COPY . .
 # Bothost mounts persistent bot data at /app/data.
 RUN mkdir -p /app/data
 
-CMD ["python", "run_bot_entry.py"]
+CMD ["python", "deleted_message_logger_bot.py"]
