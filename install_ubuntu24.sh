@@ -27,7 +27,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/.venv/bin/python $APP_DIR/deleted_message_logger_bot.py
+ExecStart=$APP_DIR/.venv/bin/python $APP_DIR/run_bot_entry.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
