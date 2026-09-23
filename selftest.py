@@ -136,6 +136,7 @@ home_text, home_markup = b.page_home(111)
 home_callbacks = json.dumps(home_markup, ensure_ascii=False)
 assert "Owner ID" not in home_text and "Моя подписка" in home_callbacks
 assert b.MENU_IMAGE_PATH.exists() and b.MENU_IMAGE_PATH.suffix == ".png"
+assert "Стиль общения" in home_callbacks and "⭐ Моя подписка" in home_callbacks
 help_text, _ = b.page_help(111)
 assert "Business-подключения" not in help_text and "Как работает Holly Bot" in help_text
 
@@ -211,13 +212,17 @@ assert "Подарочная подписка" in gift_text and "gift:stars:222:
 # кнопка копирования ссылки и иконки
 _, m = b.page_ref(111)
 row0 = m["inline_keyboard"][0][0]
-assert row0["copy_text"]["text"].startswith("https://t.me/") and row0["icon_custom_emoji_id"]
+assert row0["copy_text"]["text"].startswith("https://t.me/")
 _, m = b.page_buy(111)
 assert m["inline_keyboard"][0][0]["callback_data"] == "buy:sbp:15"
 assert m["inline_keyboard"][0][1]["callback_data"] == "buy:stars:15"
 assert m["inline_keyboard"][1][0]["callback_data"] == "buy:sbp:30"
 assert m["inline_keyboard"][1][1]["callback_data"] == "buy:stars:30"
 assert any(button.get("callback_data") == "style" for row in m["inline_keyboard"] for button in row)
+b.add_days(111, 15)
+active_buy_text, active_buy_markup = b.page_buy(111)
+assert "Моя подписка" in active_buy_text
+assert any("Продлить" in button.get("text", "") for row in active_buy_markup["inline_keyboard"] for button in row)
 
 # тарифы
 assert b.get_plans() == {

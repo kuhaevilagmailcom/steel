@@ -285,6 +285,8 @@ def send_message(
                 except TelegramApiError:
                     pass
             log(f"sendMessage failed for {chat_id}: {exc}")
+    # If this is a private notification, keep the navigation menu as the last message.
+    move_menu_to_bottom(chat_id)
 
 
 def _menu_message(user_id: int) -> tuple[int, int, bool] | None:
@@ -328,16 +330,50 @@ def send_menu_page(
             pass
     try:
         if use_photo and MENU_IMAGE_PATH.exists() and len(text) <= 1024:
-            result = telegram_multipart_call(
-                "sendPhoto",
-                {
-                    "chat_id": chat_id,
-                    "caption": text,
-                    "parse_mode": "HTML",
-                    "reply_markup": json.dumps(markup, ensure_ascii=False),
-                },
-                {"photo": MENU_IMAGE_PATH},
-            )
+            photo_file_id = maintenance_get("menu_photo_file_id")
+            if photo_file_id:
+                try:
+                    result = telegram_call(
+                        "sendPhoto",
+                        {
+                            "chat_id": chat_id,
+                            "photo": photo_file_id,
+                            "caption": text,
+                            "parse_mode": "HTML",
+                            "reply_markup": markup,
+                        },
+                    )
+                except TelegramApiError:
+                    maintenance_set("menu_photo_file_id", "")
+                    result = telegram_multipart_call(
+                        "sendPhoto",
+                        {
+                            "chat_id": chat_id,
+                            "caption": text,
+                            "parse_mode": "HTML",
+                            "reply_markup": json.dumps(markup, ensure_ascii=False),
+                        },
+                        {"photo": MENU_IMAGE_PATH},
+                    )
+                    if isinstance(result, dict):
+                        photos = result.get("photo") or []
+                        if photos and photos[-1].get("file_id"):
+                            maintenance_set("menu_photo_file_id", str(photos[-1]["file_id"]))
+            else:
+                result = telegram_multipart_call(
+                    "sendPhoto",
+                    {
+                        "chat_id": chat_id,
+                        "caption": text,
+                        "parse_mode": "HTML",
+                        "reply_markup": json.dumps(markup, ensure_ascii=False),
+                    },
+                    {"photo": MENU_IMAGE_PATH},
+                )
+                if isinstance(result, dict):
+                    photos = result.get("photo") or []
+                    if photos and photos[-1].get("file_id"):
+                        maintenance_set("menu_photo_file_id", str(photos[-1]["file_id"]))
             is_photo = True
         else:
             result = telegram_call(
@@ -349,6 +385,20 @@ def send_menu_page(
             _remember_menu_message(user_id, chat_id, int(result["message_id"]), is_photo)
     except TelegramApiError as exc:
         log(f"menu message failed for {chat_id}: {exc}")
+
+
+def move_menu_to_bottom(chat_id: int) -> None:
+    """After a notification, recreate the menu last so it stays below the archive item."""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT user_id FROM users WHERE private_chat_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+    if not row or not _menu_message(int(row[0])):
+        return
+    user_id = int(row[0])
+    text, markup = page_home(user_id)
+    send_menu_page(user_id, chat_id, text, markup, use_photo=True)
 
 
 def send_document(chat_id: int, path: Path, caption: str = "") -> None:
@@ -1475,16 +1525,22 @@ def check_trial(referrer_id: int) -> None:
 
 # --- страницы меню ------------------------------------------------------------
 
+def bottom_navigation() -> list[list[dict]]:
+    """One stable navigation strip shown under every personal menu screen."""
+    return [
+        [btn("🏠 Главное меню", "home"), btn("⭐ Моя подписка", "buy")],
+        [btn("🎭 Стиль общения", "style"), btn("💬 Поддержка", "support")],
+        [btn("👥 Пригласить друзей", "ref")],
+    ]
+
 def page_home(user_id: int) -> tuple[str, dict]:
     rows = [
-        [btn("⭐ Моя подписка", "buy", emoji="stars", style="success")],
-        [btn("🔗 Подключить чаты", "conns", emoji="view")],
+        [btn("🔗 Подключить чаты", "conns")],
         [
-            btn("Пригласить друзей", "ref", emoji="invite"),
-            btn("❓ Как это работает", "help", emoji="support"),
+            btn("❓ Как это работает", "help"),
         ],
-        [btn("💬 Поддержка", "support", emoji="support")],
     ]
+    rows.extend(bottom_navigation())
     if is_admin_user(user_id):
         rows.append([btn("Админ-панель", "panel", emoji="admin")])
 
@@ -1511,6 +1567,7 @@ def page_buy(user_id: int) -> tuple[str, dict]:
     gift_link = f"https://t.me/{bot_username() or 'hollyboot_bot'}?start=gift_{user_id}"
     promo_text = f"\nПромокод: <b>{html_text(promo[0])}</b> (скидка {promo[1]}%)\n" if promo else ""
     active = sub_active(user_id)
+    action = "Продлить" if active else "Купить"
     heading = "Моя подписка" if active else "Подписка Holly Bot"
     text = (
         f"{pe('stars')} <b>{heading}</b>\n\n"
@@ -1520,29 +1577,27 @@ def page_buy(user_id: int) -> tuple[str, dict]:
         f"{pe('check')} архив фото, видео и голосовых\n"
         f"{pe('check')} 🎭 стиль общения для исходящих сообщений\n\n"
         f"{promo_text}"
-        f"<b>15 дней</b> — {p15_rub} ₽ или {p15_stars} ⭐\n"
-        f"<b>30 дней</b> — {p30_rub} ₽ или {p30_stars} ⭐\n\n"
-        "Выбери способ оплаты — доступ продлится сразу после подтверждения.\n"
+        f"<b>{action} на 15 дней</b> — {p15_rub} ₽ или {p15_stars} ⭐\n"
+        f"<b>{action} на 30 дней</b> — {p30_rub} ₽ или {p30_stars} ⭐\n\n"
+        f"Выбери способ оплаты — подписка {('продлится' if active else 'активируется')} сразу после подтверждения.\n"
         f"Можно получить {REF_DAYS} дня бесплатно: пригласи {REF_REQUIRED} друзей."
     )
     rows = [
         [
-            btn(f"15 дней — {p15_rub} ₽", "buy:sbp:15", emoji="pay", style="success"),
-            btn(f"{p15_stars} ⭐", "buy:stars:15", emoji="stars", style="success"),
+            btn(f"{action} на 15 дней · {p15_rub} ₽", "buy:sbp:15", style="success"),
+            btn(f"{action} на 15 дней · {p15_stars} ⭐", "buy:stars:15", style="success"),
         ],
         [
-            btn(f"30 дней — {p30_rub} ₽", "buy:sbp:30", emoji="pay", style="success"),
-            btn(f"{p30_stars} ⭐", "buy:stars:30", emoji="stars", style="success"),
+            btn(f"{action} на 30 дней · {p30_rub} ₽", "buy:sbp:30", style="success"),
+            btn(f"{action} на 30 дней · {p30_stars} ⭐", "buy:stars:30", style="success"),
         ],
-        [btn("Пригласить друзей", "ref", emoji="invite")],
         [
-            btn("Ввести промокод", "promo:activate", emoji="promo"),
-            btn("Подарить подписку", "gift:start", emoji="gift"),
+            btn("🎟 Ввести промокод", "promo:activate"),
+            btn("🎁 Подарить подписку", "gift:start"),
         ],
-        [btn("Моя ссылка для подарка", copy=gift_link, emoji="gift")],
-        [btn("🎭 Настроить стиль общения", "style", emoji="profile")],
-        BACK_HOME,
+        [btn("🔗 Моя ссылка для подарка", copy=gift_link)],
     ]
+    rows.extend(bottom_navigation())
     return text, kb(rows)
 
 
@@ -1559,9 +1614,8 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
             btn(("✓ " if current == "dumb" else "") + "🧠 Тупой", "style:dumb"),
         ],
         [btn("🚫 Отключить стиль", "style:off", style="danger")],
-        [btn("⭐ Назад к подписке", "buy", emoji="stars")],
-        BACK_HOME,
     ]
+    rows.extend(bottom_navigation())
     examples = "\n".join(
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
         for key, label in STYLE_LABELS.items()
@@ -1594,10 +1648,10 @@ def page_ref(user_id: int) -> tuple[str, dict]:
         f"Друг открывает ссылку и нажимает /start — приглашение засчитается."
     )
     rows = [
-        [btn("Скопировать ссылку", copy=link, emoji="invite", style="primary")],
-        [btn("Поделиться", url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Хочу%20попробовать%20Holly%20Bot", emoji="support")],
-        BACK_HOME,
+        [btn("📋 Скопировать ссылку", copy=link, style="primary")],
+        [btn("↗️ Поделиться", url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Хочу%20попробовать%20Holly%20Bot")],
     ]
+    rows.extend(bottom_navigation())
     return text, kb(rows)
 
 
@@ -1616,10 +1670,10 @@ def page_help(user_id: int) -> tuple[str, dict]:
         "Подписка открывает сохранение сообщений и 🎭 стиль общения."
     )
     rows = [
-        [btn("🔗 Проверить подключение", "conns", emoji="view")],
-        [btn("⭐ Открыть подписку", "buy", emoji="stars", style="success")],
-        BACK_HOME,
+        [btn("🔗 Проверить подключение", "conns")],
+        [btn("⭐ Открыть подписку", "buy", style="success")],
     ]
+    rows.extend(bottom_navigation())
     return text, kb(rows)
 
 def page_connections(user_id: int) -> tuple[str, dict]:
@@ -1644,10 +1698,10 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     if rows and any(not row.get("is_enabled") for row in rows):
         action_rows.append([btn("✅ Включить приостановленные", "restore", emoji="check")])
     action_rows.extend([
-        [btn("❓ Как подключить", "help", emoji="support")],
-        [btn("🔄 Проверить статус", "conns", emoji="refresh")],
-        BACK_HOME,
+        [btn("❓ Как подключить", "help")],
+        [btn("🔄 Проверить статус", "conns")],
     ])
+    action_rows.extend(bottom_navigation())
     markup = kb(action_rows)
     return text, markup
 
