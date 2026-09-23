@@ -26,6 +26,14 @@ assert b.owner_can_log.__doc__  # exists
 b.ADMIN_USER_IDS.add(999)
 assert b.sub_active(999) and b.owner_can_log(999)
 assert b.owner_can_log(None)
+
+# делегированные администраторы
+b.register_user(222, 222, {"first_name": "Админ"})
+ok, msg = b.add_bot_admin(999, 222)
+assert ok and b.is_admin_user(222), msg
+assert 222 in b.list_admin_ids()
+ok, msg = b.remove_bot_admin(999, 222)
+assert ok and not b.is_admin_user(222), msg
 b.register_user(111, 111, {"first_name": "Тест", "last_name": "Пользователь", "username": "tester"})
 
 # продление суммируется
@@ -34,14 +42,25 @@ t1 = b.add_days(111, 15)
 assert t1 >= t0 + 15 * 86400 - 2, "продление прибавляет дни"
 
 # --- стили общения подписки ---
-original = "ты где, скоро придешь?"
-for style, prefix in (("cute", "ты гдеее"), ("vasya", "вась,"), ("brother", "брат,"), ("dumb", "это...")):
+style_samples = {
+    "cute": ("привет, спасибо, ты где?", ("приветик", "спасибочки", "ты гдеее")),
+    "vasya": ("что ты сейчас делаешь вообще?", ("чё", "щас", "ваще")),
+    "brother": ("привет, спасибо, всё нормально", ("салам", "от души", "всё ровно")),
+    "dumb": ("короче, я не знаю что сейчас делать", ("кароч", "я хз", "чо", "щас")),
+}
+for style, (source, expected_parts) in style_samples.items():
     b.set_communication_style(111, style)
-    styled = b.transform_message_style(111, original)
-    assert styled.startswith(prefix), style
+    styled = b.transform_message_style(111, source)
+    assert styled != source, style
+    assert all(part in styled.lower() for part in expected_parts), (style, styled)
     assert b.stylize_message_text(style, styled) == styled, "стиль не должен накладываться дважды"
+
 for protected in ("/start", "https://example.com", "@username", "+7 999 123-45-67"):
     assert b.transform_message_style(111, protected) == protected
+
+b.set_communication_style(111, "vasya")
+mixed = b.transform_message_style(111, "что сейчас? https://example.com @username")
+assert "чё" in mixed and "щас" in mixed and "https://example.com" in mixed and "@username" in mixed
 b.set_communication_style(111, "cute")
 assert b.transform_message_style(111, "а" * 1024, 1024) == "а" * 1024, "длинная подпись доставляется"
 b.set_until(111, 0, None)
@@ -98,6 +117,8 @@ cases = {
     "page_help": 111, "page_connections": 111, "page_panel": 999,
     "page_prices": 999, "page_users": 999, "page_stats": 999,
     "page_promos": 999, "page_admin_log": 999,
+    "page_admins": 999, "page_support_tickets": 999,
+    "page_expiring_subscriptions": 999,
 }
 for name, uid in cases.items():
     text, markup = getattr(b, name)(uid)
