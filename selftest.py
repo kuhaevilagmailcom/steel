@@ -132,6 +132,11 @@ for name, uid in cases.items():
 style_text, style_markup = b.page_communication_style(111)
 assert "🎭" in style_text and "Стиль общения" in style_text
 assert "style:cute" in json.dumps(style_markup, ensure_ascii=False)
+home_text, home_markup = b.page_home(111)
+home_callbacks = json.dumps(home_markup, ensure_ascii=False)
+assert "Owner ID" not in home_text and "Моя подписка" in home_callbacks
+help_text, _ = b.page_help(111)
+assert "Business-подключения" not in help_text and "Как работает Holly Bot" in help_text
 
 users_text, _ = b.page_users(999)
 assert "Тест Пользователь" in users_text and "@tester" in users_text
@@ -167,6 +172,8 @@ assert "Сообщение Business-чата" in messages_text and "Клиент
 assert "umedia:111:333:2" in json.dumps(messages_markup)
 assert {"voice", "photo", "video", "video_note"} <= set(b.ADMIN_MEDIA_LABELS) <= set(b.MEDIA_SENDERS)
 assert b.get_user_owned_saved_message(111, 333, 2)["media_file_id"] == "voice-test"
+connections_text, _ = b.page_connections(111)
+assert "owner_id=" not in connections_text and "notify=" not in connections_text
 denied_text, _ = b.page_user_chats(222, 111)
 assert "только владельцу" in denied_text
 ok, _ = b.add_bot_admin(999, 222)

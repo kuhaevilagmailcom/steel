@@ -1401,30 +1401,26 @@ def check_trial(referrer_id: int) -> None:
 
 def page_home(user_id: int) -> tuple[str, dict]:
     rows = [
+        [btn("⭐ Моя подписка", "buy", emoji="stars", style="success")],
+        [btn("🔗 Подключить чаты", "conns", emoji="view")],
         [
-            btn("Подписка", "buy", emoji="stars", style="success"),
-            btn("Мои подключения", "conns", emoji="view"),
-        ],
-        [
-            btn("🎭 Стиль общения", "style", emoji="profile"),
             btn("Пригласить друзей", "ref", emoji="invite"),
+            btn("❓ Как это работает", "help", emoji="support"),
         ],
-        [
-            btn("Помощь", "help", emoji="support"),
-            btn("Поддержка", "support", emoji="support"),
-        ],
+        [btn("💬 Поддержка", "support", emoji="support")],
     ]
     if is_admin_user(user_id):
         rows.append([btn("Админ-панель", "panel", emoji="admin")])
 
     text = (
-        f"{pe('home')} <b>Holly Bot</b>\n"
-        "Telegram Business-помощник для сообщений.\n\n"
-        f"{pe('check')} удалённые сообщения — сохраняем и присылаем\n"
-        f"{pe('check')} изменённые — показываем «было / стало»\n"
-        f"{pe('check')} одноразовые фото и видео — сохраняем, когда Telegram отдаёт файл\n"
-        f"{pe('check')} стиль общения — меняет исходящие фразы целиком\n\n"
-        f"{pe('stars')} Подписка: {status_line(user_id)}"
+        f"{pe('home')} <b>Holly Bot</b>\n\n"
+        "Сохраняю важные сообщения из твоих чатов и присылаю их сюда, "
+        "если их удалили или изменили. Фото, видео и голосовые тоже попадают в архив.\n\n"
+        f"{pe('check')} Удалённые и изменённые сообщения\n"
+        f"{pe('check')} Одноразовые фото и видео\n"
+        f"{pe('check')} Стиль общения — внутри подписки\n\n"
+        f"{pe('stars')} <b>Подписка:</b> {status_line(user_id)}\n\n"
+        "Начни с кнопки «⭐ Моя подписка» или подключи нужные чаты."
     )
     return text, kb(rows)
 
@@ -1438,14 +1434,20 @@ def page_buy(user_id: int) -> tuple[str, dict]:
     promo = active_promo(user_id)
     gift_link = f"https://t.me/{bot_username() or 'hollyboot_bot'}?start=gift_{user_id}"
     promo_text = f"\nПромокод: <b>{html_text(promo[0])}</b> (скидка {promo[1]}%)\n" if promo else ""
+    active = sub_active(user_id)
+    heading = "Моя подписка" if active else "Подписка Holly Bot"
     text = (
-        f"{pe('stars')} <b>Подписка Holly Bot</b>\n\n"
-        f"Сейчас: {status_line(user_id)}\n{promo_text}\n"
+        f"{pe('stars')} <b>{heading}</b>\n\n"
+        f"{status_line(user_id)}\n\n"
+        "В подписку входит:\n"
+        f"{pe('check')} сохранение удалённых и изменённых сообщений\n"
+        f"{pe('check')} архив фото, видео и голосовых\n"
+        f"{pe('check')} 🎭 стиль общения для исходящих сообщений\n\n"
+        f"{promo_text}"
         f"<b>15 дней</b> — {p15_rub} ₽ или {p15_stars} ⭐\n"
         f"<b>30 дней</b> — {p30_rub} ₽ или {p30_stars} ⭐\n\n"
-        f"Выбери СБП или Telegram Stars — доступ продлевается сразу после подтверждения оплаты.\n"
-        f"Хочешь бесплатно? Пригласи {REF_REQUIRED} друзей — {REF_DAYS} дня в подарок "
-        f"(кнопка «Пригласить друзей»)."
+        "Выбери способ оплаты — доступ продлится сразу после подтверждения.\n"
+        f"Можно получить {REF_DAYS} дня бесплатно: пригласи {REF_REQUIRED} друзей."
     )
     rows = [
         [
@@ -1462,7 +1464,7 @@ def page_buy(user_id: int) -> tuple[str, dict]:
             btn("Подарить подписку", "gift:start", emoji="gift"),
         ],
         [btn("Моя ссылка для подарка", copy=gift_link, emoji="gift")],
-        [btn("🎭 Стиль общения", "style", emoji="profile")],
+        [btn("🎭 Настроить стиль общения", "style", emoji="profile")],
         BACK_HOME,
     ]
     return text, kb(rows)
@@ -1481,7 +1483,7 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
             btn(("✓ " if current == "dumb" else "") + "🧠 Тупой", "style:dumb"),
         ],
         [btn("🚫 Отключить стиль", "style:off", style="danger")],
-        [btn("Подписка", "buy", emoji="stars")],
+        [btn("⭐ Назад к подписке", "buy", emoji="stars")],
         BACK_HOME,
     ]
     examples = "\n".join(
@@ -1525,24 +1527,21 @@ def page_ref(user_id: int) -> tuple[str, dict]:
 
 def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
-    plans = get_plans()
     text = (
-        f"{pe('support')} <b>Подключение Holly Bot</b>\n\n"
-        "<b>Telegram Business</b>\n"
-        "1. Telegram → Настройки → Telegram Business\n"
-        "2. Открой «Chatbots»\n"
-        f"3. Добавь <code>@{username}</code>\n"
-        "4. Выбери чаты, в которых бот должен сохранять удалённые и изменённые сообщения\n"
-        "5. Готово — уведомления будут приходить в твою личку с ботом\n\n"
-        "<b>Обычная группа</b>\n"
-        "Добавь бота администратором и напиши <code>/watch</code>. "
-        "Статус — <code>/status</code>, отключение — <code>/stop</code>.\n\n"
-        f"{pe('stars')} 15 дней — {plans[15]['rub']} ₽ / {plans[15]['stars']} ⭐\n"
-        f"{pe('stars')} 30 дней — {plans[30]['rub']} ₽ / {plans[30]['stars']} ⭐"
+        f"{pe('support')} <b>Как работает Holly Bot</b>\n\n"
+        "Бот хранит копии сообщений из выбранных чатов. Если сообщение удалят или изменят, "
+        "ты получишь его здесь вместе с фото, видео или голосовым.\n\n"
+        "<b>Как подключить чаты</b>\n"
+        "1. Открой Telegram → Настройки → Telegram Business\n"
+        "2. Выбери «Чат-боты» и добавь бота\n"
+        f"3. Найди <code>@{username}</code>\n"
+        "4. Отметь нужные чаты и сохрани\n\n"
+        "Для обычной группы добавь бота администратором и напиши <code>/watch</code>.\n\n"
+        "Подписка открывает сохранение сообщений и 🎭 стиль общения."
     )
     rows = [
-        [btn("Мои подключения", "conns", emoji="view")],
-        [btn("Купить подписку", "buy", emoji="stars", style="success")],
+        [btn("🔗 Проверить подключение", "conns", emoji="view")],
+        [btn("⭐ Открыть подписку", "buy", emoji="stars", style="success")],
         BACK_HOME,
     ]
     return text, kb(rows)
@@ -1550,24 +1549,30 @@ def page_help(user_id: int) -> tuple[str, dict]:
 def page_connections(user_id: int) -> tuple[str, dict]:
     rows = list_business_connections(user_id)
     if rows:
-        body = "\n".join(html_text(line) for line in format_connection_lines(rows))
+        enabled = sum(1 for row in rows if row.get("is_enabled"))
+        disabled = len(rows) - enabled
         text = (
-            f"{pe('view')} <b>Мои Business-подключения</b>\n\n{body}\n\n"
-            "Здесь отображаются только подключения твоего Telegram-аккаунта."
+            f"{pe('view')} <b>Подключение чатов</b>\n\n"
+            f"✅ Защищённых чатов: <b>{enabled}</b>\n"
+            f"⏸ Приостановлено: <b>{disabled}</b>\n\n"
+            "Бот будет присылать сюда удалённые и изменённые сообщения, "
+            "а также сохранённые медиа."
         )
     else:
         text = (
-            f"{pe('view')} <b>Business пока не подключён</b>\n\n"
-            f"Telegram → Настройки → Telegram Business → Chatbots → @{bot_username()}\n"
-            "После подключения удалённые, изменённые и одноразовые сообщения будут приходить сюда."
+            f"{pe('view')} <b>Чаты пока не подключены</b>\n\n"
+            "Подключи нужные чаты в Telegram Business — после этого бот будет "
+            "сохранять удалённые, изменённые и одноразовые сообщения."
         )
-    markup = kb(
-        [
-            [btn("Обновить", "conns", emoji="refresh")],
-            [btn("Включить выключенные", "restore", emoji="check")],
-            BACK_HOME,
-        ]
-    )
+    action_rows = []
+    if rows and any(not row.get("is_enabled") for row in rows):
+        action_rows.append([btn("✅ Включить приостановленные", "restore", emoji="check")])
+    action_rows.extend([
+        [btn("❓ Как подключить", "help", emoji="support")],
+        [btn("🔄 Проверить статус", "conns", emoji="refresh")],
+        BACK_HOME,
+    ])
+    markup = kb(action_rows)
     return text, markup
 
 USERS_PAGE_SIZE = 15
@@ -2945,7 +2950,7 @@ def handle_callback_query(query: dict) -> None:
             alert = "Жду ответ"
     elif data == "restore":
         restored = restore_business_connections(user_id)
-        alert = f"Включил подключений: {len(restored)}" if restored else "Отключённых не нашёл"
+        alert = f"✅ Защита включена: {len(restored)}" if restored else "Все подключения уже включены"
         page = page_connections(user_id)
     elif data == "panel":
         if not is_admin_user(user_id):
@@ -3687,13 +3692,8 @@ def handle_list(message: dict) -> None:
 def format_connection_lines(rows: list[dict]) -> list[str]:
     lines = []
     for index, row in enumerate(rows, start=1):
-        status = "включен" if row.get("is_enabled") else "отключен"
-        can_reply = row.get("can_reply")
-        reply_text = "да" if can_reply else "нет" if can_reply == 0 else "неизвестно"
-        lines.append(
-            f"{index}. owner_id={row.get('owner_id')} | notify={row.get('notify_chat_id')} | "
-            f"{status} | replies={reply_text} | {short_connection_id(row.get('connection_id'))}"
-        )
+        status = "✅ защита включена" if row.get("is_enabled") else "⏸ защита приостановлена"
+        lines.append(f"{index}. {status}")
     return lines
 
 
@@ -3703,9 +3703,9 @@ def handle_connections(message: dict) -> None:
     chat_id = int(message["chat"]["id"])
     rows = list_business_connections(user_id)
     if not rows:
-        send_message(chat_id, "У тебя пока нет Business-подключений.")
+        send_message(chat_id, "У тебя пока нет подключённых чатов. Открой раздел «Как это работает», чтобы подключить их.")
         return
-    send_message(chat_id, "Твои Business-подключения:\n" + "\n".join(format_connection_lines(rows)))
+    send_message(chat_id, "Подключение чатов:\n" + "\n".join(format_connection_lines(rows)))
 
 def handle_restore(message: dict, restore_all: bool = False) -> None:
     user = message.get("from") or {}
@@ -3716,9 +3716,9 @@ def handle_restore(message: dict, restore_all: bool = False) -> None:
     if restored:
         send_message(
             chat_id,
-            f"Включил обратно подключений: {len(restored)}.\n\n"
+            f"✅ Защита снова включена для подключений: {len(restored)}.\n\n"
             + "\n".join(format_connection_lines(rows))
-            + "\n\nЕсли бот отключён в Telegram Business, включи его там вручную.",
+            + "\n\nЕсли бот выключен в настройках Telegram Business, включи его там вручную.",
         )
     else:
         send_message(
