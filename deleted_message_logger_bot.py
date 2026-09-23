@@ -1570,6 +1570,18 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     )
     return text, markup
 
+USERS_PAGE_SIZE = 15
+ADMIN_CHATS_PAGE_SIZE = 10
+ADMIN_MESSAGES_PAGE_SIZE = 10
+
+OWNER_MESSAGES_FROM = """
+    FROM messages AS m
+    LEFT JOIN chat_owners AS co
+      ON m.context = 'regular' AND co.chat_id = m.chat_id
+    LEFT JOIN business_connections AS bc
+      ON m.context = 'business:' || bc.connection_id
+    WHERE (co.owner_id = ? OR bc.owner_id = ?)
+"""
 def stored_user_label(
     user_id: int,
     first_name: str | None,
@@ -1705,6 +1717,123 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
         BACK_HOME,
     ]
+    if is_owner_admin(admin_id):
+        rows.insert(0, [btn("Чаты пользователя", f"uchats:{target_id}:{return_page}:0", emoji="view")])
+    return text, kb(rows)
+
+
+def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_number: int = 0) -> tuple[str, dict]:
+    if not is_owner_admin(admin_id):
+        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        total = int(conn.execute(
+            "SELECT COUNT(DISTINCT m.chat_id) " + OWNER_MESSAGES_FROM,
+            (target_id, target_id),
+        ).fetchone()[0])
+        page_count = max(1, (total + ADMIN_CHATS_PAGE_SIZE - 1) // ADMIN_CHATS_PAGE_SIZE)
+        page_number = min(max(0, page_number), page_count - 1)
+        chats = conn.execute(
+            """
+            SELECT m.chat_id, COUNT(*), COUNT(DISTINCT m.user_id), MAX(m.updated_at)
+            """ + OWNER_MESSAGES_FROM + """
+            GROUP BY m.chat_id
+            ORDER BY MAX(m.updated_at) DESC
+            LIMIT ? OFFSET ?
+            """,
+            (target_id, target_id, ADMIN_CHATS_PAGE_SIZE, page_number * ADMIN_CHATS_PAGE_SIZE),
+        ).fetchall()
+    text = (
+        f"{pe('view')} <b>Чаты пользователя</b>\n"
+        f"ID: <code>{target_id}</code> · всего: <b>{total}</b> · "
+        f"страница {page_number + 1}/{page_count}\n\n"
+        "Нажми на чат, чтобы посмотреть сохранённые сообщения."
+    )
+    rows = [
+        [btn(
+            f"Чат {chat_id} · {message_count} сообщ.",
+            f"umsg:{target_id}:{chat_id}:{return_page}:{page_number}:0",
+            emoji="view",
+        )]
+        for chat_id, message_count, _participants, _updated_at in chats
+    ]
+    navigation = []
+    if page_number > 0:
+        navigation.append(btn("Назад", f"uchats:{target_id}:{return_page}:{page_number - 1}", emoji="home"))
+    if page_number + 1 < page_count:
+        navigation.append(btn("Дальше", f"uchats:{target_id}:{return_page}:{page_number + 1}", emoji="view"))
+    if navigation:
+        rows.append(navigation)
+    rows.extend([
+        [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
+        [btn("Все пользователи", f"users:{return_page}", emoji="home")],
+        BACK_HOME,
+    ])
+    return text, kb(rows)
+
+
+def page_user_chat_messages(
+    admin_id: int,
+    target_id: int,
+    chat_id: int,
+    return_page: int = 0,
+    chats_page: int = 0,
+    page_number: int = 0,
+) -> tuple[str, dict]:
+    if not is_owner_admin(admin_id):
+        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        params = (target_id, target_id, chat_id)
+        total = int(conn.execute(
+            "SELECT COUNT(*) " + OWNER_MESSAGES_FROM + " AND m.chat_id = ?",
+            params,
+        ).fetchone()[0])
+        page_count = max(1, (total + ADMIN_MESSAGES_PAGE_SIZE - 1) // ADMIN_MESSAGES_PAGE_SIZE)
+        page_number = min(max(0, page_number), page_count - 1)
+        messages = conn.execute(
+            """
+            SELECT m.message_id, m.user_id, m.author, m.content, m.media_type,
+                   m.updated_at, m.deleted_at
+            """ + OWNER_MESSAGES_FROM + """
+            AND m.chat_id = ?
+            ORDER BY m.updated_at DESC, m.message_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, ADMIN_MESSAGES_PAGE_SIZE, page_number * ADMIN_MESSAGES_PAGE_SIZE),
+        ).fetchall()
+    lines = []
+    for message_id, sender_id, author, content, media_type, updated_at, deleted_at in messages:
+        body = str(content or "[без текста]")
+        if len(body) > 300:
+            body = body[:297] + "..."
+        flags = []
+        if media_type:
+            flags.append(str(media_type))
+        if deleted_at:
+            flags.append("удалено")
+        suffix = f" · {', '.join(flags)}" if flags else ""
+        lines.append(
+            f"<b>{html_text(author or 'Неизвестный')}</b>"
+            f"{f' · <code>{sender_id}</code>' if sender_id else ''}\n"
+            f"{time.strftime('%d.%m.%Y %H:%M', time.localtime(int(updated_at)))}"
+            f" · ID {message_id}{suffix}\n{html_quote(body)}"
+        )
+    text = (
+        f"{pe('history')} <b>Сообщения чата</b>\n"
+        f"Пользователь: <code>{target_id}</code> · чат: <code>{chat_id}</code>\n"
+        f"Всего: <b>{total}</b> · страница {page_number + 1}/{page_count}\n\n"
+        + ("\n\n".join(lines) if lines else "Сохранённых сообщений нет.")
+    )
+    navigation = []
+    if page_number > 0:
+        navigation.append(btn("Новее", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number - 1}", emoji="refresh"))
+    if page_number + 1 < page_count:
+        navigation.append(btn("Раньше", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number + 1}", emoji="history"))
+    rows = [navigation] if navigation else []
+    rows.extend([
+        [btn("К чатам пользователя", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="view")],
+        [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
+        BACK_HOME,
+    ])
     return text, kb(rows)
 
 
@@ -2839,6 +2968,22 @@ def handle_callback_query(query: dict) -> None:
         parts = data.split(":")
         if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
             page = page_user_card(user_id, int(parts[1]), int(parts[2]))
+    elif data.startswith("uchats:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца бота", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 4 and all(part.isdigit() for part in parts[1:]):
+            page = page_user_chats(user_id, int(parts[1]), int(parts[2]), int(parts[3]))
+    elif data.startswith("umsg:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца бота", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 6 and all(part.lstrip("-").isdigit() for part in parts[1:]):
+            page = page_user_chat_messages(
+                user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
+            )
     elif data.startswith("useradd:"):
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)

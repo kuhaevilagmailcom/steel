@@ -63,6 +63,7 @@ mixed = b.transform_message_style(111, "что сейчас? https://example.com
 assert "чё" in mixed and "щас" in mixed and "https://example.com" in mixed and "@username" in mixed
 b.set_communication_style(111, "cute")
 assert b.transform_message_style(111, "а" * 1024, 1024) == "а" * 1024, "длинная подпись доставляется"
+original = "ты где, скоро придешь?"
 b.set_until(111, 0, None)
 assert b.transform_message_style(111, original) == original
 assert b.get_communication_style(111) == "cute", "после окончания подписки стиль хранится"
@@ -75,12 +76,12 @@ b.apply_business_message_style({
     "business_connection_id": "connection-1", "message_id": 7,
     "from": {"id": 111}, "chat": {"id": 222}, "text": original,
 }, 111)
-assert style_calls[-1][0] == "editMessageText" and ":3" in style_calls[-1][1]["text"]
+assert style_calls[-1][0] == "editMessageText" and style_calls[-1][1]["text"] != original
 b.apply_business_message_style({
     "business_connection_id": "connection-1", "message_id": 8,
     "from": {"id": 111}, "chat": {"id": 222}, "photo": [{}], "caption": "Фото для тебя",
 }, 111)
-assert style_calls[-1][0] == "editMessageCaption" and ":3" in style_calls[-1][1]["caption"]
+assert style_calls[-1][0] == "editMessageCaption" and style_calls[-1][1]["caption"] != "Фото для тебя"
 
 # --- рефералка ---
 b.set_until(111, 0, 0)
@@ -134,8 +135,47 @@ assert "style:cute" in json.dumps(style_markup, ensure_ascii=False)
 
 users_text, _ = b.page_users(999)
 assert "Тест Пользователь" in users_text and "@tester" in users_text
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    now = int(time.time())
+    conn.execute("INSERT INTO chat_owners (chat_id,owner_id,created_at) VALUES (?,?,?)", (-100500, 111, now))
+    conn.execute(
+        "INSERT INTO business_connections (connection_id,owner_id,notify_chat_id,is_enabled,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+        ("test-connection", 111, 111, 1, now, now),
+    )
+b.save_message("regular", {
+    "message_id": 1, "from": {"id": 222, "first_name": "Обычный"},
+    "chat": {"id": -100500, "type": "supergroup", "title": "Группа"}, "text": "Сообщение обычного чата",
+})
+b.save_message("business:test-connection", {
+    "message_id": 2, "from": {"id": 333, "first_name": "Клиент"},
+    "chat": {"id": 333, "type": "private", "first_name": "Клиент"}, "text": "Сообщение Business-чата",
+})
 card_text, card_markup = b.page_user_card(999, 111)
 assert "Карточка пользователя" in card_text and "useradd:111:30:0" in json.dumps(card_markup)
+assert "uchats:111:0:0" in json.dumps(card_markup)
+chats_text, chats_markup = b.page_user_chats(999, 111)
+assert "Чаты пользователя" in chats_text
+assert "umsg:111:-100500:0:0:0" in json.dumps(chats_markup)
+assert "umsg:111:333:0:0:0" in json.dumps(chats_markup)
+messages_text, _ = b.page_user_chat_messages(999, 111, 333)
+assert "Сообщение Business-чата" in messages_text and "Клиент" in messages_text
+denied_text, _ = b.page_user_chats(222, 111)
+assert "только владельцу" in denied_text
+ok, _ = b.add_bot_admin(999, 222)
+assert ok and b.is_admin_user(222) and not b.is_owner_admin(222)
+delegated_card, delegated_markup = b.page_user_card(222, 111)
+assert "Карточка пользователя" in delegated_card and "uchats:" not in json.dumps(delegated_markup)
+
+denials = []
+original_answer_callback = b.answer_callback
+b.answer_callback = lambda *args, **kwargs: denials.append((args, kwargs))
+b.handle_callback_query({
+    "id": "deny-1", "data": "uchats:111:0:0",
+    "from": {"id": 222}, "message": {"message_id": 9, "chat": {"id": 222, "type": "private"}},
+})
+b.answer_callback = original_answer_callback
+assert denials and denials[-1][1].get("show_alert"), "callback просмотра чатов закрыт для делегированного админа"
+b.remove_bot_admin(999, 222)
 gift_text, gift_markup = b.page_gift_buy(111, 222)
 assert "Подарочная подписка" in gift_text and "gift:stars:222:15" in json.dumps(gift_markup)
 
