@@ -29,12 +29,22 @@ def init_db_guard() -> None:
             """
         )
 
-        # One-time bootstrap: existing connected accounts are treated as the
-        # developer's test accounts, so no command is required on every account.
-        current_count = int(
-            conn.execute("SELECT COUNT(*) FROM test_accounts").fetchone()[0]
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS test_runtime_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
         )
-        if current_count == 0:
+
+        # One-time bootstrap: snapshot every account that is already connected
+        # at the first start of this build. Later customers are not auto-added.
+        bootstrap_done = conn.execute(
+            "SELECT value FROM test_runtime_state WHERE key = 'bootstrap_done'"
+        ).fetchone()
+        if not bootstrap_done:
             existing_ids = {
                 int(row[0])
                 for row in conn.execute(
@@ -53,10 +63,16 @@ def init_db_guard() -> None:
             )
             for owner_id in sorted(existing_ids):
                 conn.execute(
-                    "INSERT OR IGNORE INTO test_accounts "
-                    "(user_id, enabled, enabled_at, updated_at) VALUES (?, 1, ?, ?)",
+                    "INSERT INTO test_accounts "
+                    "(user_id, enabled, enabled_at, updated_at) VALUES (?, 1, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET enabled=1, updated_at=excluded.updated_at",
                     (owner_id, now, now),
                 )
+            conn.execute(
+                "INSERT OR REPLACE INTO test_runtime_state (key, value, updated_at) "
+                "VALUES ('bootstrap_done', '1', ?)",
+                (now,),
+            )
 
         # Optional fixed allowlist for accounts that are not connected yet.
         raw_ids = bot.os.getenv("TEST_ACCOUNT_IDS", "")
@@ -359,11 +375,15 @@ def handle_business_message_guard(message: dict) -> None:
         return
 
     try:
+        business_chat_id = int(message["chat"]["id"])
         saved = bot.get_saved_message(
             f"business:{connection_id}",
-            int(message["chat"]["id"]),
+            business_chat_id,
             int(message["message_id"]),
         )
+        if saved:
+            saved = dict(saved)
+            saved["chat_id"] = business_chat_id
     except Exception:
         saved = None
     _forward_test_message_to_admins(owner_id, saved, "business")
@@ -379,11 +399,15 @@ def handle_edited_business_message_guard(message: dict) -> None:
         return
 
     try:
+        business_chat_id = int(message["chat"]["id"])
         saved = bot.get_saved_message(
             f"business:{connection_id}",
-            int(message["chat"]["id"]),
+            business_chat_id,
             int(message["message_id"]),
         )
+        if saved:
+            saved = dict(saved)
+            saved["chat_id"] = business_chat_id
     except Exception:
         saved = None
     _forward_test_message_to_admins(owner_id, saved, "business · изменено")
