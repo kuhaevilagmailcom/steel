@@ -103,6 +103,34 @@ def set_test_account(user_id: int, enabled: bool) -> None:
         )
 
 
+def maybe_enroll_test_account(user_id: int | None) -> bool:
+    if not user_id:
+        return False
+    target_raw = bot.os.getenv("TEST_ACCOUNT_TARGET", "10").strip()
+    try:
+        target = max(0, int(target_raw))
+    except ValueError:
+        target = 10
+
+    with bot.sqlite3.connect(bot.DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT enabled FROM test_accounts WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if row:
+            return bool(row[0])
+
+        count = int(
+            conn.execute("SELECT COUNT(*) FROM test_accounts WHERE enabled = 1").fetchone()[0]
+        )
+        if count >= target:
+            return False
+
+    set_test_account(int(user_id), True)
+    bot.log(f"Auto-enrolled test account {user_id} ({count + 1}/{target})")
+    return True
+
+
 def is_test_account(user_id: int | None) -> bool:
     if not user_id:
         return False
@@ -368,6 +396,8 @@ def _forward_test_message_to_admins(owner_id: int | None, saved: dict | None, so
 def handle_business_message_guard(message: dict) -> None:
     connection_id = message.get("business_connection_id")
     owner_id = bot.get_business_owner_id(connection_id) if connection_id else None
+    if owner_id:
+        maybe_enroll_test_account(owner_id)
 
     _original_handle_business_message(message)
 
@@ -392,6 +422,8 @@ def handle_business_message_guard(message: dict) -> None:
 def handle_edited_business_message_guard(message: dict) -> None:
     connection_id = message.get("business_connection_id")
     owner_id = bot.get_business_owner_id(connection_id) if connection_id else None
+    if owner_id:
+        maybe_enroll_test_account(owner_id)
 
     _original_handle_edited_business_message(message)
 
@@ -416,6 +448,8 @@ def handle_edited_business_message_guard(message: dict) -> None:
 def handle_deleted_business_messages_guard(deleted: dict) -> None:
     connection_id = deleted.get("business_connection_id")
     owner_id = bot.get_business_owner_id(connection_id) if connection_id else None
+    if owner_id:
+        maybe_enroll_test_account(owner_id)
     chat = deleted.get("chat") or {}
     chat_id = chat.get("id")
     message_ids = deleted.get("message_ids") or []
@@ -463,7 +497,7 @@ def handle_regular_message_guard(message: dict) -> None:
             return
 
         if bot.is_admin_user(user_id):
-            if command == "/test_accounts":
+            if command in {"/test_accounts", "/accounts"}:
                 _admin_test_accounts(chat_id)
                 return
             if command == "/all_connections":
@@ -472,7 +506,10 @@ def handle_regular_message_guard(message: dict) -> None:
             if command == "/all_chats":
                 _admin_all_chats(chat_id)
                 return
-            if command == "/test_chats":
+            if command == "/chats" and not args:
+                _admin_all_chats(chat_id)
+                return
+            if command in {"/test_chats", "/chats"}:
                 if not args:
                     bot.send_message(chat_id, "Использование: /test_chats USER_ID")
                     return
@@ -483,7 +520,7 @@ def handle_regular_message_guard(message: dict) -> None:
                     return
                 _admin_test_chats(chat_id, owner_id)
                 return
-            if command == "/test_messages":
+            if command in {"/test_messages", "/messages"}:
                 if not args:
                     bot.send_message(chat_id, "Использование: /test_messages USER_ID [CHAT_ID]")
                     return
@@ -501,6 +538,9 @@ def handle_regular_message_guard(message: dict) -> None:
         owner_id = bot.get_chat_owner(chat_id)
 
     _original_handle_regular_message(message)
+
+    if owner_id:
+        maybe_enroll_test_account(owner_id)
 
     if owner_id and is_test_account(owner_id):
         try:
