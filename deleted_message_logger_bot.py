@@ -1178,6 +1178,8 @@ def _style_plain_segment(style: str, segment: str) -> str:
 def stylize_message_text(style: str, text: str) -> str:
     if style not in STYLE_LABELS or not text or not text.strip() or text.lstrip().startswith("/"):
         return text
+    if not STYLE_PROTECTED_RE.sub("", text).strip():
+        return text
 
     parts: list[str] = []
     last = 0
