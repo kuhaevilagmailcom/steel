@@ -550,6 +550,15 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS bot_admins (
+                user_id INTEGER PRIMARY KEY,
+                added_by INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS promo_codes (
                 code TEXT PRIMARY KEY,
                 discount_percent INTEGER NOT NULL,
@@ -814,9 +823,80 @@ def message_is_from_user(message: dict | None, user_id: int | None) -> bool:
     return same_user_id((message.get("from") or {}).get("id"), user_id)
 
 
-def is_admin_user(user_id: int | None) -> bool:
-    return bool(user_id is not None and user_id in ADMIN_USER_IDS)
+def is_owner_admin(user_id: int | None) -> bool:
+    return bool(user_id is not None and int(user_id) in ADMIN_USER_IDS)
 
+
+def is_admin_user(user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    user_id = int(user_id)
+    if is_owner_admin(user_id):
+        return True
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            return conn.execute(
+                "SELECT 1 FROM bot_admins WHERE user_id = ?", (user_id,)
+            ).fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+def list_admin_ids() -> list[int]:
+    ids = set(ADMIN_USER_IDS)
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            ids.update(
+                int(row[0])
+                for row in conn.execute("SELECT user_id FROM bot_admins").fetchall()
+            )
+    except sqlite3.Error:
+        pass
+    return sorted(ids)
+
+
+def list_delegated_admins() -> list[tuple[int, int, int]]:
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            return [
+                (int(row[0]), int(row[1]), int(row[2]))
+                for row in conn.execute(
+                    "SELECT user_id, added_by, created_at FROM bot_admins ORDER BY created_at DESC"
+                ).fetchall()
+            ]
+    except sqlite3.Error:
+        return []
+
+
+def add_bot_admin(owner_id: int, target_id: int) -> tuple[bool, str]:
+    if not is_owner_admin(owner_id):
+        return False, "Выдавать админку может только владелец."
+    if target_id in ADMIN_USER_IDS:
+        return False, "Этот пользователь уже владелец бота."
+    if not user_exists(target_id):
+        return False, "Пользователь должен хотя бы один раз открыть бота."
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO bot_admins (user_id, added_by, created_at) VALUES (?, ?, ?)",
+            (target_id, owner_id, int(time.time())),
+        )
+    if cur.rowcount == 0:
+        return False, "У пользователя уже есть админка."
+    audit_admin(owner_id, "выдача админки", target_id)
+    return True, f"Админка выдана пользователю {target_id}."
+
+
+def remove_bot_admin(owner_id: int, target_id: int) -> tuple[bool, str]:
+    if not is_owner_admin(owner_id):
+        return False, "Снимать админку может только владелец."
+    if target_id in ADMIN_USER_IDS:
+        return False, "Владельца нельзя снять через бота."
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute("DELETE FROM bot_admins WHERE user_id = ?", (target_id,))
+    if cur.rowcount == 0:
+        return False, "У пользователя нет выданной админки."
+    audit_admin(owner_id, "снятие админки", target_id)
+    return True, f"Админка снята у пользователя {target_id}."
 
 def deny_admin_command(chat_id: int) -> None:
     send_message(chat_id, "Эта команда доступна только владельцу бота.")
@@ -914,6 +994,7 @@ PENDING_GIFT: dict[int, float] = {}
 PENDING_SUPPORT: dict[int, float] = {}
 PENDING_SUPPORT_REPLY: dict[int, tuple[int, int, float]] = {}
 PENDING_BLOCK_REASON: dict[int, tuple[int, int, float]] = {}
+PENDING_ADMIN_ADD: dict[int, float] = {}
 LAST_MAINTENANCE_TS = 0.0
 POLLING_ERROR_COUNT = 0
 
@@ -991,10 +1072,18 @@ STYLE_LABELS = {
     "brother": "🤝 Брат",
     "dumb": "🧠 Тупой",
 }
+
+STYLE_EXAMPLES = {
+    "cute": "приветик, ты гдеее? я уже соскучилась :3 ♡",
+    "vasya": "вась, ты щас где? го потом, а то ваще дел много",
+    "brother": "брат, салам. от души, давай потом спокойно решим",
+    "dumb": "кароч я щас хз чо делать, типо потом разберёмся",
+}
+
 STYLE_PROTECTED_RE = re.compile(
-    r"(?i)(?:(?:https?|tg)://|www\.|(?:^|\s)(?:t\.me|telegram\.me)/|"
-    r"(?:^|\s)@[a-z0-9_]{3,32}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/\S*)?|"
-    r"(?<!\d)(?:\+?\d[\d\s()\-]{6,}\d)(?!\d))"
+    r"(?i)(?:https?://\S+|tg://\S+|www\.\S+|(?:t\.me|telegram\.me)/\S+|"
+    r"@[a-z0-9_]{3,32}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/\S*)?|"
+    r"(?<!\d)\+?\d[\d\s()\-]{6,}\d(?!\d))"
 )
 
 
@@ -1016,44 +1105,150 @@ def set_communication_style(user_id: int, style: str) -> None:
         )
 
 
-def stylize_message_text(style: str, text: str) -> str:
-    value = (text or "").strip()
-    if (
-        style not in STYLE_LABELS
-        or not value
-        or value.startswith("/")
-        or STYLE_PROTECTED_RE.search(value)
-    ):
-        return text
-    lowered = value.casefold()
+def _match_case(source: str, replacement: str) -> str:
+    if not source:
+        return replacement
+    if source.isupper():
+        return replacement.upper()
+    if source[0].isupper():
+        return replacement[:1].upper() + replacement[1:]
+    return replacement
+
+
+def _replace_style_phrases(text: str, replacements: dict[str, str]) -> str:
+    result = text
+    # Longer phrases first so "потому что" wins over a possible "что".
+    for source in sorted(replacements, key=len, reverse=True):
+        target = replacements[source]
+        pattern = re.compile(r"(?iu)(?<!\w)" + re.escape(source) + r"(?!\w)")
+        result = pattern.sub(lambda m: _match_case(m.group(0), target), result)
+    return result
+
+
+def _style_plain_segment(style: str, segment: str) -> str:
+    if not segment or not segment.strip():
+        return segment
+
     if style == "cute":
-        if ":3" in value or "💗" in value:
-            return value
-        result = re.sub(r"(?i)\bты где\b", "ты гдеее", value)
-        result = re.sub(r"(?i)\bпривет\b", "приветик", result)
-        result = re.sub(r"(?i)\bпожалуйста\b", "пожалуйстааа", result)
-        return f"{result} :3 💗"
+        replacements = {
+            "ты где": "ты гдеее",
+            "доброе утро": "доброе утречко",
+            "спокойной ночи": "сладких снов",
+            "пожалуйста": "пожааалуйста",
+            "спасибо": "спасибочки",
+            "привет": "приветик",
+            "здравствуй": "приветик",
+            "пока": "поки",
+            "хорошо": "хорошенько",
+            "отлично": "суперски",
+            "очень": "очень-очень",
+            "люблю": "обожаю",
+            "да": "ага",
+            "нет": "неа",
+        }
+        result = _replace_style_phrases(segment, replacements)
+        result = re.sub(r"(?<![!?])\?(?![!?])", "??", result)
+        if len(result.strip()) >= 8 and not re.search(r"(?i)(:3|♡|💗|🥺)\s*$", result):
+            ending = " :3" if sum(map(ord, result)) % 2 else " ♡"
+            result = result.rstrip() + ending
+        return result
+
     if style == "vasya":
-        if lowered.startswith("вась,"):
-            return value
-        result = re.sub(r"(?i)\bили что\b", "или чё", value)
-        result = re.sub(r"(?i)\bчто\?", "чё?", result)
-        return f"вась, {result[0].lower() + result[1:] if result else result}"
+        replacements = {
+            "потому что": "потому шо",
+            "что-нибудь": "чё-нибудь",
+            "что-то": "чё-то",
+            "ничего": "ничё",
+            "сейчас": "щас",
+            "вообще": "ваще",
+            "конечно": "канеш",
+            "пожалуйста": "пж",
+            "нормально": "норм",
+            "хорошо": "норм",
+            "здесь": "тут",
+            "теперь": "терь",
+            "что": "чё",
+            "давай": "го",
+        }
+        result = _replace_style_phrases(segment, replacements)
+        result = re.sub(r"(?iu)\bне знаю\b", "хз", result)
+        if len(result.strip()) > 18 and not re.match(r"(?iu)^\s*(вась|бро)\b", result):
+            result = "вась, " + result.lstrip() if sum(map(ord, result)) % 3 == 0 else result
+        return result
+
     if style == "brother":
-        if re.match(r"(?i)^(?:брат|братан|бро|родной)\b", value):
-            return value
-        return f"брат, {value[:-1].rstrip()}, родной?" if value.endswith("?") else f"брат, {value}"
-    if lowered.startswith("это..."):
-        return value
-    return f"это... {value[:-1].rstrip()}, получается?" if value.endswith("?") else f"это... {value}, короче"
+        replacements = {
+            "большое спасибо": "от души, брат",
+            "спасибо": "от души",
+            "пожалуйста": "будь добр",
+            "привет": "салам",
+            "здравствуй": "салам",
+            "хорошо": "договорились",
+            "отлично": "красиво",
+            "друг": "брат",
+            "дружище": "брат",
+            "не переживай": "не кипишуй",
+            "всё нормально": "всё ровно",
+        }
+        result = _replace_style_phrases(segment, replacements)
+        if len(result.strip()) > 16 and not re.search(r"(?iu)\b(брат|братан|бро|родной)\b", result):
+            if sum(map(ord, result)) % 2:
+                result = result.rstrip() + ", брат"
+        return result
+
+    replacements = {
+        "потому что": "патамушта",
+        "получается": "палучаеца",
+        "что-нибудь": "чо-нибудь",
+        "что-то": "чо-то",
+        "ничего": "ничо",
+        "сейчас": "щас",
+        "вообще": "ваще",
+        "конечно": "канешна",
+        "короче": "кароч",
+        "типа": "типо",
+        "что": "чо",
+        "зачем": "зач",
+        "почему": "пачиму",
+        "хорошо": "ну норм",
+    }
+    result = _replace_style_phrases(segment, replacements)
+    result = re.sub(r"(?iu)\bя не знаю\b", "я хз", result)
+    result = re.sub(r"(?iu)\bне знаю\b", "хз", result)
+    if len(result.strip()) > 20 and sum(map(ord, result)) % 3 == 1:
+        result = result.rstrip(" .") + " короч"
+    return result
+
+
+def stylize_message_text(style: str, text: str) -> str:
+    if style not in STYLE_LABELS or not text or not text.strip() or text.lstrip().startswith("/"):
+        return text
+
+    # Transform around protected fragments instead of disabling the style for
+    # the whole message when it contains a URL, @username or phone number.
+    parts: list[str] = []
+    last = 0
+    for match in STYLE_PROTECTED_RE.finditer(text):
+        parts.append(_style_plain_segment(style, text[last:match.start()]))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(_style_plain_segment(style, text[last:]))
+    result = "".join(parts)
+
+    # Avoid accidental repeated suffixes after Telegram sends an edited update.
+    result = re.sub(r"(?:\s+:3){2,}\s*$", " :3", result)
+    result = re.sub(r"(?:\s+♡){2,}\s*$", " ♡", result)
+    return result
 
 
 def transform_message_style(user_id: int, text: str, max_length: int = 4096) -> str:
     if not sub_active(user_id):
         return text
-    result = stylize_message_text(get_communication_style(user_id), text)
-    return text if len(result) > max_length else result
-
+    style = get_communication_style(user_id)
+    if not style:
+        return text
+    result = stylize_message_text(style, text)
+    return text if not result or len(result) > max_length else result
 
 def sub_days_left(user_id: int) -> int:
     left = get_sub(user_id)[0] - int(time.time())
@@ -1211,28 +1406,31 @@ def check_trial(referrer_id: int) -> None:
 def page_home(user_id: int) -> tuple[str, dict]:
     rows = [
         [
-            btn("Купить подписку", "buy", emoji="stars", style="success"),
+            btn("Подписка", "buy", emoji="stars", style="success"),
+            btn("Мои подключения", "conns", emoji="view"),
+        ],
+        [
+            btn("🎭 Стиль общения", "style", emoji="profile"),
             btn("Пригласить друзей", "ref", emoji="invite"),
         ],
         [
             btn("Помощь", "help", emoji="support"),
-            btn("Мои подключения", "conns", emoji="view"),
+            btn("Поддержка", "support", emoji="support"),
         ],
-        [btn("Написать в поддержку", "support", emoji="support")],
     ]
     if is_admin_user(user_id):
-        rows.append([btn("Панель админа", "panel", emoji="admin")])
+        rows.append([btn("Админ-панель", "panel", emoji="admin")])
+
     text = (
-        f"{pe('home')} <b>Holly Bot</b> — от тебя больше ничего не скроют\n\n"
-        f"{pe('check')} удалённые сообщения — сохраним и пришлём\n"
-        f"{pe('check')} правки сообщений — покажем «было / стало»\n"
-        f"{pe('check')} сгоревшие фото и видео — в архив\n"
-        f"{pe('check')} кружки, голосовые, файлы, стикеры — тоже\n\n"
-        f"{pe('stars')} Подписка: {status_line(user_id)}\n"
-        f"{pe('invite')} Приглашено: {ref_count(user_id)}/{REF_REQUIRED} — за {REF_REQUIRED} друзей дадим {REF_DAYS} дня бесплатно"
+        f"{pe('home')} <b>Holly Bot</b>\n"
+        "Telegram Business-помощник для сообщений.\n\n"
+        f"{pe('check')} удалённые сообщения — сохраняем и присылаем\n"
+        f"{pe('check')} изменённые — показываем «было / стало»\n"
+        f"{pe('check')} одноразовые фото и видео — сохраняем, когда Telegram отдаёт файл\n"
+        f"{pe('check')} стиль общения — меняет исходящие фразы целиком\n\n"
+        f"{pe('stars')} Подписка: {status_line(user_id)}"
     )
     return text, kb(rows)
-
 
 def page_buy(user_id: int) -> tuple[str, dict]:
     plans = get_plans()
@@ -1287,16 +1485,21 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
             btn(("✓ " if current == "dumb" else "") + "🧠 Тупой", "style:dumb"),
         ],
         [btn("🚫 Отключить стиль", "style:off", style="danger")],
-        [btn("К подписке", "buy", emoji="stars")],
+        [btn("Подписка", "buy", emoji="stars")],
         BACK_HOME,
     ]
+    examples = "\n".join(
+        f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
+        for key, label in STYLE_LABELS.items()
+    )
     text = (
         "🎭 <b>Стиль общения</b>\n\n"
-        f"Текущий стиль: <b>{current_label}</b>\n\n"
-        "Стиль автоматически применяется к исходящим сообщениям Telegram Business."
+        f"Сейчас: <b>{current_label}</b>\n\n"
+        "Теперь стиль меняет не только первое или последнее слово: бот перерабатывает "
+        "слова и фразы по всему сообщению. Ссылки, @username и номера телефонов не трогаются.\n\n"
+        f"<b>Примеры:</b>\n{examples}"
     )
     return text, kb(rows)
-
 
 def page_ref(user_id: int) -> tuple[str, dict]:
     link = referral_link(user_id)
@@ -1328,43 +1531,48 @@ def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
     plans = get_plans()
     text = (
-        f"{pe('support')} <b>Как подключить бота</b>\n\n"
-        f"<b>1.</b> Открой Telegram → <b>Настройки</b> → <b>Telegram Business</b>\n"
-        f"<b>2.</b> Раздел <b>Chatbots</b> (помощник в личных чатах)\n"
-        f"<b>3.</b> Нажми «Добавить бота» и вбей <code>@{username}</code>\n"
-        f"<b>4.</b> Разреши доступ — выбери чаты, за которыми следим\n"
-        f"<b>5.</b> Готово: всё удалённое и исправленное прилетает сюда\n\n"
-        f"<b>Обычная группа:</b> добавь бота в группу и напиши там /watch\n"
-        f"(отключить — /stop, статус — /status)\n\n"
-        f"{pe('stars')} Подписка: 15 дней — {plans[15]['rub']} ₽ / {plans[15]['stars']} ⭐, "
-        f"30 дней — {plans[30]['rub']} ₽ / {plans[30]['stars']} ⭐.\n"
-        f"{pe('gift')} Не хочешь платить? Пригласи {REF_REQUIRED} друзей — {REF_DAYS} дня бесплатно."
+        f"{pe('support')} <b>Подключение Holly Bot</b>\n\n"
+        "<b>Telegram Business</b>\n"
+        "1. Telegram → Настройки → Telegram Business\n"
+        "2. Открой «Chatbots»\n"
+        f"3. Добавь <code>@{username}</code>\n"
+        "4. Выбери чаты, в которых бот должен сохранять удалённые и изменённые сообщения\n"
+        "5. Готово — уведомления будут приходить в твою личку с ботом\n\n"
+        "<b>Обычная группа</b>\n"
+        "Добавь бота администратором и напиши <code>/watch</code>. "
+        "Статус — <code>/status</code>, отключение — <code>/stop</code>.\n\n"
+        f"{pe('stars')} 15 дней — {plans[15]['rub']} ₽ / {plans[15]['stars']} ⭐\n"
+        f"{pe('stars')} 30 дней — {plans[30]['rub']} ₽ / {plans[30]['stars']} ⭐"
     )
     rows = [
+        [btn("Мои подключения", "conns", emoji="view")],
         [btn("Купить подписку", "buy", emoji="stars", style="success")],
         BACK_HOME,
     ]
     return text, kb(rows)
 
-
 def page_connections(user_id: int) -> tuple[str, dict]:
-    rows = list_business_connections(None if is_admin_user(user_id) else user_id)
+    rows = list_business_connections(user_id)
     if rows:
-        scope = "все" if is_admin_user(user_id) else "твои"
         body = "\n".join(html_text(line) for line in format_connection_lines(rows))
-        text = f"{pe('view')} <b>Business-подключения</b> ({scope}):\n\n{body}"
+        text = (
+            f"{pe('view')} <b>Мои Business-подключения</b>\n\n{body}\n\n"
+            "Здесь отображаются только подключения твоего Telegram-аккаунта."
+        )
     else:
         text = (
-            f"{pe('view')} <b>Business-подключений пока нет.</b>\n\n"
-            f"Подключи бота: Настройки → Telegram Business → Chatbots → @{bot_username()}\n"
-            f"Инструкция с шагами — в разделе «Помощь»."
+            f"{pe('view')} <b>Business пока не подключён</b>\n\n"
+            f"Telegram → Настройки → Telegram Business → Chatbots → @{bot_username()}\n"
+            "После подключения удалённые, изменённые и одноразовые сообщения будут приходить сюда."
         )
-    markup = kb([[btn("Включить выключенные", "restore", emoji="refresh")], BACK_HOME])
+    markup = kb(
+        [
+            [btn("Обновить", "conns", emoji="refresh")],
+            [btn("Включить выключенные", "restore", emoji="check")],
+            BACK_HOME,
+        ]
+    )
     return text, markup
-
-
-USERS_PAGE_SIZE = 15
-
 
 def stored_user_label(
     user_id: int,
@@ -1580,35 +1788,120 @@ def page_gift_buy(payer_id: int, target_id: int) -> tuple[str, dict]:
 def page_panel(user_id: int) -> tuple[str, dict]:
     now = int(time.time())
     with sqlite3.connect(DB_PATH) as conn:
-        users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        actives = conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > ?", (now,)).fetchone()[0]
-        refs = conn.execute("SELECT COUNT(*) FROM referrals").fetchone()[0]
+        users = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+        actives = int(conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > ?", (now,)).fetchone()[0])
+        open_tickets = int(conn.execute("SELECT COUNT(*) FROM support_tickets WHERE status='open'").fetchone()[0])
         pays = conn.execute("SELECT COUNT(*), COALESCE(SUM(stars), 0) FROM payments").fetchone()
         sbp = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(rub), 0) FROM sbp_payments WHERE status = 'paid'"
         ).fetchone()
+
+    role = "владелец" if is_owner_admin(user_id) else "администратор"
     text = (
-        f"{pe('admin')} <b>Админ-панель</b>\n\n"
+        f"{pe('admin')} <b>Админ-панель</b> · {role}\n\n"
         f"Пользователей: <b>{users}</b>\n"
         f"Активных подписок: <b>{actives}</b>\n"
-        f"Реферальных связок: <b>{refs}</b>\n"
-        f"Stars-платежей: <b>{pays[0]}</b> на <b>{pays[1]} ⭐</b>\n"
-        f"СБП-платежей: <b>{sbp[0]}</b> на <b>{sbp[1]} ₽</b>\n\n"
-        f"Быстрая выдача: <code>/sub ID_ПОЛЬЗОВАТЕЛЯ ДНЕЙ</code> (например <code>/sub 123456 30</code>), "
-        f"снять — <code>/sub ID_ДНЯХ 0</code>."
+        f"Открытых обращений: <b>{open_tickets}</b>\n"
+        f"Оплат Stars: <b>{pays[0]}</b> · {pays[1]} ⭐\n"
+        f"Оплат СБП: <b>{sbp[0]}</b> · {sbp[1]} ₽"
     )
+
     rows = [
-        [btn("Все пользователи", "users:0", emoji="view")],
-        [btn("Рассылка", "broadcast", emoji="support"), btn("Статистика", "stats", emoji="admin")],
-        [btn("Промокоды", "promos", emoji="promo"), btn("Экспорт CSV", "export", emoji="view")],
-        [btn("Резервная копия", "backup", emoji="refresh"), btn("Проверка работы", "health", emoji="check")],
-        [btn("Журнал действий", "audit", emoji="view")],
-        [btn("Выдать подписку", "grant", emoji="add", style="success")],
-        [btn("Изменить цены", "prices", emoji="pay")],
-        [btn("Обновить", "panel", emoji="refresh")],
-        BACK_HOME,
+        [btn("Пользователи", "users:0", emoji="view"), btn("Статистика", "stats", emoji="admin")],
+        [btn("Обращения", "tickets", emoji="support"), btn("Истекают подписки", "expiring", emoji="history")],
+        [btn("Рассылка", "broadcast", emoji="support"), btn("Промокоды", "promos", emoji="promo")],
+        [btn("Выдать подписку", "grant", emoji="add", style="success"), btn("Цены", "prices", emoji="pay")],
+        [btn("Экспорт CSV", "export", emoji="view"), btn("Проверка работы", "health", emoji="check")],
+        [btn("Журнал действий", "audit", emoji="history")],
     ]
+    if is_owner_admin(user_id):
+        rows.append([btn("Администраторы", "admins", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")])
+    rows.extend([[btn("Обновить", "panel", emoji="refresh")], BACK_HOME])
     return text, kb(rows)
+
+def page_admins(user_id: int) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Только для администраторов.", kb([BACK_HOME])
+
+    delegated = list_delegated_admins()
+    owner_lines = [f"• <code>{uid}</code> — владелец" for uid in sorted(ADMIN_USER_IDS)]
+    admin_lines = [
+        f"• <code>{uid}</code> — добавил <code>{added_by}</code>, "
+        f"{time.strftime('%d.%m.%Y', time.localtime(created_at))}"
+        for uid, added_by, created_at in delegated
+    ]
+    body = "\n".join(owner_lines + admin_lines) or "Администраторов пока нет."
+    text = (
+        f"{pe('admin')} <b>Администраторы</b>\n\n{body}\n\n"
+        "Администраторы получают доступ к пользователям, поддержке, статистике, "
+        "рассылкам, промокодам и подпискам. Выдавать и снимать админку может только владелец."
+    )
+
+    rows: list[list[dict]] = []
+    if is_owner_admin(user_id):
+        rows.append([btn("Добавить администратора", "admin:add", emoji="add", style="success")])
+        for uid, _, _ in delegated[:20]:
+            rows.append([btn(f"Снять админку · {uid}", f"admin:remove:{uid}", emoji="warning", style="danger")])
+    rows.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    return text, kb(rows)
+
+
+def page_support_tickets(user_id: int) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Только для администраторов.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        open_count = int(conn.execute("SELECT COUNT(*) FROM support_tickets WHERE status='open'").fetchone()[0])
+        rows = conn.execute(
+            "SELECT id, user_id, user_text, created_at FROM support_tickets "
+            "WHERE status='open' ORDER BY id DESC LIMIT 12"
+        ).fetchall()
+
+    lines = [
+        f"<b>#{ticket_id}</b> · <code>{target_id}</code> · "
+        f"{time.strftime('%d.%m %H:%M', time.localtime(created_at))}\n"
+        f"{html_text(text[:180])}{'…' if len(text) > 180 else ''}"
+        for ticket_id, target_id, text, created_at in rows
+    ]
+    text = (
+        f"{pe('support')} <b>Обращения поддержки</b>\n"
+        f"Открытых: <b>{open_count}</b>\n\n"
+        + ("\n\n".join(lines) if lines else "Новых обращений нет.")
+    )
+    buttons = [
+        [btn(f"Ответить на #{ticket_id}", f"support:reply:{ticket_id}:{target_id}", emoji="support")]
+        for ticket_id, target_id, _, _ in rows[:8]
+    ]
+    buttons.extend([[btn("Обновить", "tickets", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    return text, kb(buttons)
+
+
+def page_expiring_subscriptions(user_id: int) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Только для администраторов.", kb([BACK_HOME])
+    now = int(time.time())
+    soon = now + 7 * 86400
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT u.user_id, u.first_name, u.last_name, u.username, s.until_ts
+            FROM subs AS s
+            LEFT JOIN users AS u ON u.user_id = s.user_id
+            WHERE s.until_ts > ? AND s.until_ts <= ?
+            ORDER BY s.until_ts ASC
+            LIMIT 30
+            """,
+            (now, soon),
+        ).fetchall()
+    lines = []
+    for uid, first_name, last_name, username, until_ts in rows:
+        label = stored_user_label(int(uid), first_name, last_name, username)
+        days = max(1, (int(until_ts) - now + 86399) // 86400)
+        lines.append(f"• {label} · <b>{days} дн.</b> · до {format_until(int(until_ts))}")
+    text = (
+        f"{pe('history')} <b>Подписки истекают за 7 дней</b>\n\n"
+        + ("\n".join(lines) if lines else "В ближайшие 7 дней активные подписки не заканчиваются.")
+    )
+    return text, kb([[btn("Обновить", "expiring", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
 
 
 def page_prices(user_id: int) -> tuple[str, dict]:
@@ -2184,7 +2477,7 @@ def handle_support_input(user_id: int, chat_id: int, text: str) -> bool:
             (user_id, text[:3900], now),
         )
         ticket_id = int(cur.lastrowid)
-    for admin_id in sorted(ADMIN_USER_IDS):
+    for admin_id in list_admin_ids():
         send_message(
             admin_id,
             f"{pe('support')} <b>Обращение #{ticket_id}</b>\n{stored_user_payment_label(user_id)}\n\n{html_quote(text)}",
@@ -2300,7 +2593,7 @@ def report_technical_issue(key: str, text: str) -> None:
         maintenance_set(f"issue:{key}", str(now))
     except sqlite3.Error:
         pass
-    for admin_id in sorted(ADMIN_USER_IDS):
+    for admin_id in list_admin_ids():
         send_message(admin_id, f"{pe('warning')} <b>Техническое уведомление</b>\n\n{html_text(text)}", parse_mode="HTML")
 
 
@@ -2492,7 +2785,7 @@ def handle_callback_query(query: dict) -> None:
             send_message(chat_id, f"Напиши ответ на обращение #{parts[2]}. Отмена — /cancel")
             alert = "Жду ответ"
     elif data == "restore":
-        restored = restore_business_connections(None if is_admin_user(user_id) else user_id)
+        restored = restore_business_connections(user_id)
         alert = f"Включил подключений: {len(restored)}" if restored else "Отключённых не нашёл"
         page = page_connections(user_id)
     elif data == "panel":
@@ -2500,6 +2793,40 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
         page = page_panel(user_id)
+    elif data == "admins":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_admins(user_id)
+    elif data == "admin:add":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только владелец может выдавать админку", show_alert=True)
+            return
+        PENDING_ADMIN_ADD[chat_id] = time.time() + 300
+        send_message(chat_id, "Отправь Telegram ID нового администратора. Отмена — /cancel")
+        page = page_admins(user_id)
+        alert = "Жду ID"
+    elif data.startswith("admin:remove:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только владелец может снимать админку", show_alert=True)
+            return
+        try:
+            target_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Некорректный ID", show_alert=True)
+            return
+        _, alert = remove_bot_admin(user_id, target_id)
+        page = page_admins(user_id)
+    elif data == "tickets":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_support_tickets(user_id)
+    elif data == "expiring":
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        page = page_expiring_subscriptions(user_id)
     elif data.startswith("users:"):
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
@@ -2605,8 +2932,8 @@ def handle_callback_query(query: dict) -> None:
             alert = f"Ошибка экспорта: {exc}"[:180]
         page = page_panel(user_id)
     elif data == "backup":
-        if not is_admin_user(user_id):
-            answer_callback(query_id, text="Только для админов", show_alert=True)
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Резервная копия доступна только владельцу", show_alert=True)
             return
         create_backup(user_id, send_to_admins=True)
         page = page_panel(user_id)
@@ -3180,44 +3507,31 @@ def handle_connections(message: dict) -> None:
     user = message.get("from") or {}
     user_id = int(user["id"])
     chat_id = int(message["chat"]["id"])
-
-    rows = list_business_connections(None if is_admin_user(user_id) else user_id)
+    rows = list_business_connections(user_id)
     if not rows:
-        send_message(chat_id, "Business-подключений в базе нет.")
+        send_message(chat_id, "У тебя пока нет Business-подключений.")
         return
-
-    scope = "все подключения" if is_admin_user(user_id) else "твои подключения"
-    send_message(chat_id, f"Business-подключения ({scope}):\n" + "\n".join(format_connection_lines(rows)))
-
+    send_message(chat_id, "Твои Business-подключения:\n" + "\n".join(format_connection_lines(rows)))
 
 def handle_restore(message: dict, restore_all: bool = False) -> None:
     user = message.get("from") or {}
     user_id = int(user["id"])
     chat_id = int(message["chat"]["id"])
-
-    if restore_all and not is_admin_user(user_id):
-        deny_admin_command(chat_id)
-        return
-
-    target_owner_id = None if restore_all else user_id
-    restored = restore_business_connections(target_owner_id)
-    rows = list_business_connections(target_owner_id)
-
+    restored = restore_business_connections(user_id)
+    rows = list_business_connections(user_id)
     if restored:
         send_message(
             chat_id,
-            f"Включил обратно подключений в базе: {len(restored)}.\n\n"
+            f"Включил обратно подключений: {len(restored)}.\n\n"
             + "\n".join(format_connection_lines(rows))
-            + "\n\nЕсли аккаунт отключил бота в настройках Telegram Business, его всё равно нужно включить там вручную.",
+            + "\n\nЕсли бот отключён в Telegram Business, включи его там вручную.",
         )
     else:
         send_message(
             chat_id,
-            "Отключенных Business-подключений в базе не нашел.\n\n"
-            + ("\n".join(format_connection_lines(rows)) if rows else "Подключений нет.")
-            + "\n\nЕсли бот исчез из чатов после отключения в Telegram, включи его заново в Настройки -> Telegram Business -> Chatbots.",
+            "Выключенных подключений не нашёл.\n\n"
+            + ("\n".join(format_connection_lines(rows)) if rows else "Подключений пока нет."),
         )
-
 
 def should_forward_media_immediately(saved_message: dict) -> bool:
     if not saved_message.get("media_type"):
@@ -3305,7 +3619,7 @@ def handle_regular_message(message: dict) -> None:
     pending_maps = (
         PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_PROMO_CREATE,
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
-        PENDING_BLOCK_REASON,
+        PENDING_BLOCK_REASON, PENDING_ADMIN_ADD,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
         for pending in pending_maps:
@@ -3315,6 +3629,20 @@ def handle_regular_message(message: dict) -> None:
         return
 
     # ответ админа на выдачу подписки («ID дней») — до разбора команд
+    if text and not text.startswith("/") and chat_id in PENDING_ADMIN_ADD and is_owner_admin(user_id):
+        deadline = PENDING_ADMIN_ADD.pop(chat_id, 0)
+        if deadline < time.time():
+            send_message(chat_id, "Время добавления администратора истекло.")
+            return
+        try:
+            target_id = int(text.strip())
+        except ValueError:
+            send_message(chat_id, "Нужен Telegram ID числом.")
+            return
+        ok, result = add_bot_admin(user_id, target_id)
+        send_message(chat_id, result)
+        return
+
     if text and not text.startswith("/") and chat_id in PENDING_SUPPORT_REPLY and is_admin_user(user_id):
         if handle_support_reply_input(user_id, chat_id, text):
             return
@@ -3371,6 +3699,36 @@ def handle_regular_message(message: dict) -> None:
                 send_message(chat_id, "Отправь промокод одним сообщением. Отмена — /cancel")
         elif name == "/sub":
             handle_sub_command(message, args)
+        elif name == "/admins" and is_private_chat(message):
+            page_text, page_markup = page_admins(user_id)
+            send_message(chat_id, page_text, parse_mode="HTML", reply_markup=page_markup)
+        elif name == "/admin_add" and is_private_chat(message):
+            if not is_owner_admin(user_id):
+                deny_admin_command(chat_id)
+            elif args:
+                try:
+                    target_id = int(args[0])
+                except ValueError:
+                    send_message(chat_id, "Формат: /admin_add ID")
+                else:
+                    _, result = add_bot_admin(user_id, target_id)
+                    send_message(chat_id, result)
+            else:
+                PENDING_ADMIN_ADD[chat_id] = time.time() + 300
+                send_message(chat_id, "Отправь Telegram ID нового администратора. Отмена — /cancel")
+        elif name == "/admin_del" and is_private_chat(message):
+            if not is_owner_admin(user_id):
+                deny_admin_command(chat_id)
+            elif not args:
+                send_message(chat_id, "Формат: /admin_del ID")
+            else:
+                try:
+                    target_id = int(args[0])
+                except ValueError:
+                    send_message(chat_id, "Формат: /admin_del ID")
+                else:
+                    _, result = remove_bot_admin(user_id, target_id)
+                    send_message(chat_id, result)
         elif name == "/watch":
             handle_watch(message)
         elif name == "/status":
@@ -3384,7 +3742,7 @@ def handle_regular_message(message: dict) -> None:
         elif name in {"/restore", "/enable"}:
             handle_restore(message, restore_all=False)
         elif name in {"/restore_all", "/enable_all"}:
-            handle_restore(message, restore_all=True)
+            send_message(chat_id, "Эта команда больше не используется. Для своих подключений: /restore")
         return
 
     owner_id = get_chat_owner(chat_id)
@@ -3616,13 +3974,15 @@ def configure_bot() -> None:
                     {"command": "gift", "description": "Подарить подписку"},
                     {"command": "promo", "description": "Активировать промокод"},
                     {"command": "sub", "description": "Выдать подписку (админ)"},
+                    {"command": "admins", "description": "Администраторы"},
+                    {"command": "admin_add", "description": "Выдать админку (владелец)"},
+                    {"command": "admin_del", "description": "Снять админку (владелец)"},
                     {"command": "watch", "description": "Включить обычный чат"},
                     {"command": "status", "description": "Статус обычного чата"},
                     {"command": "list", "description": "Список обычных чатов"},
                     {"command": "stop", "description": "Отключить обычные чаты"},
                     {"command": "connections", "description": "Business-подключения"},
                     {"command": "restore", "description": "Включить свои Business-подключения"},
-                    {"command": "restore_all", "description": "Включить все Business-подключения"},
                 ]
             },
         )
