@@ -3648,15 +3648,9 @@ def run_polling() -> None:
 
 
 if __name__ == "__main__":
-    lock_handle = None
-    try:
-        lock_handle = acquire_single_instance_lock()
-        run_polling()
-    except KeyboardInterrupt:
-        log("Stopped.")
-    except RuntimeError as exc:
-        log(str(exc))
-        raise SystemExit(1) from None
-    finally:
-        if lock_handle is not None:
-            release_single_instance_lock(lock_handle)
+    # Always start through the runtime entrypoint so owner-only admin tools,
+    # TXT export and Telegram large-file guards are applied even on hosts
+    # that are still configured to launch this legacy filename directly.
+    import run_bot_entry
+
+    run_bot_entry.main()
