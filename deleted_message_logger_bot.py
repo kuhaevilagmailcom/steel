@@ -1582,6 +1582,13 @@ OWNER_MESSAGES_FROM = """
       ON m.context = 'business:' || bc.connection_id
     WHERE (co.owner_id = ? OR bc.owner_id = ?)
 """
+
+ADMIN_MEDIA_LABELS = {
+    "photo": "🖼 Фото",
+    "video": "🎬 Видео",
+    "voice": "🎤 ГС",
+    "video_note": "⭕ Кружок",
+}
 def stored_user_label(
     user_id: int,
     first_name: str | None,
@@ -1828,13 +1835,40 @@ def page_user_chat_messages(
         navigation.append(btn("Новее", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number - 1}", emoji="refresh"))
     if page_number + 1 < page_count:
         navigation.append(btn("Раньше", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number + 1}", emoji="history"))
-    rows = [navigation] if navigation else []
+    rows = [
+        [btn(
+            f"{ADMIN_MEDIA_LABELS[media_type]} · ID {message_id}",
+            f"umedia:{target_id}:{chat_id}:{message_id}",
+        )]
+        for message_id, _sender_id, _author, _content, media_type, _updated_at, _deleted_at in messages
+        if media_type in ADMIN_MEDIA_LABELS
+    ]
+    if navigation:
+        rows.append(navigation)
     rows.extend([
         [btn("К чатам пользователя", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="view")],
         [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
         BACK_HOME,
     ])
     return text, kb(rows)
+
+
+def get_user_owned_saved_message(target_id: int, chat_id: int, message_id: int) -> dict | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT m.user_id, m.author, m.content,
+                   m.media_type, m.media_file_id, m.media_unique_id, m.media_json,
+                   m.local_media_path, m.has_media_spoiler, m.ttl_seconds, m.deleted_at
+            """ + OWNER_MESSAGES_FROM + """
+            AND m.chat_id = ? AND m.message_id = ?
+            ORDER BY m.updated_at DESC
+            LIMIT 1
+            """,
+            (target_id, target_id, chat_id, message_id),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def page_stats(user_id: int) -> tuple[str, dict]:
@@ -2984,6 +3018,25 @@ def handle_callback_query(query: dict) -> None:
             page = page_user_chat_messages(
                 user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
             )
+    elif data.startswith("umedia:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца бота", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) != 4 or not all(part.lstrip("-").isdigit() for part in parts[1:]):
+            answer_callback(query_id, text="Некорректное медиа", show_alert=True)
+            return
+        saved = get_user_owned_saved_message(int(parts[1]), int(parts[2]), int(parts[3]))
+        if not saved or saved.get("media_type") not in ADMIN_MEDIA_LABELS:
+            answer_callback(query_id, text="Медиа не найдено", show_alert=True)
+            return
+        sent = send_saved_media(chat_id, saved)
+        answer_callback(
+            query_id,
+            text="Медиа отправлено" if sent else "Файл больше недоступен",
+            show_alert=not sent,
+        )
+        return
     elif data.startswith("useradd:"):
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)

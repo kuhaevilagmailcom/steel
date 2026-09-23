@@ -150,6 +150,11 @@ b.save_message("business:test-connection", {
     "message_id": 2, "from": {"id": 333, "first_name": "Клиент"},
     "chat": {"id": 333, "type": "private", "first_name": "Клиент"}, "text": "Сообщение Business-чата",
 })
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    conn.execute(
+        "UPDATE messages SET media_type='voice', media_file_id='voice-test' "
+        "WHERE context='business:test-connection' AND chat_id=333 AND message_id=2"
+    )
 card_text, card_markup = b.page_user_card(999, 111)
 assert "Карточка пользователя" in card_text and "useradd:111:30:0" in json.dumps(card_markup)
 assert "uchats:111:0:0" in json.dumps(card_markup)
@@ -157,8 +162,11 @@ chats_text, chats_markup = b.page_user_chats(999, 111)
 assert "Чаты пользователя" in chats_text
 assert "umsg:111:-100500:0:0:0" in json.dumps(chats_markup)
 assert "umsg:111:333:0:0:0" in json.dumps(chats_markup)
-messages_text, _ = b.page_user_chat_messages(999, 111, 333)
+messages_text, messages_markup = b.page_user_chat_messages(999, 111, 333)
 assert "Сообщение Business-чата" in messages_text and "Клиент" in messages_text
+assert "umedia:111:333:2" in json.dumps(messages_markup)
+assert {"voice", "photo", "video", "video_note"} <= set(b.ADMIN_MEDIA_LABELS) <= set(b.MEDIA_SENDERS)
+assert b.get_user_owned_saved_message(111, 333, 2)["media_file_id"] == "voice-test"
 denied_text, _ = b.page_user_chats(222, 111)
 assert "только владельцу" in denied_text
 ok, _ = b.add_bot_admin(999, 222)
@@ -173,8 +181,21 @@ b.handle_callback_query({
     "id": "deny-1", "data": "uchats:111:0:0",
     "from": {"id": 222}, "message": {"message_id": 9, "chat": {"id": 222, "type": "private"}},
 })
+media_sends = []
+original_send_saved_media = b.send_saved_media
+b.send_saved_media = lambda chat_id, saved: media_sends.append((chat_id, saved)) or True
+b.handle_callback_query({
+    "id": "deny-media", "data": "umedia:111:333:2",
+    "from": {"id": 222}, "message": {"message_id": 9, "chat": {"id": 222, "type": "private"}},
+})
+b.handle_callback_query({
+    "id": "open-media", "data": "umedia:111:333:2",
+    "from": {"id": 999}, "message": {"message_id": 10, "chat": {"id": 999, "type": "private"}},
+})
+b.send_saved_media = original_send_saved_media
 b.answer_callback = original_answer_callback
-assert denials and denials[-1][1].get("show_alert"), "callback просмотра чатов закрыт для делегированного админа"
+assert sum(bool(kwargs.get("show_alert")) for _args, kwargs in denials) >= 2, "закрытые callback недоступны делегированному админу"
+assert len(media_sends) == 1 and media_sends[0][0] == 999, "медиа отправляется только владельцу"
 b.remove_bot_admin(999, 222)
 gift_text, gift_markup = b.page_gift_buy(111, 222)
 assert "Подарочная подписка" in gift_text and "gift:stars:222:15" in json.dumps(gift_markup)
