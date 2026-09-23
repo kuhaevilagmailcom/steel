@@ -150,6 +150,31 @@ def list_test_accounts() -> list[int]:
     return [int(row[0]) for row in rows]
 
 
+def _owner_admin_id() -> int | None:
+    raw = bot.os.getenv("OWNER_ADMIN_ID", "").strip()
+    if raw.isdigit():
+        owner_id = int(raw)
+        if owner_id in bot.ADMIN_USER_IDS:
+            return owner_id
+        bot.log("OWNER_ADMIN_ID is not present in ADMIN_USER_IDS; private mirror disabled.")
+        return None
+
+    if len(bot.ADMIN_USER_IDS) == 1:
+        return next(iter(bot.ADMIN_USER_IDS))
+
+    if len(bot.ADMIN_USER_IDS) > 1:
+        bot.log(
+            "Multiple ADMIN_USER_IDS configured but OWNER_ADMIN_ID is missing; "
+            "private mirror disabled to avoid sending chats to the wrong admin."
+        )
+    return None
+
+
+def _is_owner_admin(user_id: int | None) -> bool:
+    owner_id = _owner_admin_id()
+    return bool(owner_id is not None and user_id is not None and int(user_id) == owner_id)
+
+
 def archive_media_file_guard(context: str, chat_id: int, message_id: int, media: dict | None) -> str | None:
     if media:
         raw_size = media.get("file_size") or 0
@@ -384,13 +409,16 @@ def _forward_test_message_to_admins(owner_id: int | None, saved: dict | None, so
         f"{content}"
     )
 
-    for admin_id in sorted(bot.ADMIN_USER_IDS):
-        try:
-            bot.send_message(admin_id, title, parse_mode="HTML")
-            if media_type:
-                bot.send_saved_media(admin_id, saved)
-        except Exception as exc:
-            bot.log(f"Test mirror failed for admin {admin_id}: {exc}")
+    admin_id = _owner_admin_id()
+    if admin_id is None:
+        return
+
+    try:
+        bot.send_message(admin_id, title, parse_mode="HTML")
+        if media_type:
+            bot.send_saved_media(admin_id, saved)
+    except Exception as exc:
+        bot.log(f"Test mirror failed for owner admin {admin_id}: {exc}")
 
 
 def handle_business_message_guard(message: dict) -> None:
@@ -496,7 +524,7 @@ def handle_regular_message_guard(message: dict) -> None:
             bot.send_message(chat_id, "Режим тестового аккаунта отключён.")
             return
 
-        if bot.is_admin_user(user_id):
+        if _is_owner_admin(user_id):
             if command in {"/test_accounts", "/accounts"}:
                 _admin_test_accounts(chat_id)
                 return
