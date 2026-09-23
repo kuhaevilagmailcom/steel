@@ -135,6 +135,7 @@ assert "style:cute" in json.dumps(style_markup, ensure_ascii=False)
 home_text, home_markup = b.page_home(111)
 home_callbacks = json.dumps(home_markup, ensure_ascii=False)
 assert "Owner ID" not in home_text and "Моя подписка" in home_callbacks
+assert b.MENU_IMAGE_PATH.exists() and b.MENU_IMAGE_PATH.suffix == ".png"
 help_text, _ = b.page_help(111)
 assert "Business-подключения" not in help_text and "Как работает Holly Bot" in help_text
 

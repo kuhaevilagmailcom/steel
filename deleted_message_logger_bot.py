@@ -27,6 +27,7 @@ DB_PATH = DATA_DIR / "bot_test.sqlite3"
 LOG_PATH = DATA_DIR / "bot.log"
 LOCK_PATH = DATA_DIR / "bot.lock"
 RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
+MENU_IMAGE_PATH = BASE_DIR / "assets" / "holly_menu.png"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
@@ -284,6 +285,70 @@ def send_message(
                 except TelegramApiError:
                     pass
             log(f"sendMessage failed for {chat_id}: {exc}")
+
+
+def _menu_message(user_id: int) -> tuple[int, int, bool] | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT chat_id, message_id, is_photo FROM menu_messages WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return (int(row[0]), int(row[1]), bool(row[2])) if row else None
+
+
+def _remember_menu_message(user_id: int, chat_id: int, message_id: int, is_photo: bool) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO menu_messages (user_id, chat_id, message_id, is_photo, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                message_id = excluded.message_id,
+                is_photo = excluded.is_photo,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, chat_id, message_id, int(is_photo), int(time.time())),
+        )
+
+
+def send_menu_page(
+    user_id: int,
+    chat_id: int,
+    text: str,
+    markup: dict,
+    use_photo: bool = False,
+) -> None:
+    """Replace the previous menu so /start always produces one current message."""
+    previous = _menu_message(user_id)
+    if previous:
+        try:
+            telegram_call("deleteMessage", {"chat_id": previous[0], "message_id": previous[1]})
+        except TelegramApiError:
+            pass
+    try:
+        if use_photo and MENU_IMAGE_PATH.exists() and len(text) <= 1024:
+            result = telegram_multipart_call(
+                "sendPhoto",
+                {
+                    "chat_id": chat_id,
+                    "caption": text,
+                    "parse_mode": "HTML",
+                    "reply_markup": json.dumps(markup, ensure_ascii=False),
+                },
+                {"photo": MENU_IMAGE_PATH},
+            )
+            is_photo = True
+        else:
+            result = telegram_call(
+                "sendMessage",
+                {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "reply_markup": markup},
+            )
+            is_photo = False
+        if isinstance(result, dict) and result.get("message_id"):
+            _remember_menu_message(user_id, chat_id, int(result["message_id"]), is_photo)
+    except TelegramApiError as exc:
+        log(f"menu message failed for {chat_id}: {exc}")
 
 
 def send_document(chat_id: int, path: Path, caption: str = "") -> None:
@@ -610,6 +675,17 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS maintenance_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS menu_messages (
+                user_id INTEGER PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                is_photo INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL
             )
             """
@@ -2107,22 +2183,17 @@ def answer_callback(query_id: str, text: str | None = None, show_alert: bool = F
 def edit_page(chat_id: int, message_id: int, text: str, markup: dict) -> None:
     if message_id:
         try:
-            telegram_call(
-                "editMessageText",
-                {
-                    "chat_id": chat_id,
-                    "message_id": message_id,
-                    "text": text,
-                    "parse_mode": "HTML",
-                    "reply_markup": markup,
-                },
-            )
+            user_id = chat_id
+            stored = _menu_message(user_id)
+            method = "editMessageCaption" if stored and stored[2] else "editMessageText"
+            field = "caption" if method == "editMessageCaption" else "text"
+            telegram_call(method, {"chat_id": chat_id, "message_id": message_id, field: text, "parse_mode": "HTML", "reply_markup": markup})
             return
         except TelegramApiError as exc:
             if "message is not modified" in str(exc):
                 return
             log(f"editMessageText failed: {exc}")
-    send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+    send_menu_page(chat_id, chat_id, text, markup, use_photo="<b>Holly Bot</b>" in text)
 
 
 # --- оплата СБП и звёздами ----------------------------------------------------
@@ -2623,7 +2694,7 @@ def handle_gift_input(user_id: int, chat_id: int, text: str) -> bool:
         return True
     target_id = int(row[0])
     page_text, markup = page_gift_buy(user_id, target_id)
-    send_message(chat_id, page_text, parse_mode="HTML", reply_markup=markup)
+    send_menu_page(user_id, chat_id, page_text, markup)
     return True
 
 
@@ -3607,12 +3678,12 @@ def handle_start(message: dict, args: list[str] | None = None) -> None:
             gift_target = 0
         if gift_target and user_exists(gift_target):
             text, markup = page_gift_buy(user_id, gift_target)
-            send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+            send_menu_page(user_id, chat_id, text, markup)
             return
 
     if is_private_chat(message):
         text, markup = page_home(user_id)
-        send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+        send_menu_page(user_id, chat_id, text, markup, use_photo=True)
     else:
         send_message(
             chat_id,
@@ -3875,7 +3946,7 @@ def handle_regular_message(message: dict) -> None:
         elif name == "/help":
             if is_private_chat(message):
                 page_text, page_markup = page_help(user_id)
-                send_message(chat_id, page_text, parse_mode="HTML", reply_markup=page_markup)
+                send_menu_page(user_id, chat_id, page_text, page_markup)
             else:
                 send_message(chat_id, "Помощь покажу в личных сообщениях со мной.")
         elif name == "/support" and is_private_chat(message):
@@ -3895,7 +3966,7 @@ def handle_regular_message(message: dict) -> None:
             handle_sub_command(message, args)
         elif name == "/admins" and is_private_chat(message):
             page_text, page_markup = page_admins(user_id)
-            send_message(chat_id, page_text, parse_mode="HTML", reply_markup=page_markup)
+            send_menu_page(user_id, chat_id, page_text, page_markup)
         elif name == "/admin_add" and is_private_chat(message):
             if not is_owner_admin(user_id):
                 deny_admin_command(chat_id)
