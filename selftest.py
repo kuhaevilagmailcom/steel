@@ -173,9 +173,12 @@ assert "Чаты пользователя" in chats_text
 assert "umsg:111:-100500:0:0:0" in json.dumps(chats_markup)
 assert "umsg:111:333:0:0:0" in json.dumps(chats_markup)
 assert "@client333" in json.dumps(chats_markup, ensure_ascii=False)
+assert "сообщ." in json.dumps(chats_markup, ensure_ascii=False)
+assert "Обновить список" in json.dumps(chats_markup, ensure_ascii=False)
 messages_text, messages_markup = b.page_user_chat_messages(999, 111, 333)
 assert "Сообщение Business-чата" in messages_text and "@client333" in messages_text and "Ответ на" in messages_text
 assert "umedia:111:333:2" in json.dumps(messages_markup)
+assert "Обновить чат" in json.dumps(messages_markup, ensure_ascii=False)
 assert {"voice", "photo", "video", "video_note", "sticker"} <= set(b.ADMIN_MEDIA_LABELS) <= set(b.MEDIA_SENDERS)
 assert b.get_user_owned_saved_message(111, 333, 2)["media_file_id"] == "voice-test"
 connections_text, _ = b.page_connections(111)
@@ -183,13 +186,18 @@ assert "owner_id=" not in connections_text and "notify=" not in connections_text
 denied_text, _ = b.page_user_chats(222, 111)
 assert "только владельцу" in denied_text
 blocked_chats_text, blocked_chats_markup = b.page_user_chats(999, 8464597898)
-assert "только владельцу" in blocked_chats_text
+assert "скрыты" in blocked_chats_text
 blocked_card_text, blocked_card_markup = b.page_user_card(999, 8464597898)
 assert "uchats:" not in json.dumps(blocked_card_markup)
 ok, _ = b.add_bot_admin(999, 222)
 assert ok and b.is_admin_user(222) and not b.is_owner_admin(222)
 delegated_card, delegated_markup = b.page_user_card(222, 111)
 assert "Карточка пользователя" in delegated_card and "uchats:" not in json.dumps(delegated_markup)
+admin_card, admin_markup = b.page_user_card(999, 222)
+assert "uchats:" not in json.dumps(admin_markup), "чаты администратора отсутствуют в карточке"
+admin_chats_text, _ = b.page_user_chats(999, 222)
+assert "скрыты" in admin_chats_text, "чаты администратора нельзя открыть прямой кнопкой"
+assert b.get_user_owned_saved_message(222, 333, 2) is None
 
 denials = []
 original_answer_callback = b.answer_callback

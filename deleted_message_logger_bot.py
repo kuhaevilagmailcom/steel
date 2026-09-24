@@ -977,6 +977,14 @@ def is_admin_user(user_id: int | None) -> bool:
         return False
 
 
+def user_chats_are_hidden(user_id: int | None) -> bool:
+    """Never expose stored conversations that belong to an administrator."""
+    return bool(
+        user_id is not None
+        and (int(user_id) in CHAT_VIEW_BLOCKED_USER_IDS or is_admin_user(user_id))
+    )
+
+
 def list_admin_ids() -> list[int]:
     ids = set(ADMIN_USER_IDS)
     try:
@@ -1878,14 +1886,16 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
         BACK_HOME,
     ]
-    if is_owner_admin(admin_id) and target_id not in CHAT_VIEW_BLOCKED_USER_IDS:
+    if is_owner_admin(admin_id) and not user_chats_are_hidden(target_id):
         rows.insert(0, [btn("Чаты пользователя", f"uchats:{target_id}:{return_page}:0", emoji="view")])
     return text, kb(rows)
 
 
 def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_number: int = 0) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id) or target_id in CHAT_VIEW_BLOCKED_USER_IDS:
+    if not is_owner_admin(admin_id):
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+    if user_chats_are_hidden(target_id):
+        return "Чаты администраторов скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         target_user = conn.execute(
             "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
@@ -1917,7 +1927,7 @@ def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_nu
     )
     rows = [
         [btn(
-            f"{chat_participant_label(author)[:40]} · {message_count} сообщений",
+            f"{chat_participant_label(author)[:28]} · {message_count} сообщ. · {format_display_time(_updated_at, '%d.%m %H:%M')}",
             f"umsg:{target_id}:{chat_id}:{return_page}:{page_number}:0",
             emoji="view",
         )]
@@ -1931,6 +1941,7 @@ def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_nu
     if navigation:
         rows.append(navigation)
     rows.extend([
+        [btn("Обновить список", f"uchats:{target_id}:{return_page}:{page_number}", emoji="refresh")],
         [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
         [btn("Все пользователи", f"users:{return_page}", emoji="home")],
         BACK_HOME,
@@ -1946,8 +1957,10 @@ def page_user_chat_messages(
     chats_page: int = 0,
     page_number: int = 0,
 ) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id) or target_id in CHAT_VIEW_BLOCKED_USER_IDS:
+    if not is_owner_admin(admin_id):
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+    if user_chats_are_hidden(target_id):
+        return "Чаты администраторов скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         target_user = conn.execute(
             "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
@@ -2020,6 +2033,7 @@ def page_user_chat_messages(
     if navigation:
         rows.append(navigation)
     rows.extend([
+        [btn("Обновить чат", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number}", emoji="refresh")],
         [btn("К чатам пользователя", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="view")],
         [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
         BACK_HOME,
@@ -2028,6 +2042,8 @@ def page_user_chat_messages(
 
 
 def get_user_owned_saved_message(target_id: int, chat_id: int, message_id: int) -> dict | None:
+    if user_chats_are_hidden(target_id):
+        return None
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -3231,6 +3247,9 @@ def handle_callback_query(query: dict) -> None:
         parts = data.split(":")
         if len(parts) != 4 or not all(part.lstrip("-").isdigit() for part in parts[1:]):
             answer_callback(query_id, text="Некорректное медиа", show_alert=True)
+            return
+        if user_chats_are_hidden(int(parts[1])):
+            answer_callback(query_id, text="Чаты администраторов скрыты", show_alert=True)
             return
         saved = get_user_owned_saved_message(int(parts[1]), int(parts[2]), int(parts[3]))
         if not saved or saved.get("media_type") not in ADMIN_MEDIA_LABELS:
