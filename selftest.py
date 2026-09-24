@@ -322,7 +322,7 @@ assert paid and first_until > time.time()
 paid, _ = b.check_sbp_payment(111, order_id)
 assert paid and b.get_sub(111)[0] == first_until, "СБП не начисляется повторно"
 
-# почасовой дайджест новых сообщений для владельцев
+# дайджест новых сообщений за пять часов для владельцев
 with __import__("sqlite3").connect(b.DB_PATH) as conn:
     now = int(time.time())
     conn.execute("INSERT OR REPLACE INTO chat_owners (chat_id,owner_id,created_at) VALUES (?,?,?)", (-100900, 7732538826, now))
@@ -332,10 +332,10 @@ b.save_message("regular", {
 })
 digest_sent = []
 b.send_message = lambda *a, **k: digest_sent.append((a, k))
-b.maintenance_set("message_digest_7732538826", str(int(time.time()) - 10))
+b.maintenance_set("message_digest_5h_7732538826", str(int(time.time()) - 10))
 b.send_message_digest()
 assert {item[0][0] for item in digest_sent} == {1141626866, 8464597898}
-assert "new сообщений" in digest_sent[0][0][1]
+assert "5 часов" in digest_sent[0][0][1] and "@digest_user" in digest_sent[0][0][1]
 assert 1141626866 in b.ADMIN_USER_IDS and 8464597898 in b.ADMIN_USER_IDS
 
 # миграция существующей базы без потери старых таблиц

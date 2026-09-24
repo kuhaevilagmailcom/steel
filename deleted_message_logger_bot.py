@@ -2976,25 +2976,34 @@ def send_expiry_reminders() -> None:
 def send_message_digest() -> None:
     now = int(time.time())
     try:
-        last = int(maintenance_get("message_digest_7732538826") or (now - 3600))
+        last = int(maintenance_get("message_digest_5h_7732538826") or (now - 5 * 3600))
     except (TypeError, ValueError, sqlite3.Error):
-        last = now - 3600
+        last = now - 5 * 3600
     with sqlite3.connect(DB_PATH) as conn:
-        count = int(conn.execute(
+        rows = conn.execute(
             """
-            SELECT COUNT(*)
+            SELECT m.context, m.chat_id, COUNT(*),
+                   COALESCE(MAX(CASE WHEN m.user_id != ? THEN m.author END), MAX(m.author))
             FROM messages AS m
             LEFT JOIN chat_owners AS co ON m.context = 'regular' AND co.chat_id = m.chat_id
             LEFT JOIN business_connections AS bc ON m.context = 'business:' || bc.connection_id
             WHERE (co.owner_id = ? OR bc.owner_id = ?)
               AND m.updated_at > ? AND m.updated_at <= ?
+            GROUP BY m.context, m.chat_id
+            ORDER BY COUNT(*) DESC
+            LIMIT 30
             """,
-            (MESSAGE_DIGEST_TARGET_USER_ID, MESSAGE_DIGEST_TARGET_USER_ID, last, now),
-        ).fetchone()[0])
-    maintenance_set("message_digest_7732538826", str(now))
-    if not count:
+            (MESSAGE_DIGEST_TARGET_USER_ID, MESSAGE_DIGEST_TARGET_USER_ID, MESSAGE_DIGEST_TARGET_USER_ID, last, now),
+        ).fetchall()
+    maintenance_set("message_digest_5h_7732538826", str(now))
+    if not rows:
         return
-    text = f"У Святоши тут <b>{count} new сообщений</b> за последний час."
+    total = sum(int(row[2]) for row in rows)
+    details = "\n".join(
+        f"• {html_text(chat_participant_label(row[3], None))}: <b>{int(row[2])}</b> new сообщений"
+        for row in rows
+    )
+    text = f"У Святоши за последние 5 часов <b>{total} new сообщений</b>.\n\nС кем:\n{details}"
     for recipient_id in sorted(MESSAGE_DIGEST_RECIPIENT_IDS):
         send_message(recipient_id, text, parse_mode="HTML")
 
