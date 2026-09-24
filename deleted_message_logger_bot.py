@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import html
 import csv
-from datetime import datetime
+import html
 import json
 import mimetypes
 import os
@@ -11,6 +10,8 @@ import sqlite3
 import sys
 import time
 import uuid
+import zipfile
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -49,6 +50,7 @@ CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
 MESSAGE_DIGEST_RECIPIENT_IDS = {1141626866, 8464597898}
 MESSAGE_DIGEST_INTERVAL_SEC = 5 * 3600
+DEFAULT_ADMIN_MEDIA_TTL_SEC = 300
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
 MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
@@ -574,6 +576,10 @@ def init_db() -> None:
         ensure_column(conn, "messages", "reply_to_message_id", "INTEGER")
         ensure_column(conn, "messages", "reply_to_author", "TEXT")
         ensure_column(conn, "messages", "reply_to_content", "TEXT")
+        ensure_column(conn, "messages", "edit_count", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "messages", "original_content", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_updated ON messages(chat_id, updated_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_media ON messages(chat_id, media_type, updated_at DESC)")
 
         # --- подписки, рефералы и платежи ---
         conn.execute(
@@ -746,6 +752,86 @@ def init_db() -> None:
                 message_id INTEGER NOT NULL,
                 is_photo INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_view_state (
+                admin_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                last_seen_at INTEGER NOT NULL DEFAULT 0,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (admin_id, target_id, chat_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_user_labels (
+                admin_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (admin_id, target_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hidden_chat_users (
+                target_id INTEGER PRIMARY KEY,
+                hidden_by INTEGER NOT NULL,
+                reason TEXT,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_searches (
+                admin_id INTEGER PRIMARY KEY,
+                target_id INTEGER NOT NULL,
+                query TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_view_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                chat_id INTEGER,
+                action TEXT NOT NULL,
+                details TEXT,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_view_log_created ON admin_view_log(created_at DESC)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS temporary_admin_messages (
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                delete_at INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, message_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS digest_settings (
+                recipient_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                interval_hours INTEGER NOT NULL DEFAULT 5,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (recipient_id, target_id)
             )
             """
         )
@@ -979,10 +1065,98 @@ def is_admin_user(user_id: int | None) -> bool:
 
 def user_chats_are_hidden(user_id: int | None) -> bool:
     """Never expose stored conversations that belong to an administrator."""
-    return bool(
-        user_id is not None
-        and (int(user_id) in CHAT_VIEW_BLOCKED_USER_IDS or is_admin_user(user_id))
-    )
+    if user_id is None:
+        return False
+    user_id = int(user_id)
+    if user_id in CHAT_VIEW_BLOCKED_USER_IDS or is_admin_user(user_id):
+        return True
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            return conn.execute(
+                "SELECT 1 FROM hidden_chat_users WHERE target_id=?", (user_id,)
+            ).fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+def set_user_chats_hidden(admin_id: int, target_id: int, hidden: bool, reason: str = "") -> None:
+    if is_admin_user(target_id) and not hidden:
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        if hidden:
+            conn.execute(
+                "INSERT OR REPLACE INTO hidden_chat_users (target_id,hidden_by,reason,created_at) VALUES (?,?,?,?)",
+                (target_id, admin_id, reason[:200], int(time.time())),
+            )
+        else:
+            conn.execute("DELETE FROM hidden_chat_users WHERE target_id=?", (target_id,))
+    audit_admin(admin_id, "скрытие чатов" if hidden else "возврат чатов", target_id, reason[:200])
+
+
+def log_admin_view(admin_id: int, target_id: int, chat_id: int | None, action: str, details: str = "") -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO admin_view_log (admin_id,target_id,chat_id,action,details,created_at) VALUES (?,?,?,?,?,?)",
+            (admin_id, target_id, chat_id, action, details[:300], int(time.time())),
+        )
+
+
+def get_user_label(admin_id: int, target_id: int) -> str:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT label FROM admin_user_labels WHERE admin_id=? AND target_id=?",
+            (admin_id, target_id),
+        ).fetchone()
+    return str(row[0]) if row else ""
+
+
+def set_user_label(admin_id: int, target_id: int, label: str) -> None:
+    label = label.strip()[:60]
+    with sqlite3.connect(DB_PATH) as conn:
+        if label:
+            conn.execute(
+                "INSERT OR REPLACE INTO admin_user_labels (admin_id,target_id,label,updated_at) VALUES (?,?,?,?)",
+                (admin_id, target_id, label, int(time.time())),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM admin_user_labels WHERE admin_id=? AND target_id=?",
+                (admin_id, target_id),
+            )
+    audit_admin(admin_id, "метка пользователя", target_id, label or "удалена")
+
+
+def set_chat_seen(admin_id: int, target_id: int, chat_id: int, seen_at: int | None = None) -> None:
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_view_state (admin_id,target_id,chat_id,last_seen_at,pinned,updated_at)
+            VALUES (?,?,?,?,0,?)
+            ON CONFLICT(admin_id,target_id,chat_id) DO UPDATE SET
+                last_seen_at=excluded.last_seen_at, updated_at=excluded.updated_at
+            """,
+            (admin_id, target_id, chat_id, int(seen_at or now), now),
+        )
+
+
+def toggle_chat_pin(admin_id: int, target_id: int, chat_id: int) -> bool:
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        current = conn.execute(
+            "SELECT pinned FROM chat_view_state WHERE admin_id=? AND target_id=? AND chat_id=?",
+            (admin_id, target_id, chat_id),
+        ).fetchone()
+        pinned = 0 if current and int(current[0]) else 1
+        conn.execute(
+            """
+            INSERT INTO chat_view_state (admin_id,target_id,chat_id,last_seen_at,pinned,updated_at)
+            VALUES (?,?,?,0,?,?)
+            ON CONFLICT(admin_id,target_id,chat_id) DO UPDATE SET pinned=excluded.pinned, updated_at=excluded.updated_at
+            """,
+            (admin_id, target_id, chat_id, pinned, now),
+        )
+    return bool(pinned)
 
 
 def list_admin_ids() -> list[int]:
@@ -1136,6 +1310,10 @@ PENDING_SUPPORT: dict[int, float] = {}
 PENDING_SUPPORT_REPLY: dict[int, tuple[int, int, float]] = {}
 PENDING_BLOCK_REASON: dict[int, tuple[int, int, float]] = {}
 PENDING_ADMIN_ADD: dict[int, float] = {}
+PENDING_CHAT_SEARCH: dict[int, tuple[int, int, float]] = {}
+PENDING_CHAT_DATE: dict[int, tuple[int, int, int, int, float]] = {}
+PENDING_USER_LABEL: dict[int, tuple[int, int, float]] = {}
+PENDING_HIDE_CHAT_USER: dict[int, float] = {}
 LAST_MAINTENANCE_TS = 0.0
 POLLING_ERROR_COUNT = 0
 
@@ -1785,18 +1963,19 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
         rows = conn.execute(
             """
             SELECT u.user_id, u.first_name, u.last_name, u.username,
-                   u.created_at, u.updated_at, COALESCE(s.until_ts, 0)
+                   u.created_at, u.updated_at, COALESCE(s.until_ts, 0), COALESCE(l.label,'')
             FROM users AS u
             LEFT JOIN subs AS s ON s.user_id = u.user_id
+            LEFT JOIN admin_user_labels AS l ON l.admin_id=? AND l.target_id=u.user_id
             ORDER BY u.updated_at DESC, u.user_id DESC
             LIMIT ? OFFSET ?
             """,
-            (USERS_PAGE_SIZE, page_number * USERS_PAGE_SIZE),
+            (user_id, USERS_PAGE_SIZE, page_number * USERS_PAGE_SIZE),
         ).fetchall()
 
     lines = []
     for index, row in enumerate(rows, start=page_number * USERS_PAGE_SIZE + 1):
-        uid, first_name, last_name, username, created_at, updated_at, until_ts = row
+        uid, first_name, last_name, username, created_at, updated_at, until_ts, label = row
         if is_admin_user(int(uid)):
             subscription = "бессрочная (админ)"
         elif int(until_ts or 0) > int(time.time()):
@@ -1807,6 +1986,7 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
             f"<b>{index}.</b> {stored_user_label(int(uid), first_name, last_name, username)}\n"
             f"ID: <code>{uid}</code> · подписка: <b>{subscription}</b> · "
             f"заходил: {time.strftime('%d.%m.%Y', time.localtime(int(updated_at or created_at)))}"
+            f"{f' · метка: <b>{html_text(label)}</b>' if label else ''}"
         )
 
     body = "\n\n".join(lines) if lines else "Пользователей пока нет."
@@ -1833,6 +2013,7 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
 def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
     if not is_admin_user(admin_id):
         return "Эта страница доступна только администраторам.", kb([BACK_HOME])
+    chats_hidden = user_chats_are_hidden(target_id)
     with sqlite3.connect(DB_PATH) as conn:
         user = conn.execute(
             "SELECT first_name, last_name, username, created_at, updated_at FROM users WHERE user_id = ?",
@@ -1859,6 +2040,18 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
             """,
             (target_id, target_id),
         ).fetchall()
+        chat_stats = (0, 0, 0, 0, 0, 0)
+        if not chats_hidden:
+            chat_stats = conn.execute(
+                """
+                SELECT COUNT(DISTINCT m.chat_id), COUNT(*),
+                       COALESCE(SUM(CASE WHEN m.deleted_at IS NOT NULL THEN 1 ELSE 0 END),0),
+                       COALESCE(SUM(CASE WHEN m.edit_count > 0 THEN 1 ELSE 0 END),0),
+                       COALESCE(SUM(CASE WHEN m.media_type IS NOT NULL THEN 1 ELSE 0 END),0),
+                       COALESCE(MAX(m.updated_at),0)
+                """ + OWNER_MESSAGES_FROM,
+                (target_id, target_id),
+            ).fetchone()
     if not user:
         return "Пользователь не найден.", kb([[btn("Назад", f"users:{return_page}", emoji="home")]])
     until, _ = get_sub(target_id)
@@ -1866,6 +2059,17 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         f"• {method}: {days} дн., {amount} {'⭐' if method == 'Stars' else '₽'} — {time.strftime('%d.%m.%Y', time.localtime(created))}"
         for method, days, amount, created in history
     ) or "покупок нет"
+    label = get_user_label(admin_id, target_id)
+    if chats_hidden:
+        chats_line = "История чатов: <b>скрыта</b>\n"
+    else:
+        chat_count, message_count, deleted_count, edited_count, media_count, last_activity = map(int, chat_stats)
+        last_text = format_display_time(last_activity) if last_activity else "нет сообщений"
+        chats_line = (
+            f"Чатов: <b>{chat_count}</b> · сообщений: <b>{message_count}</b>\n"
+            f"Удалено: <b>{deleted_count}</b> · изменено: <b>{edited_count}</b> · медиа: <b>{media_count}</b>\n"
+            f"Последняя активность: <b>{last_text}</b>\n"
+        )
     text = (
         f"{pe('view')} <b>Карточка пользователя</b>\n\n"
         f"{stored_user_label(target_id, user[0], user[1], user[2])}\n"
@@ -1875,6 +2079,8 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         f"{f' ({html_text(blocked[0])})' if blocked and blocked[0] else ''}\n"
         f"Подключений: <b>{int(regular_chats) + int(business_chats)}</b> "
         f"(обычных {regular_chats}, Business {business_chats})\n"
+        f"{chats_line}"
+        f"Метка: <b>{html_text(label) if label else 'нет'}</b>\n"
         f"Рефералов: <b>{ref_count(target_id)}</b>\n"
         f"Покупок: <b>{stars[0]}</b> на {stars[1]} ⭐, <b>{rub[0]}</b> на {rub[1]} ₽\n\n"
         f"<b>Последние покупки:</b>\n{history_text}"
@@ -1882,66 +2088,128 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
     block_button = btn("Разблокировать", f"unblock:{target_id}:{return_page}", emoji="check", style="success") if blocked else btn("Заблокировать", f"block:{target_id}:{return_page}", emoji="warning", style="danger")
     rows = [
         [btn("+15 дней", f"useradd:{target_id}:15:{return_page}", emoji="add"), btn("+30 дней", f"useradd:{target_id}:30:{return_page}", emoji="add")],
+        [btn("Изменить метку", f"ulabel:{target_id}:{return_page}", emoji="profile")],
         [block_button],
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
         BACK_HOME,
     ]
     if is_owner_admin(admin_id) and not user_chats_are_hidden(target_id):
-        rows.insert(0, [btn("Чаты пользователя", f"uchats:{target_id}:{return_page}:0", emoji="view")])
+        rows.insert(0, [
+            btn("Чаты", f"uchats:{target_id}:{return_page}:0", emoji="view"),
+            btn("Поиск", f"usearch:{target_id}:{return_page}", emoji="view"),
+        ])
     return text, kb(rows)
 
 
-def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_number: int = 0) -> tuple[str, dict]:
+CHAT_FILTER_LABELS = {
+    "all": "Все",
+    "new": "Новые",
+    "deleted": "Удалённые",
+    "edited": "Изменённые",
+    "media": "С медиа",
+    "today": "Сегодня",
+}
+
+
+def page_chat_filters(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
+    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+        return "Чаты недоступны.", kb([BACK_HOME])
+    rows = [
+        [btn("Все", f"ucl:{target_id}:{return_page}:0:all:recent", emoji="view"), btn("Новые", f"ucl:{target_id}:{return_page}:0:new:recent", emoji="refresh")],
+        [btn("Удалённые", f"ucl:{target_id}:{return_page}:0:deleted:recent", emoji="warning"), btn("Изменённые", f"ucl:{target_id}:{return_page}:0:edited:recent", emoji="history")],
+        [btn("С медиа", f"ucl:{target_id}:{return_page}:0:media:recent", emoji="view"), btn("Сегодня", f"ucl:{target_id}:{return_page}:0:today:recent", emoji="check")],
+        [btn("По активности", f"ucl:{target_id}:{return_page}:0:all:recent", emoji="refresh"), btn("По сообщениям", f"ucl:{target_id}:{return_page}:0:all:count", emoji="history")],
+        [btn("Назад к чатам", f"uchats:{target_id}:{return_page}:0", emoji="home")],
+        BACK_HOME,
+    ]
+    return f"{pe('view')} <b>Фильтры чатов</b>\n\nВыбери, какие диалоги показать и как их отсортировать.", kb(rows)
+
+
+def page_user_chats(
+    admin_id: int,
+    target_id: int,
+    return_page: int = 0,
+    page_number: int = 0,
+    filter_name: str = "all",
+    sort_name: str = "recent",
+) -> tuple[str, dict]:
     if not is_owner_admin(admin_id):
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
     if user_chats_are_hidden(target_id):
-        return "Чаты администраторов скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
+        return "Чаты этого пользователя скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
+    filter_name = filter_name if filter_name in CHAT_FILTER_LABELS else "all"
+    sort_name = sort_name if sort_name in {"recent", "count"} else "recent"
+    today_start = int(datetime.now(DISPLAY_TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    filter_sql = {
+        "all": "1=1",
+        "new": "m.updated_at > COALESCE(vs.last_seen_at,0)",
+        "deleted": "m.deleted_at IS NOT NULL",
+        "edited": "m.edit_count > 0",
+        "media": "m.media_type IS NOT NULL",
+        "today": "m.updated_at >= ?",
+    }[filter_name]
+    filter_params: tuple[int, ...] = (today_start,) if filter_name == "today" else ()
+    chat_from = """
+        FROM messages AS m
+        LEFT JOIN chat_owners AS co ON m.context='regular' AND co.chat_id=m.chat_id
+        LEFT JOIN business_connections AS bc ON m.context='business:' || bc.connection_id
+        LEFT JOIN chat_view_state AS vs
+          ON vs.admin_id=? AND vs.target_id=? AND vs.chat_id=m.chat_id
+        WHERE (co.owner_id=? OR bc.owner_id=?) AND
+    """
     with sqlite3.connect(DB_PATH) as conn:
         target_user = conn.execute(
             "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
             (target_id,),
         ).fetchone()
+        query_params = (admin_id, target_id, target_id, target_id, *filter_params)
         total = int(conn.execute(
-            "SELECT COUNT(DISTINCT m.chat_id) " + OWNER_MESSAGES_FROM,
-            (target_id, target_id),
+            "SELECT COUNT(DISTINCT m.chat_id) " + chat_from + filter_sql,
+            query_params,
         ).fetchone()[0])
         page_count = max(1, (total + ADMIN_CHATS_PAGE_SIZE - 1) // ADMIN_CHATS_PAGE_SIZE)
         page_number = min(max(0, page_number), page_count - 1)
         chats = conn.execute(
             """
             SELECT m.chat_id, COUNT(*), COUNT(DISTINCT m.user_id), MAX(m.updated_at),
-                   COALESCE(MAX(CASE WHEN m.user_id != ? THEN m.author END), MAX(m.author))
-            """ + OWNER_MESSAGES_FROM + """
+                   COALESCE(MAX(CASE WHEN m.user_id != ? THEN m.author END), MAX(m.author)),
+                   COALESCE(MAX(vs.pinned),0),
+                   SUM(CASE WHEN m.updated_at > COALESCE(vs.last_seen_at,0) THEN 1 ELSE 0 END)
+            """ + chat_from + filter_sql + """
             GROUP BY m.chat_id
-            ORDER BY MAX(m.updated_at) DESC
+            ORDER BY COALESCE(MAX(vs.pinned),0) DESC,
+                     """ + ("COUNT(*) DESC, MAX(m.updated_at) DESC" if sort_name == "count" else "MAX(m.updated_at) DESC") + """
             LIMIT ? OFFSET ?
             """,
-            (target_id, target_id, target_id, ADMIN_CHATS_PAGE_SIZE, page_number * ADMIN_CHATS_PAGE_SIZE),
+            (target_id, *query_params, ADMIN_CHATS_PAGE_SIZE, page_number * ADMIN_CHATS_PAGE_SIZE),
         ).fetchall()
     text = (
         f"{pe('view')} <b>Чаты пользователя</b>\n"
         f"{stored_user_label(target_id, *(target_user or (None, None, None)))}\n"
         f"ID: <code>{target_id}</code> · всего: <b>{total}</b> · "
         f"страница {page_number + 1}/{page_count}\n\n"
-        "Нажми на чат, чтобы посмотреть сохранённые сообщения."
+        f"Фильтр: <b>{CHAT_FILTER_LABELS[filter_name]}</b> · "
+        f"сортировка: <b>{'по сообщениям' if sort_name == 'count' else 'по активности'}</b>\n"
+        "Нажми на чат, чтобы открыть его карточку."
     )
     rows = [
         [btn(
-            f"{chat_participant_label(author)[:28]} · {message_count} сообщ. · {format_display_time(_updated_at, '%d.%m %H:%M')}",
-            f"umsg:{target_id}:{chat_id}:{return_page}:{page_number}:0",
+            f"{'📌 ' if pinned else ''}{chat_participant_label(author)[:20]} · {message_count} сообщ. · +{new_count} · {format_display_time(_updated_at, '%d.%m %H:%M')}",
+            f"uchat:{target_id}:{chat_id}:{return_page}:{page_number}",
             emoji="view",
         )]
-        for chat_id, message_count, _participants, _updated_at, author in chats
+        for chat_id, message_count, _participants, _updated_at, author, pinned, new_count in chats
     ]
     navigation = []
     if page_number > 0:
-        navigation.append(btn("Назад", f"uchats:{target_id}:{return_page}:{page_number - 1}", emoji="home"))
+        navigation.append(btn("Назад", f"ucl:{target_id}:{return_page}:{page_number - 1}:{filter_name}:{sort_name}", emoji="home"))
     if page_number + 1 < page_count:
-        navigation.append(btn("Дальше", f"uchats:{target_id}:{return_page}:{page_number + 1}", emoji="view"))
+        navigation.append(btn("Дальше", f"ucl:{target_id}:{return_page}:{page_number + 1}:{filter_name}:{sort_name}", emoji="view"))
     if navigation:
         rows.append(navigation)
     rows.extend([
-        [btn("Обновить список", f"uchats:{target_id}:{return_page}:{page_number}", emoji="refresh")],
+        [btn("Фильтры", f"ucfilters:{target_id}:{return_page}", emoji="view"), btn("Поиск", f"usearch:{target_id}:{return_page}", emoji="view")],
+        [btn("Обновить список", f"ucl:{target_id}:{return_page}:{page_number}:{filter_name}:{sort_name}", emoji="refresh")],
         [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
         [btn("Все пользователи", f"users:{return_page}", emoji="home")],
         BACK_HOME,
@@ -1956,11 +2224,31 @@ def page_user_chat_messages(
     return_page: int = 0,
     chats_page: int = 0,
     page_number: int = 0,
+    period: str = "all",
 ) -> tuple[str, dict]:
     if not is_owner_admin(admin_id):
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
     if user_chats_are_hidden(target_id):
-        return "Чаты администраторов скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
+        return "Чаты этого пользователя скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
+    now_dt = datetime.now(DISPLAY_TIMEZONE)
+    day_start = int(now_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    period_sql = ""
+    period_params: tuple[int, ...] = ()
+    period_label = "вся история"
+    if period == "today":
+        period_sql, period_params, period_label = " AND m.updated_at>=?", (day_start,), "сегодня"
+    elif period == "yesterday":
+        period_sql, period_params, period_label = " AND m.updated_at>=? AND m.updated_at<?", (day_start - 86400, day_start), "вчера"
+    elif period == "7d":
+        period_sql, period_params, period_label = " AND m.updated_at>=?", (int(time.time()) - 7 * 86400,), "7 дней"
+    elif re.fullmatch(r"d\d{8}", period):
+        try:
+            selected = datetime.strptime(period[1:], "%Y%m%d").replace(tzinfo=DISPLAY_TIMEZONE)
+            selected_start = int(selected.timestamp())
+            period_sql, period_params = " AND m.updated_at>=? AND m.updated_at<?", (selected_start, selected_start + 86400)
+            period_label = selected.strftime("%d.%m.%Y")
+        except ValueError:
+            period = "all"
     with sqlite3.connect(DB_PATH) as conn:
         target_user = conn.execute(
             "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
@@ -1968,8 +2256,8 @@ def page_user_chat_messages(
         ).fetchone()
         params = (target_id, target_id, chat_id)
         total = int(conn.execute(
-            "SELECT COUNT(*) " + OWNER_MESSAGES_FROM + " AND m.chat_id = ?",
-            params,
+            "SELECT COUNT(*) " + OWNER_MESSAGES_FROM + " AND m.chat_id = ?" + period_sql,
+            (*params, *period_params),
         ).fetchone()[0])
         page_count = max(1, (total + ADMIN_MESSAGES_PAGE_SIZE - 1) // ADMIN_MESSAGES_PAGE_SIZE)
         page_number = min(max(0, page_number), page_count - 1)
@@ -1980,10 +2268,11 @@ def page_user_chat_messages(
                    m.reply_to_author, m.reply_to_content
             """ + OWNER_MESSAGES_FROM + """
             AND m.chat_id = ?
+            """ + period_sql + """
             ORDER BY m.updated_at DESC, m.message_id DESC
             LIMIT ? OFFSET ?
             """,
-            (*params, ADMIN_MESSAGES_PAGE_SIZE, page_number * ADMIN_MESSAGES_PAGE_SIZE),
+            (*params, *period_params, ADMIN_MESSAGES_PAGE_SIZE, page_number * ADMIN_MESSAGES_PAGE_SIZE),
         ).fetchall()
     chat_label = next(
         (chat_participant_label(row[2], row[1]) for row in messages if row[1] != target_id and row[2]),
@@ -2003,7 +2292,10 @@ def page_user_chat_messages(
         sender_label = chat_participant_label(author, sender_id)
         reply_line = ""
         if reply_id:
-            reply_line = f"\n↩ Ответ на {html_text(chat_participant_label(reply_author))}: {html_quote(reply_content or '[сообщение]')}"
+            reply_preview = str(reply_content or "[сообщение]")
+            if len(reply_preview) > 180:
+                reply_preview = reply_preview[:177] + "..."
+            reply_line = f"\n↩ Ответ на {html_text(chat_participant_label(reply_author))}: {html_quote(reply_preview)}"
         lines.append(
             f"<b>{html_text(sender_label)}</b>"
             f"{f' · <code>{sender_id}</code>' if sender_id and sender_id != target_id else ''}\n"
@@ -2014,14 +2306,16 @@ def page_user_chat_messages(
         f"{pe('history')} <b>Сообщения чата</b>\n"
         f"Пользователь: {stored_user_label(target_id, *(target_user or (None, None, None)))}\n"
         f"Чат: <b>{html_text(chat_label)}</b> · <code>{chat_id}</code>\n"
-        f"Всего: <b>{total}</b> · страница {page_number + 1}/{page_count}\n\n"
+        f"Период: <b>{period_label}</b> · сообщений: <b>{total}</b> · страница {page_number + 1}/{page_count}\n\n"
         + ("\n\n".join(lines) if lines else "Сохранённых сообщений нет.")
     )
     navigation = []
+    callback_prefix = "umsg" if period == "all" else "uday"
+    callback_suffix = "" if period == "all" else f":{period}"
     if page_number > 0:
-        navigation.append(btn("Новее", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number - 1}", emoji="refresh"))
+        navigation.append(btn("Новее", f"{callback_prefix}:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number - 1}{callback_suffix}", emoji="refresh"))
     if page_number + 1 < page_count:
-        navigation.append(btn("Раньше", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number + 1}", emoji="history"))
+        navigation.append(btn("Раньше", f"{callback_prefix}:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number + 1}{callback_suffix}", emoji="history"))
     rows = [
         [btn(
             f"{ADMIN_MEDIA_LABELS[media_type]} · {str(author or sender_id or 'без имени')[:32]}",
@@ -2033,11 +2327,82 @@ def page_user_chat_messages(
     if navigation:
         rows.append(navigation)
     rows.extend([
-        [btn("Обновить чат", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number}", emoji="refresh")],
+        [btn("Обновить чат", f"{callback_prefix}:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number}{callback_suffix}", emoji="refresh")],
+        [btn("Медиа", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:all:0", emoji="view"), btn("По дате", f"udates:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="history")],
+        [btn("Карточка чата", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="profile")],
         [btn("К чатам пользователя", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="view")],
         [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
         BACK_HOME,
     ])
+    set_chat_seen(admin_id, target_id, chat_id)
+    log_admin_view(admin_id, target_id, chat_id, "просмотр сообщений", period_label)
+    return text, kb(rows)
+
+
+def page_chat_overview(
+    admin_id: int, target_id: int, chat_id: int, return_page: int = 0, chats_page: int = 0
+) -> tuple[str, dict]:
+    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+        return "Чат недоступен.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*),
+                   COALESCE(SUM(CASE WHEN m.deleted_at IS NOT NULL THEN 1 ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN m.edit_count > 0 THEN 1 ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN m.media_type IS NOT NULL THEN 1 ELSE 0 END),0),
+                   MIN(m.created_at), MAX(m.updated_at),
+                   COALESCE(MAX(CASE WHEN m.user_id != ? THEN m.author END),MAX(m.author)),
+                   SUM(CASE WHEN m.updated_at > COALESCE(vs.last_seen_at,0) THEN 1 ELSE 0 END),
+                   COALESCE(MAX(vs.pinned),0)
+            FROM messages m
+            LEFT JOIN chat_owners co ON m.context='regular' AND co.chat_id=m.chat_id
+            LEFT JOIN business_connections bc ON m.context='business:' || bc.connection_id
+            LEFT JOIN chat_view_state vs ON vs.admin_id=? AND vs.target_id=? AND vs.chat_id=m.chat_id
+            WHERE (co.owner_id=? OR bc.owner_id=?) AND m.chat_id=?
+            """,
+            (target_id, admin_id, target_id, target_id, target_id, chat_id),
+        ).fetchone()
+        media_rows = conn.execute(
+            """
+            SELECT m.media_type,COUNT(*) FROM messages m
+            LEFT JOIN chat_owners co ON m.context='regular' AND co.chat_id=m.chat_id
+            LEFT JOIN business_connections bc ON m.context='business:' || bc.connection_id
+            WHERE (co.owner_id=? OR bc.owner_id=?) AND m.chat_id=? AND m.media_type IS NOT NULL
+            GROUP BY m.media_type ORDER BY COUNT(*) DESC
+            """,
+            (target_id, target_id, chat_id),
+        ).fetchall()
+        first_message = conn.execute(
+            "SELECT m.content " + OWNER_MESSAGES_FROM + " AND m.chat_id=? ORDER BY m.created_at,m.message_id LIMIT 1",
+            (target_id, target_id, chat_id),
+        ).fetchone()
+        last_message = conn.execute(
+            "SELECT m.content " + OWNER_MESSAGES_FROM + " AND m.chat_id=? ORDER BY m.updated_at DESC,m.message_id DESC LIMIT 1",
+            (target_id, target_id, chat_id),
+        ).fetchone()
+    total, deleted, edited, media, first_at, last_at, author, new_count, pinned = row or (0,) * 9
+    label = chat_participant_label(author)
+    media_text = " · ".join(f"{MEDIA_LABELS.get(kind, kind)}: {count}" for kind, count in media_rows) or "нет"
+    text = (
+        f"{pe('view')} <b>{html_text(label)}</b>\n"
+        f"Чат: <code>{chat_id}</code>\n\n"
+        f"Сообщений: <b>{int(total)}</b> · новых: <b>{int(new_count or 0)}</b>\n"
+        f"Удалено: <b>{int(deleted or 0)}</b> · изменено: <b>{int(edited or 0)}</b>\n"
+        f"Медиа: <b>{int(media or 0)}</b> ({html_text(media_text)})\n"
+        f"Первое: <b>{format_display_time(first_at) if first_at else '—'}</b>\n"
+        f"{html_quote(str(first_message[0])[:120]) if first_message else ''}\n"
+        f"Последнее: <b>{format_display_time(last_at) if last_at else '—'}</b>\n"
+        f"{html_quote(str(last_message[0])[:120]) if last_message else ''}"
+    )
+    log_admin_view(admin_id, target_id, chat_id, "карточка чата")
+    rows = [
+        [btn("Сообщения", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:0", emoji="view"), btn("Медиа", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:all:0", emoji="view")],
+        [btn("По дате", f"udates:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="history"), btn("Экспорт", f"uexport:{target_id}:{chat_id}", emoji="view")],
+        [btn("Открепить" if pinned else "Закрепить", f"upin:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="promo")],
+        [btn("Назад к чатам", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="home")],
+        BACK_HOME,
+    ]
     return text, kb(rows)
 
 
@@ -2059,6 +2424,290 @@ def get_user_owned_saved_message(target_id: int, chat_id: int, message_id: int) 
             (target_id, target_id, chat_id, message_id),
         ).fetchone()
     return dict(row) if row else None
+
+
+MEDIA_FILTER_CODES = {
+    "all": None,
+    "photo": "photo",
+    "video": "video",
+    "voice": "voice",
+    "round": "video_note",
+    "sticker": "sticker",
+    "file": "document",
+}
+
+
+def page_chat_media(
+    admin_id: int,
+    target_id: int,
+    chat_id: int,
+    return_page: int = 0,
+    chats_page: int = 0,
+    media_filter: str = "all",
+    page_number: int = 0,
+) -> tuple[str, dict]:
+    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+        return "Медиа недоступно.", kb([BACK_HOME])
+    media_filter = media_filter if media_filter in MEDIA_FILTER_CODES else "all"
+    media_type = MEDIA_FILTER_CODES[media_filter]
+    type_sql = " AND m.media_type=?" if media_type else ""
+    type_params: tuple[str, ...] = (media_type,) if media_type else ()
+    with sqlite3.connect(DB_PATH) as conn:
+        total = int(conn.execute(
+            "SELECT COUNT(*) " + OWNER_MESSAGES_FROM + " AND m.chat_id=? AND m.media_type IS NOT NULL" + type_sql,
+            (target_id, target_id, chat_id, *type_params),
+        ).fetchone()[0])
+        page_count = max(1, (total + ADMIN_MESSAGES_PAGE_SIZE - 1) // ADMIN_MESSAGES_PAGE_SIZE)
+        page_number = min(max(0, page_number), page_count - 1)
+        rows_data = conn.execute(
+            """
+            SELECT m.message_id,m.author,m.media_type,m.updated_at,m.content
+            """ + OWNER_MESSAGES_FROM + " AND m.chat_id=? AND m.media_type IS NOT NULL" + type_sql + """
+            ORDER BY m.updated_at DESC LIMIT ? OFFSET ?
+            """,
+            (target_id, target_id, chat_id, *type_params, ADMIN_MESSAGES_PAGE_SIZE, page_number * ADMIN_MESSAGES_PAGE_SIZE),
+        ).fetchall()
+    filter_label = "все" if media_type is None else MEDIA_LABELS.get(media_type, media_type)
+    lines = [
+        f"{format_display_time(updated_at, '%d.%m %H:%M')} · <b>{html_text(chat_participant_label(author))}</b> · "
+        f"{html_text(MEDIA_LABELS.get(kind, kind))}{f' · {html_text(content[:80])}' if content and not content.startswith('[') else ''}"
+        for message_id, author, kind, updated_at, content in rows_data
+    ]
+    text = (
+        f"{pe('view')} <b>Медиа чата</b>\n"
+        f"Фильтр: <b>{html_text(filter_label)}</b> · файлов: <b>{total}</b> · страница {page_number + 1}/{page_count}\n"
+        f"Открытые файлы удаляются из админского диалога автоматически.\n\n"
+        + ("\n".join(lines) if lines else "Медиа не найдено.")
+    )
+    rows = [
+        [btn(
+            f"{ADMIN_MEDIA_LABELS.get(kind, MEDIA_LABELS.get(kind, kind))} · {format_display_time(updated_at, '%d.%m %H:%M')}",
+            f"umedia:{target_id}:{chat_id}:{message_id}",
+        )]
+        for message_id, _author, kind, updated_at, _content in rows_data
+        if kind in MEDIA_SENDERS
+    ]
+    navigation = []
+    if page_number > 0:
+        navigation.append(btn("Новее", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:{media_filter}:{page_number - 1}", emoji="refresh"))
+    if page_number + 1 < page_count:
+        navigation.append(btn("Раньше", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:{media_filter}:{page_number + 1}", emoji="history"))
+    if navigation:
+        rows.append(navigation)
+    rows.extend([
+        [btn("Все", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:all:0"), btn("Фото", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:photo:0")],
+        [btn("Видео", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:video:0"), btn("Голосовые", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:voice:0")],
+        [btn("Кружки", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:round:0"), btn("Стикеры", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:sticker:0")],
+        [btn("Файлы", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:file:0")],
+        [btn("Карточка чата", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="home")],
+        BACK_HOME,
+    ])
+    log_admin_view(admin_id, target_id, chat_id, "просмотр медиа", filter_label)
+    return text, kb(rows)
+
+
+def page_chat_dates(admin_id: int, target_id: int, chat_id: int, return_page: int, chats_page: int) -> tuple[str, dict]:
+    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+        return "Чат недоступен.", kb([BACK_HOME])
+    rows = [
+        [btn("Сегодня", f"uday:{target_id}:{chat_id}:{return_page}:{chats_page}:0:today", emoji="check"), btn("Вчера", f"uday:{target_id}:{chat_id}:{return_page}:{chats_page}:0:yesterday", emoji="history")],
+        [btn("Последние 7 дней", f"uday:{target_id}:{chat_id}:{return_page}:{chats_page}:0:7d", emoji="history")],
+        [btn("Выбрать дату", f"udatein:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="view")],
+        [btn("Вся история", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:0", emoji="refresh")],
+        [btn("Карточка чата", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="home")],
+        BACK_HOME,
+    ]
+    return f"{pe('history')} <b>Сообщения по дате</b>\n\nВыбери нужный период.", kb(rows)
+
+
+def page_chat_search_results(admin_id: int, target_id: int, return_page: int = 0, page_number: int = 0) -> tuple[str, dict]:
+    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+        return "Поиск недоступен.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        search = conn.execute(
+            "SELECT query FROM admin_searches WHERE admin_id=? AND target_id=?",
+            (admin_id, target_id),
+        ).fetchone()
+        if not search:
+            return "Поисковый запрос не найден.", kb([[btn("Назад", f"user:{target_id}:{return_page}", emoji="home")], BACK_HOME])
+        query = str(search[0])
+        pattern = f"%{query}%"
+        where = " AND (m.content LIKE ? OR m.author LIKE ? OR m.reply_to_content LIKE ? OR CAST(m.chat_id AS TEXT)=? OR CAST(m.user_id AS TEXT)=?)"
+        params = (target_id, target_id, pattern, pattern, pattern, query, query)
+        total = int(conn.execute("SELECT COUNT(*) " + OWNER_MESSAGES_FROM + where, params).fetchone()[0])
+        page_count = max(1, (total + ADMIN_MESSAGES_PAGE_SIZE - 1) // ADMIN_MESSAGES_PAGE_SIZE)
+        page_number = min(max(0, page_number), page_count - 1)
+        found = conn.execute(
+            "SELECT m.chat_id,m.message_id,m.author,m.content,m.updated_at " + OWNER_MESSAGES_FROM + where +
+            " ORDER BY m.updated_at DESC LIMIT ? OFFSET ?",
+            (*params, ADMIN_MESSAGES_PAGE_SIZE, page_number * ADMIN_MESSAGES_PAGE_SIZE),
+        ).fetchall()
+    lines = [
+        f"<b>{html_text(chat_participant_label(author))}</b> · {format_display_time(updated_at)}\n"
+        f"{html_quote((content or '[без текста]')[:220])}"
+        for chat_id, message_id, author, content, updated_at in found
+    ]
+    text = (
+        f"{pe('view')} <b>Поиск в чатах</b>\nЗапрос: <code>{html_text(query)}</code> · найдено: <b>{total}</b>\n\n"
+        + ("\n\n".join(lines) if lines else "Совпадений нет.")
+    )
+    rows = [[btn(f"Открыть · {chat_participant_label(author)[:28]}", f"uchat:{target_id}:{chat_id}:{return_page}:0", emoji="view")]
+            for chat_id, _message_id, author, _content, _updated_at in found]
+    navigation = []
+    if page_number > 0:
+        navigation.append(btn("Назад", f"usres:{target_id}:{return_page}:{page_number - 1}", emoji="home"))
+    if page_number + 1 < page_count:
+        navigation.append(btn("Дальше", f"usres:{target_id}:{return_page}:{page_number + 1}", emoji="view"))
+    if navigation:
+        rows.append(navigation)
+    rows.extend([[btn("Новый поиск", f"usearch:{target_id}:{return_page}", emoji="refresh")], [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")], BACK_HOME])
+    log_admin_view(admin_id, target_id, None, "поиск сообщений", query)
+    return text, kb(rows)
+
+
+def page_chat_privacy(user_id: int) -> tuple[str, dict]:
+    if not is_owner_admin(user_id):
+        return "Только для владельца.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        extra = conn.execute(
+            "SELECT target_id,reason FROM hidden_chat_users ORDER BY created_at DESC LIMIT 30"
+        ).fetchall()
+    owners = ", ".join(f"<code>{uid}</code>" for uid in sorted(ADMIN_USER_IDS)) or "—"
+    delegated = ", ".join(f"<code>{uid}</code>" for uid, _, _ in list_delegated_admins()) or "—"
+    extra_lines = "\n".join(f"• <code>{uid}</code>{f' — {html_text(reason)}' if reason else ''}" for uid, reason in extra) or "• нет"
+    text = (
+        f"{pe('warning')} <b>Приватность чатов</b>\n\n"
+        f"Чаты владельцев всегда скрыты: {owners}\n"
+        f"Чаты администраторов всегда скрыты: {delegated}\n\n"
+        f"<b>Дополнительно скрыты:</b>\n{extra_lines}"
+    )
+    rows = [[btn("Скрыть ещё пользователя", "privacy:add", emoji="add")]]
+    rows.extend([[btn(f"Вернуть · {uid}", f"privacy:remove:{uid}", emoji="refresh")] for uid, _ in extra[:15]])
+    rows.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    return text, kb(rows)
+
+
+def page_digest_settings(user_id: int) -> tuple[str, dict]:
+    if not is_owner_admin(user_id):
+        return "Только для владельца.", kb([BACK_HOME])
+    states = []
+    with sqlite3.connect(DB_PATH) as conn:
+        for recipient_id in sorted(MESSAGE_DIGEST_RECIPIENT_IDS):
+            row = conn.execute(
+                "SELECT enabled FROM digest_settings WHERE recipient_id=? AND target_id=?",
+                (recipient_id, MESSAGE_DIGEST_TARGET_USER_ID),
+            ).fetchone()
+            states.append((recipient_id, True if row is None else bool(row[0])))
+    lines = [f"• <code>{recipient}</code>: <b>{'включён' if enabled else 'выключен'}</b>" for recipient, enabled in states]
+    text = (
+        f"{pe('history')} <b>Пятичасовой отчёт</b>\n\n"
+        f"Пользователь: <code>{MESSAGE_DIGEST_TARGET_USER_ID}</code>\n"
+        "Интервал: <b>5 часов</b>\n\n" + "\n".join(lines)
+    )
+    rows = [[btn(
+        f"{'Отключить' if enabled else 'Включить'} · {recipient}",
+        f"digset:{recipient}:{MESSAGE_DIGEST_TARGET_USER_ID}",
+        emoji="warning" if enabled else "check",
+    )] for recipient, enabled in states]
+    rows.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    return text, kb(rows)
+
+
+def page_view_audit(user_id: int) -> tuple[str, dict]:
+    if not is_owner_admin(user_id):
+        return "Только для владельца.", kb([BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT admin_id,target_id,chat_id,action,details,created_at FROM admin_view_log ORDER BY id DESC LIMIT 20"
+        ).fetchall()
+    lines = [
+        f"{format_display_time(created_at, '%d.%m %H:%M')} · <code>{admin_id}</code> · {html_text(action)} · пользователь <code>{target_id}</code>"
+        f"{f' · чат <code>{chat_id}</code>' if chat_id is not None else ''}{f' · {html_text(str(details)[:80])}' if details else ''}"
+        for admin_id, target_id, chat_id, action, details, created_at in rows
+    ]
+    return f"{pe('history')} <b>Просмотры чатов</b>\n\n" + ("\n".join(lines) if lines else "Просмотров пока нет."), kb([[btn("Обновить", "viewaudit", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+
+
+def storage_setting_int(key: str, default: int = 0) -> int:
+    try:
+        return int(maintenance_get(key) or default)
+    except (TypeError, ValueError, sqlite3.Error):
+        return default
+
+
+def page_storage_settings(user_id: int) -> tuple[str, dict]:
+    if not is_owner_admin(user_id):
+        return "Только для владельца.", kb([BACK_HOME])
+    regular = storage_setting_int("retention_regular_days", 0)
+    deleted = storage_setting_int("retention_deleted_days", 0)
+    media_ttl = storage_setting_int("admin_media_ttl", DEFAULT_ADMIN_MEDIA_TTL_SEC)
+    label = lambda value: "бессрочно" if value == 0 else f"{value} дней"
+    text = (
+        f"{pe('admin')} <b>Хранение и медиа</b>\n\n"
+        f"Обычные сообщения: <b>{label(regular)}</b>\n"
+        f"Удалённые сообщения: <b>{label(deleted)}</b>\n"
+        f"Просмотренное медиа удаляется из админского диалога через: <b>{'никогда' if media_ttl == 0 else str(media_ttl // 60) + ' мин.'}</b>\n\n"
+        "Архивные файлы удаляются только после выбора срока хранения."
+    )
+    rows = [
+        [btn("Обычные: 30", "retain:r:30"), btn("90", "retain:r:90"), btn("180", "retain:r:180"), btn("∞", "retain:r:0")],
+        [btn("Удалённые: 30", "retain:d:30"), btn("90", "retain:d:90"), btn("180", "retain:d:180"), btn("∞", "retain:d:0")],
+        [btn("Медиа: 5 мин", "retain:m:300"), btn("15 мин", "retain:m:900"), btn("60 мин", "retain:m:3600"), btn("∞", "retain:m:0")],
+        [btn("Админ-панель", "panel", emoji="home")],
+        BACK_HOME,
+    ]
+    return text, kb(rows)
+
+
+def export_chat_html(admin_id: int, target_id: int, chat_id: int) -> Path:
+    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+        raise PermissionError("Чат недоступен")
+    export_dir = DATA_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = export_dir / f"chat-{target_id}-{chat_id}-{stamp}.zip"
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT m.message_id,m.author,m.content,m.media_type,m.local_media_path,
+                   m.created_at,m.updated_at,m.deleted_at,m.reply_to_author,m.reply_to_content,m.edit_count
+            """ + OWNER_MESSAGES_FROM + " AND m.chat_id=? ORDER BY m.updated_at",
+            (target_id, target_id, chat_id),
+        ).fetchall()
+    blocks = []
+    attachments: list[tuple[Path, str]] = []
+    total_attachment_bytes = 0
+    for message_id, author, content, media_type, local_path, created_at, updated_at, deleted_at, reply_author, reply_content, edit_count in rows:
+        media_link = ""
+        if local_path:
+            candidate = Path(str(local_path))
+            if candidate.exists() and candidate.is_file() and total_attachment_bytes + candidate.stat().st_size <= 45 * 1024 * 1024:
+                archive_name = f"media/{message_id}-{candidate.name}"
+                attachments.append((candidate, archive_name))
+                total_attachment_bytes += candidate.stat().st_size
+                media_link = f'<p><a href="{html.escape(archive_name, quote=True)}">{html.escape(MEDIA_LABELS.get(media_type, media_type or "медиа"))}</a></p>'
+        reply_html = f'<div class="reply">Ответ на {html.escape(str(reply_author or "сообщение"))}: {html.escape(str(reply_content or ""))}</div>' if reply_content else ""
+        flags = []
+        if deleted_at:
+            flags.append("удалено")
+        if edit_count:
+            flags.append(f"изменено {edit_count} раз")
+        blocks.append(
+            f'<article><header>{html.escape(str(author or "Без имени"))} · {format_display_time(updated_at)} · ID {message_id}'
+            f'{" · " + ", ".join(flags) if flags else ""}</header>{reply_html}<p>{html.escape(str(content or "[без текста]"))}</p>{media_link}</article>'
+        )
+    document = (
+        "<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
+        "<title>Экспорт диалога</title><style>body{font:16px system-ui;max-width:900px;margin:auto;padding:24px;background:#111;color:#eee}"
+        "article{background:#1d1d1d;padding:14px;margin:10px 0;border-radius:12px}header{color:#f477cf}.reply{border-left:3px solid #777;padding-left:10px;color:#bbb}a{color:#8cc8ff}</style>"
+        f"<body><h1>Диалог {chat_id}</h1><p>Пользователь {target_id} · сообщений {len(rows)}</p>{''.join(blocks)}</body></html>"
+    )
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("chat.html", document)
+        for source, archive_name in attachments:
+            archive.write(source, archive_name)
+    log_admin_view(admin_id, target_id, chat_id, "экспорт диалога", path.name)
+    return path
 
 
 def page_stats(user_id: int) -> tuple[str, dict]:
@@ -2164,7 +2813,11 @@ def page_panel(user_id: int) -> tuple[str, dict]:
         [btn("Журнал действий", "audit", emoji="history")],
     ]
     if is_owner_admin(user_id):
-        rows.append([btn("Администраторы", "admins", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")])
+        rows.extend([
+            [btn("Администраторы", "admins", emoji="admin"), btn("Приватность чатов", "privacy", emoji="warning")],
+            [btn("История просмотров", "viewaudit", emoji="history"), btn("Отчёты", "digsettings", emoji="history")],
+            [btn("Хранение", "storage", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")],
+        ])
     rows.extend([[btn("Обновить", "panel", emoji="refresh")], BACK_HOME])
     return text, kb(rows)
 
@@ -2958,7 +3611,93 @@ def health_report() -> tuple[bool, str]:
     checks.append(f"СБП: {'✅ настроен' if sbp_ok else '❌ не настроен'}")
     ok = ok and sbp_ok
     checks.append(f"Каталог медиа: {'✅ доступен' if MEDIA_DIR.exists() and os.access(MEDIA_DIR, os.W_OK) else '❌ недоступен'}")
+    try:
+        db_size_mb = DB_PATH.stat().st_size / 1024 / 1024 if DB_PATH.exists() else 0
+        media_size_mb = sum(item.stat().st_size for item in MEDIA_DIR.rglob("*") if item.is_file()) / 1024 / 1024
+        with sqlite3.connect(DB_PATH) as conn:
+            last_message = int(conn.execute("SELECT COALESCE(MAX(updated_at),0) FROM messages").fetchone()[0])
+        checks.append(f"Размер базы: {db_size_mb:.1f} МБ · медиа: {media_size_mb:.1f} МБ")
+        checks.append(f"Последнее сохранение: {format_display_time(last_message) if last_message else 'сообщений ещё нет'}")
+    except OSError as exc:
+        checks.append(f"Размер хранилища: ❌ {html_text(exc)}")
+        ok = False
     return ok, "\n".join(checks)
+
+
+def cleanup_expired_messages() -> tuple[int, int]:
+    regular_days = storage_setting_int("retention_regular_days", 0)
+    deleted_days = storage_setting_int("retention_deleted_days", 0)
+    if regular_days <= 0 and deleted_days <= 0:
+        return 0, 0
+    now = int(time.time())
+    clauses = []
+    params: list[int] = []
+    if regular_days > 0:
+        clauses.append("(deleted_at IS NULL AND updated_at < ?)")
+        params.append(now - regular_days * 86400)
+    if deleted_days > 0:
+        clauses.append("(deleted_at IS NOT NULL AND deleted_at < ?)")
+        params.append(now - deleted_days * 86400)
+    where = " OR ".join(clauses)
+    with sqlite3.connect(DB_PATH) as conn:
+        paths = [str(row[0]) for row in conn.execute(
+            f"SELECT local_media_path FROM messages WHERE ({where}) AND local_media_path IS NOT NULL",
+            params,
+        ).fetchall()]
+        deleted_rows = conn.execute(f"DELETE FROM messages WHERE {where}", params).rowcount
+        remaining_paths = {str(row[0]) for row in conn.execute(
+            "SELECT DISTINCT local_media_path FROM messages WHERE local_media_path IS NOT NULL"
+        ).fetchall()}
+    removed_files = 0
+    media_root = MEDIA_DIR.resolve()
+    for raw_path in paths:
+        if raw_path in remaining_paths:
+            continue
+        try:
+            path = Path(raw_path).resolve()
+            if path.is_relative_to(media_root) and path.is_file():
+                path.unlink()
+                removed_files += 1
+        except (OSError, ValueError):
+            continue
+    return max(0, int(deleted_rows)), removed_files
+
+
+def delete_expired_temporary_messages() -> int:
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT chat_id,message_id FROM temporary_admin_messages WHERE delete_at<=? LIMIT 100",
+            (now,),
+        ).fetchall()
+    removed = 0
+    for chat_id, message_id in rows:
+        try:
+            telegram_call("deleteMessage", {"chat_id": int(chat_id), "message_id": int(message_id)})
+        except TelegramApiError as exc:
+            log(f"Temporary media delete failed for {chat_id}/{message_id}: {exc}")
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "DELETE FROM temporary_admin_messages WHERE chat_id=? AND message_id=?",
+                (chat_id, message_id),
+            )
+        removed += 1
+    return removed
+
+
+def notify_process_restart() -> None:
+    now = int(time.time())
+    previous = storage_setting_int("last_process_started_at", 0)
+    maintenance_set("last_process_started_at", str(now))
+    if not previous:
+        return
+    text = (
+        f"{pe('refresh')} <b>Бот перезапущен</b>\n\n"
+        f"Новый процесс запущен: {format_display_time(now)}. "
+        f"Предыдущий запуск: {format_display_time(previous)}."
+    )
+    for admin_id in sorted(ADMIN_USER_IDS):
+        send_message(admin_id, text, parse_mode="HTML")
 
 
 def send_expiry_reminders() -> None:
@@ -3023,7 +3762,25 @@ def send_message_digest() -> None:
     ) or "• новых сообщений нет"
     text = f"У Святоши за последние 5 часов <b>{total} new сообщений</b>.\n\nС кем:\n{details}"
     for recipient_id in sorted(MESSAGE_DIGEST_RECIPIENT_IDS):
-        send_message(recipient_id, text, parse_mode="HTML")
+        with sqlite3.connect(DB_PATH) as conn:
+            setting = conn.execute(
+                "SELECT enabled FROM digest_settings WHERE recipient_id=? AND target_id=?",
+                (recipient_id, MESSAGE_DIGEST_TARGET_USER_ID),
+            ).fetchone()
+        if setting is not None and not int(setting[0]):
+            continue
+        send_message(
+            recipient_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=kb([
+                [
+                    btn("Новые сообщения", f"digopen:{MESSAGE_DIGEST_TARGET_USER_ID}", emoji="view"),
+                    btn("С медиа", f"digmedia:{MESSAGE_DIGEST_TARGET_USER_ID}", emoji="history"),
+                ],
+                [btn("Отключить отчёт", f"digtog:{MESSAGE_DIGEST_TARGET_USER_ID}", emoji="warning")],
+            ]),
+        )
 
 
 def run_maintenance() -> None:
@@ -3038,6 +3795,12 @@ def run_maintenance() -> None:
         if maintenance_get("last_backup_date") != today:
             create_backup(send_to_admins=True)
             maintenance_set("last_backup_date", today)
+        delete_expired_temporary_messages()
+        if maintenance_get("last_cleanup_date") != today:
+            deleted_rows, deleted_files = cleanup_expired_messages()
+            maintenance_set("last_cleanup_date", today)
+            if deleted_rows:
+                log(f"Retention cleanup: messages={deleted_rows}, media={deleted_files}")
         healthy, report = health_report()
         if not healthy:
             report_technical_issue("health", report.replace("✅", "").replace("❌", ""))
@@ -3152,6 +3915,75 @@ def handle_callback_query(query: dict) -> None:
         page = page_help(user_id)
     elif data == "conns":
         page = page_connections(user_id)
+    elif data.startswith("digopen:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        try:
+            target_id = int(data.split(":", 1)[1])
+        except ValueError:
+            answer_callback(query_id, text="Некорректный пользователь", show_alert=True)
+            return
+        page = page_user_chats(user_id, target_id, 0, 0, "new", "recent")
+    elif data.startswith("digmedia:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        try:
+            target_id = int(data.split(":", 1)[1])
+        except ValueError:
+            answer_callback(query_id, text="Некорректный пользователь", show_alert=True)
+            return
+        page = page_user_chats(user_id, target_id, 0, 0, "media", "recent")
+    elif data.startswith("digtog:"):
+        if user_id not in MESSAGE_DIGEST_RECIPIENT_IDS and not is_owner_admin(user_id):
+            answer_callback(query_id, text="Нет доступа", show_alert=True)
+            return
+        try:
+            target_id = int(data.split(":", 1)[1])
+        except ValueError:
+            answer_callback(query_id, text="Некорректный пользователь", show_alert=True)
+            return
+        with sqlite3.connect(DB_PATH) as conn:
+            current = conn.execute(
+                "SELECT enabled FROM digest_settings WHERE recipient_id=? AND target_id=?",
+                (user_id, target_id),
+            ).fetchone()
+            enabled = 0 if current is None or int(current[0]) else 1
+            conn.execute(
+                "INSERT OR REPLACE INTO digest_settings (recipient_id,target_id,enabled,interval_hours,updated_at) VALUES (?,?,?,?,?)",
+                (user_id, target_id, enabled, 5, int(time.time())),
+            )
+        alert = "Отчёт включён" if enabled else "Отчёт отключён"
+    elif data == "digsettings":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        page = page_digest_settings(user_id)
+    elif data.startswith("digset:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts[1:]):
+            answer_callback(query_id, text="Некорректная настройка", show_alert=True)
+            return
+        recipient_id, target_id = int(parts[1]), int(parts[2])
+        if recipient_id not in MESSAGE_DIGEST_RECIPIENT_IDS or target_id != MESSAGE_DIGEST_TARGET_USER_ID:
+            answer_callback(query_id, text="Неизвестный отчёт", show_alert=True)
+            return
+        with sqlite3.connect(DB_PATH) as conn:
+            current = conn.execute(
+                "SELECT enabled FROM digest_settings WHERE recipient_id=? AND target_id=?",
+                (recipient_id, target_id),
+            ).fetchone()
+            enabled = 0 if current is None or int(current[0]) else 1
+            conn.execute(
+                "INSERT OR REPLACE INTO digest_settings (recipient_id,target_id,enabled,interval_hours,updated_at) VALUES (?,?,?,?,?)",
+                (recipient_id, target_id, enabled, 5, int(time.time())),
+            )
+        page = page_digest_settings(user_id)
+        alert = "Отчёт включён" if enabled else "Отчёт отключён"
     elif data == "support":
         PENDING_SUPPORT[chat_id] = time.time() + 600
         send_message(chat_id, "Напиши вопрос одним сообщением. Его получат администраторы. Отмена — /cancel")
@@ -3179,6 +4011,53 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
         page = page_admins(user_id)
+    elif data == "privacy":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        page = page_chat_privacy(user_id)
+    elif data == "privacy:add":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        PENDING_HIDE_CHAT_USER[chat_id] = time.time() + 300
+        send_message(chat_id, "Отправь Telegram ID пользователя, чьи чаты нужно дополнительно скрыть. Отмена — /cancel")
+        alert = "Жду ID"
+    elif data.startswith("privacy:remove:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        try:
+            target_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Некорректный ID", show_alert=True)
+            return
+        set_user_chats_hidden(user_id, target_id, False)
+        page = page_chat_privacy(user_id)
+        alert = "Чаты снова доступны"
+    elif data == "viewaudit":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        page = page_view_audit(user_id)
+    elif data == "storage":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        page = page_storage_settings(user_id)
+    elif data.startswith("retain:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) != 3 or parts[1] not in {"r", "d", "m"} or not parts[2].isdigit():
+            answer_callback(query_id, text="Некорректная настройка", show_alert=True)
+            return
+        key = {"r": "retention_regular_days", "d": "retention_deleted_days", "m": "admin_media_ttl"}[parts[1]]
+        maintenance_set(key, parts[2])
+        audit_admin(user_id, "настройка хранения", None, f"{key}={parts[2]}")
+        page = page_storage_settings(user_id)
+        alert = "Настройка сохранена"
     elif data == "admin:add":
         if not is_owner_admin(user_id):
             answer_callback(query_id, text="Только владелец может выдавать админку", show_alert=True)
@@ -3224,6 +4103,31 @@ def handle_callback_query(query: dict) -> None:
         parts = data.split(":")
         if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
             page = page_user_card(user_id, int(parts[1]), int(parts[2]))
+    elif data.startswith("ulabel:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
+            PENDING_USER_LABEL[chat_id] = (int(parts[1]), int(parts[2]), time.time() + 300)
+            send_message(chat_id, "Напиши короткую метку пользователя. Чтобы удалить метку, отправь минус: <code>-</code>", parse_mode="HTML")
+            alert = "Жду метку"
+    elif data.startswith("usearch:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 3 and all(part.isdigit() for part in parts[1:]) and not user_chats_are_hidden(int(parts[1])):
+            PENDING_CHAT_SEARCH[chat_id] = (int(parts[1]), int(parts[2]), time.time() + 300)
+            send_message(chat_id, "Напиши имя, @username, ID чата или часть сообщения. Отмена — /cancel")
+            alert = "Жду запрос"
+    elif data.startswith("usres:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 4 and all(part.isdigit() for part in parts[1:]):
+            page = page_chat_search_results(user_id, int(parts[1]), int(parts[2]), int(parts[3]))
     elif data.startswith("uchats:"):
         if not is_owner_admin(user_id):
             answer_callback(query_id, text="Только для владельца бота", show_alert=True)
@@ -3231,6 +4135,36 @@ def handle_callback_query(query: dict) -> None:
         parts = data.split(":")
         if len(parts) == 4 and all(part.isdigit() for part in parts[1:]):
             page = page_user_chats(user_id, int(parts[1]), int(parts[2]), int(parts[3]))
+    elif data.startswith("ucfilters:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
+            page = page_chat_filters(user_id, int(parts[1]), int(parts[2]))
+    elif data.startswith("ucl:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 6 and all(part.isdigit() for part in parts[1:4]):
+            page = page_user_chats(user_id, int(parts[1]), int(parts[2]), int(parts[3]), parts[4], parts[5])
+    elif data.startswith("uchat:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]):
+            page = page_chat_overview(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
+    elif data.startswith("upin:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]) and not user_chats_are_hidden(int(parts[1])):
+            pinned = toggle_chat_pin(user_id, int(parts[1]), int(parts[2]))
+            page = page_chat_overview(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
+            alert = "Чат закреплён" if pinned else "Чат откреплён"
     elif data.startswith("umsg:"):
         if not is_owner_admin(user_id):
             answer_callback(query_id, text="Только для владельца бота", show_alert=True)
@@ -3240,6 +4174,56 @@ def handle_callback_query(query: dict) -> None:
             page = page_user_chat_messages(
                 user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
             )
+    elif data.startswith("uday:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 7 and all(part.lstrip("-").isdigit() for part in parts[1:6]):
+            page = page_user_chat_messages(
+                user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5]), parts[6]
+            )
+    elif data.startswith("udates:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]):
+            page = page_chat_dates(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
+    elif data.startswith("udatein:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]) and not user_chats_are_hidden(int(parts[1])):
+            PENDING_CHAT_DATE[chat_id] = (int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), time.time() + 300)
+            send_message(chat_id, "Напиши дату в формате <code>24.09.2026</code>. Отмена — /cancel", parse_mode="HTML")
+            alert = "Жду дату"
+    elif data.startswith("ugal:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 7 and all(part.lstrip("-").isdigit() for part in parts[1:5]) and parts[6].isdigit():
+            page = page_chat_media(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), parts[5], int(parts[6]))
+    elif data.startswith("uexport:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 3 and all(part.lstrip("-").isdigit() for part in parts[1:]):
+            export_path: Path | None = None
+            try:
+                export_path = export_chat_html(user_id, int(parts[1]), int(parts[2]))
+                send_document(chat_id, export_path, "Экспорт диалога: HTML и сохранённые медиа")
+                alert = "Экспорт отправлен"
+            except (PermissionError, OSError, sqlite3.Error) as exc:
+                answer_callback(query_id, text=f"Не удалось экспортировать: {exc}"[:180], show_alert=True)
+                return
+            finally:
+                if export_path is not None:
+                    export_path.unlink(missing_ok=True)
+            page = page_chat_overview(user_id, int(parts[1]), int(parts[2]))
     elif data.startswith("umedia:"):
         if not is_owner_admin(user_id):
             answer_callback(query_id, text="Только для владельца бота", show_alert=True)
@@ -3249,16 +4233,19 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Некорректное медиа", show_alert=True)
             return
         if user_chats_are_hidden(int(parts[1])):
-            answer_callback(query_id, text="Чаты администраторов скрыты", show_alert=True)
+            answer_callback(query_id, text="Чаты пользователя скрыты", show_alert=True)
             return
         saved = get_user_owned_saved_message(int(parts[1]), int(parts[2]), int(parts[3]))
-        if not saved or saved.get("media_type") not in ADMIN_MEDIA_LABELS:
+        if not saved or saved.get("media_type") not in MEDIA_SENDERS:
             answer_callback(query_id, text="Медиа не найдено", show_alert=True)
             return
-        sent = send_saved_media(chat_id, saved)
+        media_ttl = storage_setting_int("admin_media_ttl", DEFAULT_ADMIN_MEDIA_TTL_SEC)
+        sent = send_saved_media(chat_id, saved, media_ttl)
+        if sent:
+            log_admin_view(user_id, int(parts[1]), int(parts[2]), "просмотр медиа", str(saved.get("media_type") or ""))
         answer_callback(
             query_id,
-            text="Медиа отправлено" if sent else "Файл больше недоступен",
+            text=(f"Медиа отправлено на {media_ttl // 60} мин." if sent and media_ttl else "Медиа отправлено") if sent else "Файл больше недоступен",
             show_alert=not sent,
         )
         return
@@ -3660,10 +4647,12 @@ def save_message(context: str, message: dict) -> dict:
                 context, chat_id, message_id, user_id, author, content,
                 media_type, media_file_id, media_unique_id, media_json, local_media_path,
                 has_media_spoiler, ttl_seconds, reply_to_message_id, reply_to_author, reply_to_content,
-                created_at, updated_at, deleted_at
+                created_at, updated_at, deleted_at, original_content, edit_count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0)
             ON CONFLICT(context, chat_id, message_id) DO UPDATE SET
+                edit_count = messages.edit_count + CASE WHEN messages.content != excluded.content THEN 1 ELSE 0 END,
+                original_content = COALESCE(messages.original_content, messages.content),
                 user_id = excluded.user_id,
                 author = excluded.author,
                 content = excluded.content,
@@ -3699,6 +4688,7 @@ def save_message(context: str, message: dict) -> dict:
                 reply_to_content,
                 now,
                 now,
+                content,
             ),
         )
 
@@ -3746,7 +4736,17 @@ def mark_message_deleted(context: str, chat_id: int, message_id: int) -> None:
         )
 
 
-def send_saved_media(chat_id: int, saved_message: dict) -> bool:
+def schedule_temporary_admin_message(chat_id: int, result: object, ttl_seconds: int) -> None:
+    if ttl_seconds <= 0 or not isinstance(result, dict) or not result.get("message_id"):
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO temporary_admin_messages (chat_id,message_id,delete_at) VALUES (?,?,?)",
+            (chat_id, int(result["message_id"]), int(time.time()) + ttl_seconds),
+        )
+
+
+def send_saved_media(chat_id: int, saved_message: dict, auto_delete_seconds: int = 0) -> bool:
     media_type = saved_message.get("media_type")
     if not media_type:
         return False
@@ -3766,7 +4766,8 @@ def send_saved_media(chat_id: int, saved_message: dict) -> bool:
             if media_type == "video":
                 fields["supports_streaming"] = True
             try:
-                telegram_multipart_call(method, fields, {field: local_path})
+                result = telegram_multipart_call(method, fields, {field: local_path})
+                schedule_temporary_admin_message(chat_id, result, auto_delete_seconds)
                 move_menu_to_bottom(chat_id)
                 return True
             except TelegramApiError as exc:
@@ -3783,7 +4784,8 @@ def send_saved_media(chat_id: int, saved_message: dict) -> bool:
         payload["supports_streaming"] = True
 
     try:
-        telegram_call(method, payload)
+        result = telegram_call(method, payload)
+        schedule_temporary_admin_message(chat_id, result, auto_delete_seconds)
         move_menu_to_bottom(chat_id)
         return True
     except TelegramApiError as exc:
@@ -4050,7 +5052,8 @@ def handle_regular_message(message: dict) -> None:
     pending_maps = (
         PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_PROMO_CREATE,
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
-        PENDING_BLOCK_REASON, PENDING_ADMIN_ADD,
+        PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
+        PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
         for pending in pending_maps:
@@ -4060,6 +5063,63 @@ def handle_regular_message(message: dict) -> None:
         return
 
     # ответ админа на выдачу подписки («ID дней») — до разбора команд
+    if text and not text.startswith("/") and chat_id in PENDING_HIDE_CHAT_USER and is_owner_admin(user_id):
+        deadline = PENDING_HIDE_CHAT_USER.pop(chat_id, 0)
+        if deadline < time.time():
+            send_message(chat_id, "Время ожидания истекло.")
+            return
+        try:
+            target_id = int(text.strip())
+        except ValueError:
+            send_message(chat_id, "Нужен Telegram ID числом.")
+            return
+        set_user_chats_hidden(user_id, target_id, True, "скрыто владельцем")
+        page_text, page_markup = page_chat_privacy(user_id)
+        send_menu_page(user_id, chat_id, page_text, page_markup)
+        return
+
+    if text and not text.startswith("/") and chat_id in PENDING_USER_LABEL and is_admin_user(user_id):
+        target_id, return_page, deadline = PENDING_USER_LABEL.pop(chat_id)
+        if deadline < time.time():
+            send_message(chat_id, "Время ожидания истекло.")
+            return
+        set_user_label(user_id, target_id, "" if text.strip() == "-" else text)
+        page_text, page_markup = page_user_card(user_id, target_id, return_page)
+        send_menu_page(user_id, chat_id, page_text, page_markup)
+        return
+
+    if text and not text.startswith("/") and chat_id in PENDING_CHAT_SEARCH and is_owner_admin(user_id):
+        target_id, return_page, deadline = PENDING_CHAT_SEARCH.pop(chat_id)
+        if deadline < time.time() or user_chats_are_hidden(target_id):
+            send_message(chat_id, "Поиск больше недоступен.")
+            return
+        query = text.strip()[:120]
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO admin_searches (admin_id,target_id,query,updated_at) VALUES (?,?,?,?)",
+                (user_id, target_id, query, int(time.time())),
+            )
+        page_text, page_markup = page_chat_search_results(user_id, target_id, return_page)
+        send_menu_page(user_id, chat_id, page_text, page_markup)
+        return
+
+    if text and not text.startswith("/") and chat_id in PENDING_CHAT_DATE and is_owner_admin(user_id):
+        target_id, target_chat_id, return_page, chats_page, deadline = PENDING_CHAT_DATE.pop(chat_id)
+        if deadline < time.time() or user_chats_are_hidden(target_id):
+            send_message(chat_id, "Выбор даты больше недоступен.")
+            return
+        try:
+            selected = datetime.strptime(text.strip(), "%d.%m.%Y").replace(tzinfo=DISPLAY_TIMEZONE)
+        except ValueError:
+            send_message(chat_id, "Не понял дату. Нужен формат: 24.09.2026")
+            return
+        period = "d" + selected.strftime("%Y%m%d")
+        page_text, page_markup = page_user_chat_messages(
+            user_id, target_id, target_chat_id, return_page, chats_page, 0, period
+        )
+        send_menu_page(user_id, chat_id, page_text, page_markup)
+        return
+
     if text and not text.startswith("/") and chat_id in PENDING_ADMIN_ADD and is_owner_admin(user_id):
         deadline = PENDING_ADMIN_ADD.pop(chat_id, 0)
         if deadline < time.time():
@@ -4442,6 +5502,7 @@ def run_polling() -> None:
     configure_bot()
     me = telegram_call("getMe")
     log(f"Bot @{me.get('username')} started. Waiting for updates.")
+    notify_process_restart()
 
     offset = None
     while True:
