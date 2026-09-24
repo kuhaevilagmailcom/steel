@@ -396,6 +396,8 @@ def send_menu_page(
 
 def move_menu_to_bottom(chat_id: int) -> None:
     """After a notification, recreate the menu last so it stays below the archive item."""
+    if int(chat_id) in ADMIN_USER_IDS:
+        return
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
             "SELECT user_id FROM users WHERE private_chat_id = ? ORDER BY updated_at DESC LIMIT 1",

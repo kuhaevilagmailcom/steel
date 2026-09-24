@@ -336,6 +336,7 @@ b.maintenance_set("message_digest_7732538826", str(int(time.time()) - 10))
 b.send_message_digest()
 assert {item[0][0] for item in digest_sent} == {1141626866, 8464597898}
 assert "new сообщений" in digest_sent[0][0][1]
+assert 1141626866 in b.ADMIN_USER_IDS and 8464597898 in b.ADMIN_USER_IDS
 
 # миграция существующей базы без потери старых таблиц
 legacy_db = test_root / "legacy.sqlite3"
