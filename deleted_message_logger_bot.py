@@ -3746,6 +3746,7 @@ def send_saved_media(chat_id: int, saved_message: dict) -> bool:
                 fields["supports_streaming"] = True
             try:
                 telegram_multipart_call(method, fields, {field: local_path})
+                move_menu_to_bottom(chat_id)
                 return True
             except TelegramApiError as exc:
                 log(f"{method} local failed for {chat_id}: {exc}")
@@ -3762,9 +3763,11 @@ def send_saved_media(chat_id: int, saved_message: dict) -> bool:
 
     try:
         telegram_call(method, payload)
+        move_menu_to_bottom(chat_id)
         return True
     except TelegramApiError as exc:
         log(f"{method} file_id failed for {chat_id}: {exc}")
+        move_menu_to_bottom(chat_id)
         return False
 
 
