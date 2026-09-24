@@ -158,6 +158,7 @@ b.save_message("regular", {
 b.save_message("business:test-connection", {
     "message_id": 2, "from": {"id": 333, "first_name": "Клиент", "username": "client333"},
     "chat": {"id": 333, "type": "private", "first_name": "Клиент"}, "text": "Сообщение Business-чата",
+    "reply_to_message": {"message_id": 1, "from": {"id": 111, "first_name": "Владелец"}, "chat": {"id": 333, "type": "private"}, "text": "Исходное сообщение"},
 })
 with __import__("sqlite3").connect(b.DB_PATH) as conn:
     conn.execute(
@@ -173,9 +174,9 @@ assert "umsg:111:-100500:0:0:0" in json.dumps(chats_markup)
 assert "umsg:111:333:0:0:0" in json.dumps(chats_markup)
 assert "@client333" in json.dumps(chats_markup, ensure_ascii=False)
 messages_text, messages_markup = b.page_user_chat_messages(999, 111, 333)
-assert "Сообщение Business-чата" in messages_text and "@client333" in messages_text
+assert "Сообщение Business-чата" in messages_text and "@client333" in messages_text and "Ответ на" in messages_text
 assert "umedia:111:333:2" in json.dumps(messages_markup)
-assert {"voice", "photo", "video", "video_note"} <= set(b.ADMIN_MEDIA_LABELS) <= set(b.MEDIA_SENDERS)
+assert {"voice", "photo", "video", "video_note", "sticker"} <= set(b.ADMIN_MEDIA_LABELS) <= set(b.MEDIA_SENDERS)
 assert b.get_user_owned_saved_message(111, 333, 2)["media_file_id"] == "voice-test"
 connections_text, _ = b.page_connections(111)
 assert "owner_id=" not in connections_text and "notify=" not in connections_text
@@ -320,6 +321,21 @@ first_until = b.get_sub(111)[0]
 assert paid and first_until > time.time()
 paid, _ = b.check_sbp_payment(111, order_id)
 assert paid and b.get_sub(111)[0] == first_until, "СБП не начисляется повторно"
+
+# почасовой дайджест новых сообщений для владельцев
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    now = int(time.time())
+    conn.execute("INSERT OR REPLACE INTO chat_owners (chat_id,owner_id,created_at) VALUES (?,?,?)", (-100900, 7732538826, now))
+b.save_message("regular", {
+    "message_id": 9, "from": {"id": 444, "first_name": "Собеседник", "username": "digest_user"},
+    "chat": {"id": -100900, "type": "supergroup", "title": "Дайджест"}, "text": "Новое сообщение",
+})
+digest_sent = []
+b.send_message = lambda *a, **k: digest_sent.append((a, k))
+b.maintenance_set("message_digest_7732538826", str(int(time.time()) - 10))
+b.send_message_digest()
+assert {item[0][0] for item in digest_sent} == {1141626866, 8464597898}
+assert "new сообщений" in digest_sent[0][0][1]
 
 # миграция существующей базы без потери старых таблиц
 legacy_db = test_root / "legacy.sqlite3"

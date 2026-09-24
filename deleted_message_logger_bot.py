@@ -46,6 +46,8 @@ ADMIN_USER_IDS = {
 }
 ADMIN_USER_IDS.add(1141626866)
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
+MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
+MESSAGE_DIGEST_RECIPIENT_IDS = {1141626866, 8464597898}
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
 MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
@@ -556,6 +558,9 @@ def init_db() -> None:
                 local_media_path TEXT,
                 has_media_spoiler INTEGER NOT NULL DEFAULT 0,
                 ttl_seconds INTEGER,
+                reply_to_message_id INTEGER,
+                reply_to_author TEXT,
+                reply_to_content TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 deleted_at INTEGER,
@@ -574,6 +579,9 @@ def init_db() -> None:
         ensure_column(conn, "messages", "ttl_seconds", "INTEGER")
         ensure_column(conn, "messages", "updated_at", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "messages", "deleted_at", "INTEGER")
+        ensure_column(conn, "messages", "reply_to_message_id", "INTEGER")
+        ensure_column(conn, "messages", "reply_to_author", "TEXT")
+        ensure_column(conn, "messages", "reply_to_content", "TEXT")
 
         # --- подписки, рефералы и платежи ---
         conn.execute(
@@ -1732,6 +1740,7 @@ ADMIN_MEDIA_LABELS = {
     "video": "🎬 Видео",
     "voice": "🎤 ГС",
     "video_note": "⭕ Кружок",
+    "sticker": "🏷 Стикер",
 }
 def stored_user_label(
     user_id: int,
@@ -1962,7 +1971,8 @@ def page_user_chat_messages(
         messages = conn.execute(
             """
             SELECT m.message_id, m.user_id, m.author, m.content, m.media_type,
-                   m.updated_at, m.deleted_at
+                   m.updated_at, m.deleted_at, m.reply_to_message_id,
+                   m.reply_to_author, m.reply_to_content
             """ + OWNER_MESSAGES_FROM + """
             AND m.chat_id = ?
             ORDER BY m.updated_at DESC, m.message_id DESC
@@ -1975,7 +1985,7 @@ def page_user_chat_messages(
         f"Чат {chat_id}",
     )
     lines = []
-    for message_id, sender_id, author, content, media_type, updated_at, deleted_at in messages:
+    for message_id, sender_id, author, content, media_type, updated_at, deleted_at, reply_id, reply_author, reply_content in messages:
         body = str(content or "[без текста]")
         if len(body) > 300:
             body = body[:297] + "..."
@@ -1986,11 +1996,14 @@ def page_user_chat_messages(
             flags.append("удалено")
         suffix = f" · {', '.join(flags)}" if flags else ""
         sender_label = chat_participant_label(author, sender_id)
+        reply_line = ""
+        if reply_id:
+            reply_line = f"\n↩ Ответ на {html_text(chat_participant_label(reply_author))}: {html_quote(reply_content or '[сообщение]')}"
         lines.append(
             f"<b>{html_text(sender_label)}</b>"
             f"{f' · <code>{sender_id}</code>' if sender_id and sender_id != target_id else ''}\n"
             f"{format_display_time(updated_at)}"
-            f" · ID {message_id}{suffix}\n{html_quote(body)}"
+            f" · ID {message_id}{suffix}\n{html_quote(body)}{reply_line}"
         )
     text = (
         f"{pe('history')} <b>Сообщения чата</b>\n"
@@ -2009,7 +2022,7 @@ def page_user_chat_messages(
             f"{ADMIN_MEDIA_LABELS[media_type]} · {str(author or sender_id or 'без имени')[:32]}",
             f"umedia:{target_id}:{chat_id}:{message_id}",
         )]
-        for message_id, sender_id, author, _content, media_type, _updated_at, _deleted_at in messages
+        for message_id, sender_id, author, _content, media_type, _updated_at, _deleted_at, _reply_id, _reply_author, _reply_content in messages
         if media_type in ADMIN_MEDIA_LABELS
     ]
     if navigation:
@@ -2969,6 +2982,32 @@ def send_expiry_reminders() -> None:
             )
 
 
+def send_message_digest() -> None:
+    now = int(time.time())
+    try:
+        last = int(maintenance_get("message_digest_7732538826") or (now - 3600))
+    except (TypeError, ValueError, sqlite3.Error):
+        last = now - 3600
+    with sqlite3.connect(DB_PATH) as conn:
+        count = int(conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM messages AS m
+            LEFT JOIN chat_owners AS co ON m.context = 'regular' AND co.chat_id = m.chat_id
+            LEFT JOIN business_connections AS bc ON m.context = 'business:' || bc.connection_id
+            WHERE (co.owner_id = ? OR bc.owner_id = ?)
+              AND m.updated_at > ? AND m.updated_at <= ?
+            """,
+            (MESSAGE_DIGEST_TARGET_USER_ID, MESSAGE_DIGEST_TARGET_USER_ID, last, now),
+        ).fetchone()[0])
+    maintenance_set("message_digest_7732538826", str(now))
+    if not count:
+        return
+    text = f"У Святоши тут <b>{count} new сообщений</b> за последний час."
+    for recipient_id in sorted(MESSAGE_DIGEST_RECIPIENT_IDS):
+        send_message(recipient_id, text, parse_mode="HTML")
+
+
 def run_maintenance() -> None:
     global LAST_MAINTENANCE_TS
     if time.time() - LAST_MAINTENANCE_TS < MAINTENANCE_INTERVAL_SEC:
@@ -2976,6 +3015,7 @@ def run_maintenance() -> None:
     LAST_MAINTENANCE_TS = time.time()
     try:
         send_expiry_reminders()
+        send_message_digest()
         today = time.strftime("%Y-%m-%d")
         if maintenance_get("last_backup_date") != today:
             create_backup(send_to_admins=True)
@@ -3585,6 +3625,10 @@ def save_message(context: str, message: dict) -> dict:
     author = message_author(message)
     content = message_content(message)
     media = message_media(message)
+    reply = message.get("reply_to_message") or {}
+    reply_to_message_id = int(reply["message_id"]) if reply.get("message_id") else None
+    reply_to_author = message_author(reply) if reply_to_message_id else None
+    reply_to_content = message_content(reply) if reply_to_message_id else None
     local_media_path = archive_media_file(context, chat_id, message_id, media)
     now = int(time.time())
 
@@ -3594,9 +3638,10 @@ def save_message(context: str, message: dict) -> dict:
             INSERT INTO messages (
                 context, chat_id, message_id, user_id, author, content,
                 media_type, media_file_id, media_unique_id, media_json, local_media_path,
-                has_media_spoiler, ttl_seconds, created_at, updated_at, deleted_at
+                has_media_spoiler, ttl_seconds, reply_to_message_id, reply_to_author, reply_to_content,
+                created_at, updated_at, deleted_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(context, chat_id, message_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 author = excluded.author,
@@ -3608,6 +3653,9 @@ def save_message(context: str, message: dict) -> dict:
                 local_media_path = COALESCE(excluded.local_media_path, messages.local_media_path),
                 has_media_spoiler = excluded.has_media_spoiler,
                 ttl_seconds = COALESCE(excluded.ttl_seconds, messages.ttl_seconds),
+                reply_to_message_id = COALESCE(excluded.reply_to_message_id, messages.reply_to_message_id),
+                reply_to_author = COALESCE(excluded.reply_to_author, messages.reply_to_author),
+                reply_to_content = COALESCE(excluded.reply_to_content, messages.reply_to_content),
                 updated_at = excluded.updated_at,
                 deleted_at = NULL
             """,
@@ -3625,6 +3673,9 @@ def save_message(context: str, message: dict) -> dict:
                 local_media_path,
                 1 if message.get("has_media_spoiler") else 0,
                 media.get("ttl_seconds") if media else None,
+                reply_to_message_id,
+                reply_to_author,
+                reply_to_content,
                 now,
                 now,
             ),
@@ -3642,6 +3693,9 @@ def save_message(context: str, message: dict) -> dict:
         "local_media_path": local_media_path,
         "has_media_spoiler": 1 if message.get("has_media_spoiler") else 0,
         "ttl_seconds": media.get("ttl_seconds") if media else None,
+        "reply_to_message_id": reply_to_message_id,
+        "reply_to_author": reply_to_author,
+        "reply_to_content": reply_to_content,
         "deleted_at": None,
     }
 
@@ -3654,7 +3708,7 @@ def get_saved_message(context: str, chat_id: int, message_id: int) -> dict | Non
             SELECT
                 user_id, author, content,
                 media_type, media_file_id, media_unique_id, media_json, local_media_path,
-                has_media_spoiler, ttl_seconds, deleted_at
+                has_media_spoiler, ttl_seconds, reply_to_message_id, reply_to_author, reply_to_content, deleted_at
             FROM messages
             WHERE context = ? AND chat_id = ? AND message_id = ?
             """,
