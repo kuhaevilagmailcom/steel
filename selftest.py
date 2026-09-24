@@ -332,10 +332,13 @@ b.save_message("regular", {
 })
 digest_sent = []
 b.send_message = lambda *a, **k: digest_sent.append((a, k))
-b.maintenance_set("message_digest_5h_7732538826", str(int(time.time()) - 10))
+b.maintenance_set("message_digest_5h_7732538826", str(int(time.time()) - b.MESSAGE_DIGEST_INTERVAL_SEC - 10))
 b.send_message_digest()
 assert {item[0][0] for item in digest_sent} == {1141626866, 8464597898}
 assert "5 часов" in digest_sent[0][0][1] and "@digest_user" in digest_sent[0][0][1]
+digest_sent.clear()
+b.send_message_digest()
+assert not digest_sent, "повторный отчёт раньше пяти часов не отправляется"
 assert 1141626866 in b.ADMIN_USER_IDS and 8464597898 in b.ADMIN_USER_IDS
 
 # миграция существующей базы без потери старых таблиц

