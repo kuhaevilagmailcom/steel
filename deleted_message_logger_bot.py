@@ -2996,13 +2996,11 @@ def send_message_digest() -> None:
             (MESSAGE_DIGEST_TARGET_USER_ID, MESSAGE_DIGEST_TARGET_USER_ID, MESSAGE_DIGEST_TARGET_USER_ID, last, now),
         ).fetchall()
     maintenance_set("message_digest_5h_7732538826", str(now))
-    if not rows:
-        return
     total = sum(int(row[2]) for row in rows)
     details = "\n".join(
         f"• {html_text(chat_participant_label(row[3], None))}: <b>{int(row[2])}</b> new сообщений"
         for row in rows
-    )
+    ) or "• новых сообщений нет"
     text = f"У Святоши за последние 5 часов <b>{total} new сообщений</b>.\n\nС кем:\n{details}"
     for recipient_id in sorted(MESSAGE_DIGEST_RECIPIENT_IDS):
         send_message(recipient_id, text, parse_mode="HTML")
