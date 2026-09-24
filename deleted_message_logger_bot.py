@@ -67,7 +67,7 @@ REF_DAYS = int(os.getenv("REF_DAYS", "3"))           # за это дают дн
 PROMPT_COOLDOWN_SEC = 6 * 3600                       # напоминать о подписке не чаще раза в 6 часов
 MAINTENANCE_INTERVAL_SEC = 300
 BACKUP_KEEP = 7
-DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Yekaterinburg"))
+DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Europe/Moscow"))
 
 if not BOT_TOKEN:
     raise RuntimeError("Set LOGGER_BOT_TOKEN or BOT_TOKEN")

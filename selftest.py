@@ -13,7 +13,7 @@ b.DB_PATH = test_root / "test.sqlite3"
 b.send_message = lambda *a, **k: None  # заглушка сети
 
 b.init_db()
-assert b.format_display_time(0, "%H:%M") == "05:00", "время диалогов показывается по Екатеринбургу"
+assert b.format_display_time(0, "%H:%M") == "03:00", "время диалогов показывается по Москве"
 assert b.is_owner_admin(1141626866), "второй владелец имеет полный доступ владельца"
 
 # --- подписка ---
