@@ -1748,6 +1748,15 @@ def stored_user_payment_label(user_id: int) -> str:
     return f"{label}\nID: <code>{user_id}</code>"
 
 
+def chat_participant_label(author: str | None, user_id: int | None = None) -> str:
+    raw = str(author or "").strip()
+    username = re.search(r"@[A-Za-z0-9_]{3,}", raw)
+    if username:
+        return username.group(0)
+    name = raw.split(" (", 1)[0].strip()
+    return name or (f"Пользователь {user_id}" if user_id else "Собеседник")
+
+
 def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
     if not is_admin_user(user_id):
         return "Эта страница доступна только администраторам.", kb([BACK_HOME])
@@ -1881,13 +1890,14 @@ def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_nu
         page_number = min(max(0, page_number), page_count - 1)
         chats = conn.execute(
             """
-            SELECT m.chat_id, COUNT(*), COUNT(DISTINCT m.user_id), MAX(m.updated_at), MAX(m.author)
+            SELECT m.chat_id, COUNT(*), COUNT(DISTINCT m.user_id), MAX(m.updated_at),
+                   COALESCE(MAX(CASE WHEN m.user_id != ? THEN m.author END), MAX(m.author))
             """ + OWNER_MESSAGES_FROM + """
             GROUP BY m.chat_id
             ORDER BY MAX(m.updated_at) DESC
             LIMIT ? OFFSET ?
             """,
-            (target_id, target_id, ADMIN_CHATS_PAGE_SIZE, page_number * ADMIN_CHATS_PAGE_SIZE),
+            (target_id, target_id, target_id, ADMIN_CHATS_PAGE_SIZE, page_number * ADMIN_CHATS_PAGE_SIZE),
         ).fetchall()
     text = (
         f"{pe('view')} <b>Чаты пользователя</b>\n"
@@ -1898,7 +1908,7 @@ def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_nu
     )
     rows = [
         [btn(
-            f"{str(author or f'Чат {chat_id}')[:48]} · {message_count} сообщ.",
+            f"{chat_participant_label(author)[:40]} · {message_count} сообщений",
             f"umsg:{target_id}:{chat_id}:{return_page}:{page_number}:0",
             emoji="view",
         )]
@@ -1952,7 +1962,10 @@ def page_user_chat_messages(
             """,
             (*params, ADMIN_MESSAGES_PAGE_SIZE, page_number * ADMIN_MESSAGES_PAGE_SIZE),
         ).fetchall()
-    chat_label = next((str(row[2]) for row in messages if row[2]), f"Чат {chat_id}")
+    chat_label = next(
+        (chat_participant_label(row[2], row[1]) for row in messages if row[1] != target_id and row[2]),
+        f"Чат {chat_id}",
+    )
     lines = []
     for message_id, sender_id, author, content, media_type, updated_at, deleted_at in messages:
         body = str(content or "[без текста]")
@@ -1964,9 +1977,10 @@ def page_user_chat_messages(
         if deleted_at:
             flags.append("удалено")
         suffix = f" · {', '.join(flags)}" if flags else ""
+        sender_label = chat_participant_label(author, sender_id)
         lines.append(
-            f"<b>{html_text(author or 'Неизвестный')}</b>"
-            f"{f' · <code>{sender_id}</code>' if sender_id else ''}\n"
+            f"<b>{html_text(sender_label)}</b>"
+            f"{f' · <code>{sender_id}</code>' if sender_id and sender_id != target_id else ''}\n"
             f"{time.strftime('%d.%m.%Y %H:%M', time.localtime(int(updated_at)))}"
             f" · ID {message_id}{suffix}\n{html_quote(body)}"
         )
