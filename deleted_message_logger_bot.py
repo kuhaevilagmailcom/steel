@@ -395,19 +395,8 @@ def send_menu_page(
 
 
 def move_menu_to_bottom(chat_id: int) -> None:
-    """After a notification, recreate the menu last so it stays below the archive item."""
-    if int(chat_id) in ADMIN_USER_IDS:
-        return
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT user_id FROM users WHERE private_chat_id = ? ORDER BY updated_at DESC LIMIT 1",
-            (chat_id,),
-        ).fetchone()
-    if not row or not _menu_message(int(row[0])):
-        return
-    user_id = int(row[0])
-    text, markup = page_home(user_id)
-    send_menu_page(user_id, chat_id, text, markup, use_photo=True)
+    """Keep the currently opened menu page unchanged when notifications arrive."""
+    return
 
 
 def send_document(chat_id: int, path: Path, caption: str = "") -> None:
