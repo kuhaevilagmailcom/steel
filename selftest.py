@@ -155,7 +155,7 @@ b.save_message("regular", {
     "chat": {"id": -100500, "type": "supergroup", "title": "Группа"}, "text": "Сообщение обычного чата",
 })
 b.save_message("business:test-connection", {
-    "message_id": 2, "from": {"id": 333, "first_name": "Клиент"},
+    "message_id": 2, "from": {"id": 333, "first_name": "Клиент", "username": "client333"},
     "chat": {"id": 333, "type": "private", "first_name": "Клиент"}, "text": "Сообщение Business-чата",
 })
 with __import__("sqlite3").connect(b.DB_PATH) as conn:
@@ -170,8 +170,9 @@ chats_text, chats_markup = b.page_user_chats(999, 111)
 assert "Чаты пользователя" in chats_text
 assert "umsg:111:-100500:0:0:0" in json.dumps(chats_markup)
 assert "umsg:111:333:0:0:0" in json.dumps(chats_markup)
+assert "@client333" in json.dumps(chats_markup, ensure_ascii=False)
 messages_text, messages_markup = b.page_user_chat_messages(999, 111, 333)
-assert "Сообщение Business-чата" in messages_text and "Клиент" in messages_text
+assert "Сообщение Business-чата" in messages_text and "@client333" in messages_text
 assert "umedia:111:333:2" in json.dumps(messages_markup)
 assert {"voice", "photo", "video", "video_note"} <= set(b.ADMIN_MEDIA_LABELS) <= set(b.MEDIA_SENDERS)
 assert b.get_user_owned_saved_message(111, 333, 2)["media_file_id"] == "voice-test"

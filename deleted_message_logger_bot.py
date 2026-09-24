@@ -1869,6 +1869,10 @@ def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_nu
     if not is_owner_admin(admin_id):
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
+        target_user = conn.execute(
+            "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
+            (target_id,),
+        ).fetchone()
         total = int(conn.execute(
             "SELECT COUNT(DISTINCT m.chat_id) " + OWNER_MESSAGES_FROM,
             (target_id, target_id),
@@ -1877,7 +1881,7 @@ def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_nu
         page_number = min(max(0, page_number), page_count - 1)
         chats = conn.execute(
             """
-            SELECT m.chat_id, COUNT(*), COUNT(DISTINCT m.user_id), MAX(m.updated_at)
+            SELECT m.chat_id, COUNT(*), COUNT(DISTINCT m.user_id), MAX(m.updated_at), MAX(m.author)
             """ + OWNER_MESSAGES_FROM + """
             GROUP BY m.chat_id
             ORDER BY MAX(m.updated_at) DESC
@@ -1887,17 +1891,18 @@ def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_nu
         ).fetchall()
     text = (
         f"{pe('view')} <b>Чаты пользователя</b>\n"
+        f"{stored_user_label(target_id, *(target_user or (None, None, None)))}\n"
         f"ID: <code>{target_id}</code> · всего: <b>{total}</b> · "
         f"страница {page_number + 1}/{page_count}\n\n"
         "Нажми на чат, чтобы посмотреть сохранённые сообщения."
     )
     rows = [
         [btn(
-            f"Чат {chat_id} · {message_count} сообщ.",
+            f"{str(author or f'Чат {chat_id}')[:48]} · {message_count} сообщ.",
             f"umsg:{target_id}:{chat_id}:{return_page}:{page_number}:0",
             emoji="view",
         )]
-        for chat_id, message_count, _participants, _updated_at in chats
+        for chat_id, message_count, _participants, _updated_at, author in chats
     ]
     navigation = []
     if page_number > 0:
@@ -1925,6 +1930,10 @@ def page_user_chat_messages(
     if not is_owner_admin(admin_id):
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
+        target_user = conn.execute(
+            "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
+            (target_id,),
+        ).fetchone()
         params = (target_id, target_id, chat_id)
         total = int(conn.execute(
             "SELECT COUNT(*) " + OWNER_MESSAGES_FROM + " AND m.chat_id = ?",
@@ -1943,6 +1952,7 @@ def page_user_chat_messages(
             """,
             (*params, ADMIN_MESSAGES_PAGE_SIZE, page_number * ADMIN_MESSAGES_PAGE_SIZE),
         ).fetchall()
+    chat_label = next((str(row[2]) for row in messages if row[2]), f"Чат {chat_id}")
     lines = []
     for message_id, sender_id, author, content, media_type, updated_at, deleted_at in messages:
         body = str(content or "[без текста]")
@@ -1962,7 +1972,8 @@ def page_user_chat_messages(
         )
     text = (
         f"{pe('history')} <b>Сообщения чата</b>\n"
-        f"Пользователь: <code>{target_id}</code> · чат: <code>{chat_id}</code>\n"
+        f"Пользователь: {stored_user_label(target_id, *(target_user or (None, None, None)))}\n"
+        f"Чат: <b>{html_text(chat_label)}</b> · <code>{chat_id}</code>\n"
         f"Всего: <b>{total}</b> · страница {page_number + 1}/{page_count}\n\n"
         + ("\n\n".join(lines) if lines else "Сохранённых сообщений нет.")
     )
@@ -1973,10 +1984,10 @@ def page_user_chat_messages(
         navigation.append(btn("Раньше", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number + 1}", emoji="history"))
     rows = [
         [btn(
-            f"{ADMIN_MEDIA_LABELS[media_type]} · ID {message_id}",
+            f"{ADMIN_MEDIA_LABELS[media_type]} · {str(author or sender_id or 'без имени')[:32]}",
             f"umedia:{target_id}:{chat_id}:{message_id}",
         )]
-        for message_id, _sender_id, _author, _content, media_type, _updated_at, _deleted_at in messages
+        for message_id, sender_id, author, _content, media_type, _updated_at, _deleted_at in messages
         if media_type in ADMIN_MEDIA_LABELS
     ]
     if navigation:
