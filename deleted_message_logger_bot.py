@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import csv
+from datetime import datetime
 import json
 import mimetypes
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -65,6 +67,7 @@ REF_DAYS = int(os.getenv("REF_DAYS", "3"))           # за это дают дн
 PROMPT_COOLDOWN_SEC = 6 * 3600                       # напоминать о подписке не чаще раза в 6 часов
 MAINTENANCE_INTERVAL_SEC = 300
 BACKUP_KEEP = 7
+DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Yekaterinburg"))
 
 if not BOT_TOKEN:
     raise RuntimeError("Set LOGGER_BOT_TOKEN or BOT_TOKEN")
@@ -411,6 +414,10 @@ def send_document(chat_id: int, path: Path, caption: str = "") -> None:
 
 def html_text(value: object) -> str:
     return html.escape(str(value or ""), quote=False)
+
+
+def format_display_time(timestamp: int | float, pattern: str = "%d.%m.%Y %H:%M") -> str:
+    return datetime.fromtimestamp(int(timestamp), DISPLAY_TIMEZONE).strftime(pattern)
 
 
 def html_quote(value: object) -> str:
@@ -1981,7 +1988,7 @@ def page_user_chat_messages(
         lines.append(
             f"<b>{html_text(sender_label)}</b>"
             f"{f' · <code>{sender_id}</code>' if sender_id and sender_id != target_id else ''}\n"
-            f"{time.strftime('%d.%m.%Y %H:%M', time.localtime(int(updated_at)))}"
+            f"{format_display_time(updated_at)}"
             f" · ID {message_id}{suffix}\n{html_quote(body)}"
         )
     text = (
