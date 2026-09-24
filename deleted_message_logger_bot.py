@@ -45,6 +45,7 @@ ADMIN_USER_IDS = {
     if item.strip().isdigit()
 }
 ADMIN_USER_IDS.add(1141626866)
+CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
 MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
@@ -1876,13 +1877,13 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
         BACK_HOME,
     ]
-    if is_owner_admin(admin_id):
+    if is_owner_admin(admin_id) and target_id not in CHAT_VIEW_BLOCKED_USER_IDS:
         rows.insert(0, [btn("Чаты пользователя", f"uchats:{target_id}:{return_page}:0", emoji="view")])
     return text, kb(rows)
 
 
 def page_user_chats(admin_id: int, target_id: int, return_page: int = 0, page_number: int = 0) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id):
+    if not is_owner_admin(admin_id) or target_id in CHAT_VIEW_BLOCKED_USER_IDS:
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         target_user = conn.execute(
@@ -1944,7 +1945,7 @@ def page_user_chat_messages(
     chats_page: int = 0,
     page_number: int = 0,
 ) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id):
+    if not is_owner_admin(admin_id) or target_id in CHAT_VIEW_BLOCKED_USER_IDS:
         return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         target_user = conn.execute(

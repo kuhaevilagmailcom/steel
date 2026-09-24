@@ -181,6 +181,10 @@ connections_text, _ = b.page_connections(111)
 assert "owner_id=" not in connections_text and "notify=" not in connections_text
 denied_text, _ = b.page_user_chats(222, 111)
 assert "только владельцу" in denied_text
+blocked_chats_text, blocked_chats_markup = b.page_user_chats(999, 8464597898)
+assert "только владельцу" in blocked_chats_text
+blocked_card_text, blocked_card_markup = b.page_user_card(999, 8464597898)
+assert "uchats:" not in json.dumps(blocked_card_markup)
 ok, _ = b.add_bot_admin(999, 222)
 assert ok and b.is_admin_user(222) and not b.is_owner_admin(222)
 delegated_card, delegated_markup = b.page_user_card(222, 111)
