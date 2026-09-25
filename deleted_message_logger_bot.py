@@ -1729,25 +1729,34 @@ def bottom_navigation() -> list[list[dict]]:
     ]
 
 def page_home(user_id: int) -> tuple[str, dict]:
-    rows = [
-        [btn("🔗 Подключить чаты", "conns")],
-        [
-            btn("❓ Как это работает", "help"),
-        ],
-    ]
+    connections = list_business_connections(user_id)
+    regular_chats = get_user_chats(user_id)
+    enabled_count = sum(1 for row in connections if row.get("is_enabled")) + len(regular_chats)
+    has_connections = bool(connections or regular_chats)
+    active = sub_active(user_id)
+    rows = []
+    if not active:
+        rows.append([btn("⭐ Подключить подписку", "buy", style="success")])
+    rows.extend([
+        [btn("🔗 Мои подключённые чаты" if has_connections else "🔗 Подключить чаты", "conns")],
+        [btn("❓ Настроить за минуту", "help")],
+    ])
     rows.extend(bottom_navigation())
     if is_admin_user(user_id):
         rows.append([btn("Админ-панель", "panel", emoji="admin")])
 
+    if active and enabled_count:
+        next_step = f"{pe('check')} Всё работает. Подключено чатов: <b>{enabled_count}</b>."
+    elif active:
+        next_step = f"{pe('warning')} Подписка активна. Осталось подключить нужные чаты."
+    else:
+        next_step = f"{pe('warning')} Сначала подключи подписку, затем выбери чаты."
     text = (
         f"{pe('home')} <b>Holly Bot</b>\n\n"
-        "Сохраняю важные сообщения из твоих чатов и присылаю их сюда, "
-        "если их удалили или изменили. Фото, видео и голосовые тоже попадают в архив.\n\n"
-        f"{pe('check')} Удалённые и изменённые сообщения\n"
-        f"{pe('check')} Одноразовые фото и видео\n"
-        f"{pe('check')} Стиль общения — внутри подписки\n\n"
-        f"{pe('stars')} <b>Подписка:</b> {status_line(user_id)}\n\n"
-        "Начни с кнопки «⭐ Моя подписка» или подключи нужные чаты."
+        "Сохраняю удалённые и изменённые сообщения, одноразовые фото, видео и голосовые.\n\n"
+        f"{pe('stars')} <b>Подписка:</b> {status_line(user_id)}\n"
+        f"{next_step}\n\n"
+        "Все нужные действия — на кнопках ниже."
     )
     return text, kb(rows)
 
@@ -1779,12 +1788,12 @@ def page_buy(user_id: int) -> tuple[str, dict]:
     )
     rows = [
         [
-            btn(f"{action} на 15 дней · {p15_rub} ₽", "buy:sbp:15", style="success"),
-            btn(f"{action} на 15 дней · {p15_stars} ⭐", "buy:stars:15", style="success"),
+            btn(f"{action} · 15 дней · {p15_rub} ₽", "buy:sbp:15", style="success"),
+            btn(f"{action} · 15 дней · {p15_stars} ⭐", "buy:stars:15", style="success"),
         ],
         [
-            btn(f"{action} на 30 дней · {p30_rub} ₽", "buy:sbp:30", style="success"),
-            btn(f"{action} на 30 дней · {p30_stars} ⭐", "buy:stars:30", style="success"),
+            btn(f"{action} · 30 дней · {p30_rub} ₽", "buy:sbp:30", style="success"),
+            btn(f"{action} · 30 дней · {p30_stars} ⭐", "buy:stars:30", style="success"),
         ],
         [
             btn("🎟 Ввести промокод", "promo:activate"),
@@ -1818,8 +1827,8 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
     text = (
         "🎭 <b>Стиль общения</b>\n\n"
         f"Сейчас: <b>{current_label}</b>\n\n"
-        "Теперь стиль меняет не только первое или последнее слово: бот перерабатывает "
-        "слова и фразы по всему сообщению. Ссылки, @username и номера телефонов не трогаются.\n\n"
+        "Выбери стиль один раз — дальше он применяется автоматически. "
+        "Ссылки, @username и номера телефонов бот не меняет.\n\n"
         f"<b>Примеры:</b>\n{examples}"
     )
     return text, kb(rows)
@@ -1853,16 +1862,12 @@ def page_ref(user_id: int) -> tuple[str, dict]:
 def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
     text = (
-        f"{pe('support')} <b>Как работает Holly Bot</b>\n\n"
-        "Бот хранит копии сообщений из выбранных чатов. Если сообщение удалят или изменят, "
-        "ты получишь его здесь вместе с фото, видео или голосовым.\n\n"
-        "<b>Как подключить чаты</b>\n"
-        "1. Открой Telegram → Настройки → Telegram Business\n"
-        "2. Выбери «Чат-боты» и добавь бота\n"
-        f"3. Найди <code>@{username}</code>\n"
-        "4. Отметь нужные чаты и сохрани\n\n"
-        "Для обычной группы добавь бота администратором и напиши <code>/watch</code>.\n\n"
-        "Подписка открывает сохранение сообщений и 🎭 стиль общения."
+        f"{pe('support')} <b>Как подключить Holly Bot</b>\n\n"
+        "1. Открой Telegram → Настройки → Telegram Business → Чат-боты.\n"
+        f"2. Добавь <code>@{username}</code>.\n"
+        "3. Выбери нужные чаты и нажми «Сохранить».\n\n"
+        "Готово: новые сообщения начнут сохраняться автоматически. Для группы добавь бота "
+        "администратором и отправь <code>/watch</code>."
     )
     rows = [
         [btn("🔗 Проверить подключение", "conns")],
@@ -1873,15 +1878,16 @@ def page_help(user_id: int) -> tuple[str, dict]:
 
 def page_connections(user_id: int) -> tuple[str, dict]:
     rows = list_business_connections(user_id)
-    if rows:
-        enabled = sum(1 for row in rows if row.get("is_enabled"))
-        disabled = len(rows) - enabled
+    regular_chats = get_user_chats(user_id)
+    if rows or regular_chats:
+        business_enabled = sum(1 for row in rows if row.get("is_enabled"))
+        enabled = business_enabled + len(regular_chats)
+        disabled = len(rows) - business_enabled
         text = (
-            f"{pe('view')} <b>Подключение чатов</b>\n\n"
-            f"✅ Защищённых чатов: <b>{enabled}</b>\n"
-            f"⏸ Приостановлено: <b>{disabled}</b>\n\n"
-            "Бот будет присылать сюда удалённые и изменённые сообщения, "
-            "а также сохранённые медиа."
+            f"{pe('view')} <b>Мои подключённые чаты</b>\n\n"
+            f"Работают: <b>{enabled}</b>\n"
+            f"Приостановлены: <b>{disabled}</b>\n\n"
+            "Ничего дополнительно нажимать не нужно — новые сообщения сохраняются автоматически."
         )
     else:
         text = (
@@ -1893,8 +1899,8 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     if rows and any(not row.get("is_enabled") for row in rows):
         action_rows.append([btn("✅ Включить приостановленные", "restore", emoji="check")])
     action_rows.extend([
-        [btn("❓ Как подключить", "help")],
-        [btn("🔄 Проверить статус", "conns")],
+        [btn("➕ Добавить или изменить чаты", "help")],
+        [btn("🔄 Обновить", "conns")],
     ])
     action_rows.extend(bottom_navigation())
     markup = kb(action_rows)
@@ -2097,6 +2103,10 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         rows.insert(0, [
             btn("Чаты", f"uchats:{target_id}:{return_page}:0", emoji="view"),
             btn("Поиск", f"usearch:{target_id}:{return_page}", emoji="view"),
+        ])
+        rows.insert(1, [
+            btn("Экспорт без медиа", f"uexall:t:{target_id}:{return_page}", emoji="history"),
+            btn("Экспорт с медиа", f"uexall:m:{target_id}:{return_page}", emoji="view"),
         ])
     return text, kb(rows)
 
@@ -2659,7 +2669,14 @@ def page_storage_settings(user_id: int) -> tuple[str, dict]:
     return text, kb(rows)
 
 
-def export_chat_html(admin_id: int, target_id: int, chat_id: int) -> Path:
+def export_chat_html(
+    admin_id: int,
+    target_id: int,
+    chat_id: int,
+    audit: bool = True,
+    include_media: bool = True,
+    media_limit_bytes: int = 45 * 1024 * 1024,
+) -> Path:
     if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
         raise PermissionError("Чат недоступен")
     export_dir = DATA_DIR / "exports"
@@ -2679,9 +2696,9 @@ def export_chat_html(admin_id: int, target_id: int, chat_id: int) -> Path:
     total_attachment_bytes = 0
     for message_id, author, content, media_type, local_path, created_at, updated_at, deleted_at, reply_author, reply_content, edit_count in rows:
         media_link = ""
-        if local_path:
+        if local_path and include_media:
             candidate = Path(str(local_path))
-            if candidate.exists() and candidate.is_file() and total_attachment_bytes + candidate.stat().st_size <= 45 * 1024 * 1024:
+            if candidate.exists() and candidate.is_file() and total_attachment_bytes + candidate.stat().st_size <= media_limit_bytes:
                 archive_name = f"media/{message_id}-{candidate.name}"
                 attachments.append((candidate, archive_name))
                 total_attachment_bytes += candidate.stat().st_size
@@ -2706,7 +2723,72 @@ def export_chat_html(admin_id: int, target_id: int, chat_id: int) -> Path:
         archive.writestr("chat.html", document)
         for source, archive_name in attachments:
             archive.write(source, archive_name)
-    log_admin_view(admin_id, target_id, chat_id, "экспорт диалога", path.name)
+    if audit:
+        log_admin_view(admin_id, target_id, chat_id, "экспорт диалога", path.name)
+    return path
+
+
+def export_all_user_chats(admin_id: int, target_id: int, include_media: bool = False) -> Path:
+    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+        raise PermissionError("Чаты недоступны")
+    export_dir = DATA_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    mode = "with-media" if include_media else "text-only"
+    path = export_dir / f"all-chats-{mode}-{target_id}-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    with sqlite3.connect(DB_PATH) as conn:
+        chats = conn.execute(
+            """
+            SELECT m.chat_id, COUNT(*),
+                   COALESCE(MAX(CASE WHEN m.user_id != ? THEN m.author END), MAX(m.author)),
+                   MAX(m.updated_at)
+            """ + OWNER_MESSAGES_FROM + """
+            GROUP BY m.chat_id ORDER BY MAX(m.updated_at) DESC
+            """,
+            (target_id, target_id, target_id),
+        ).fetchall()
+
+    index_rows = []
+    included_media_bytes = 0
+    media_limit = 45 * 1024 * 1024
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as destination:
+        for chat_id, message_count, author, updated_at in chats:
+            folder = f"chats/chat_{chat_id}"
+            remaining_media_bytes = max(0, media_limit - included_media_bytes)
+            chat_archive = export_chat_html(
+                admin_id,
+                target_id,
+                int(chat_id),
+                audit=False,
+                include_media=include_media,
+                media_limit_bytes=remaining_media_bytes,
+            )
+            try:
+                with zipfile.ZipFile(chat_archive, "r") as source:
+                    for info in source.infolist():
+                        if info.is_dir():
+                            continue
+                        if info.filename.startswith("media/"):
+                            if included_media_bytes + info.file_size > media_limit:
+                                continue
+                            included_media_bytes += info.file_size
+                        destination.writestr(f"{folder}/{info.filename}", source.read(info.filename))
+            finally:
+                chat_archive.unlink(missing_ok=True)
+            label = chat_participant_label(author)
+            index_rows.append(
+                f'<li><a href="{folder}/chat.html">{html.escape(label)}</a> — '
+                f'{int(message_count)} сообщений, {html.escape(format_display_time(updated_at))}</li>'
+            )
+        index_document = (
+            "<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
+            "<title>Все диалоги</title><style>body{font:16px system-ui;max-width:900px;margin:auto;padding:24px;background:#111;color:#eee}"
+            "a{color:#f477cf}li{margin:12px 0}</style>"
+            f"<body><h1>Все диалоги пользователя {target_id}</h1><p>Чатов: {len(chats)} · "
+            f"{'с медиа' if include_media else 'без медиа'}</p>"
+            f"<ul>{''.join(index_rows)}</ul></body></html>"
+        )
+        destination.writestr("index.html", index_document)
+    log_admin_view(admin_id, target_id, None, "экспорт всех чатов", path.name)
     return path
 
 
@@ -4206,6 +4288,29 @@ def handle_callback_query(query: dict) -> None:
         parts = data.split(":")
         if len(parts) == 7 and all(part.lstrip("-").isdigit() for part in parts[1:5]) and parts[6].isdigit():
             page = page_chat_media(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), parts[5], int(parts[6]))
+    elif data.startswith("uexall:"):
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 4 and parts[1] in {"t", "m"} and all(part.isdigit() for part in parts[2:]):
+            include_media = parts[1] == "m"
+            export_path: Path | None = None
+            try:
+                export_path = export_all_user_chats(user_id, int(parts[2]), include_media=include_media)
+                send_document(
+                    chat_id,
+                    export_path,
+                    "Все сохранённые чаты с медиа" if include_media else "Все сохранённые чаты без медиа",
+                )
+                alert = "Архив с медиа отправлен" if include_media else "Архив без медиа отправлен"
+            except (PermissionError, OSError, sqlite3.Error, zipfile.BadZipFile, TelegramApiError) as exc:
+                answer_callback(query_id, text=f"Не удалось экспортировать: {exc}"[:180], show_alert=True)
+                return
+            finally:
+                if export_path is not None:
+                    export_path.unlink(missing_ok=True)
+            page = page_user_card(user_id, int(parts[2]), int(parts[3]))
     elif data.startswith("uexport:"):
         if not is_owner_admin(user_id):
             answer_callback(query_id, text="Только для владельца", show_alert=True)
@@ -4217,7 +4322,7 @@ def handle_callback_query(query: dict) -> None:
                 export_path = export_chat_html(user_id, int(parts[1]), int(parts[2]))
                 send_document(chat_id, export_path, "Экспорт диалога: HTML и сохранённые медиа")
                 alert = "Экспорт отправлен"
-            except (PermissionError, OSError, sqlite3.Error) as exc:
+            except (PermissionError, OSError, sqlite3.Error, TelegramApiError) as exc:
                 answer_callback(query_id, text=f"Не удалось экспортировать: {exc}"[:180], show_alert=True)
                 return
             finally:

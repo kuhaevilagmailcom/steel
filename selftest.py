@@ -141,7 +141,7 @@ assert "Owner ID" not in home_text and "Моя подписка" in home_callbac
 assert b.MENU_IMAGE_PATH.exists() and b.MENU_IMAGE_PATH.suffix == ".png"
 assert "Стиль общения" in home_callbacks and "⭐ Моя подписка" in home_callbacks
 help_text, _ = b.page_help(111)
-assert "Business-подключения" not in help_text and "Как работает Holly Bot" in help_text
+assert "Business-подключения" not in help_text and "Как подключить Holly Bot" in help_text
 
 users_text, _ = b.page_users(999)
 assert "Тест Пользователь" in users_text and "@tester" in users_text
@@ -169,6 +169,7 @@ with __import__("sqlite3").connect(b.DB_PATH) as conn:
 card_text, card_markup = b.page_user_card(999, 111)
 assert "Карточка пользователя" in card_text and "useradd:111:30:0" in json.dumps(card_markup)
 assert "uchats:111:0:0" in json.dumps(card_markup)
+assert "uexall:t:111:0" in json.dumps(card_markup) and "uexall:m:111:0" in json.dumps(card_markup)
 chats_text, chats_markup = b.page_user_chats(999, 111)
 assert "Чаты пользователя" in chats_text
 assert "uchat:111:-100500:0:0" in json.dumps(chats_markup)
@@ -209,6 +210,31 @@ search_text, search_markup = b.page_chat_search_results(999, 111)
 assert "найдено: <b>1</b>" in search_text and "uchat:111:333" in json.dumps(search_markup)
 export_path = b.export_chat_html(999, 111, 333)
 assert export_path.exists() and __import__("zipfile").is_zipfile(export_path)
+sample_media = test_root / "sample.ogg"
+sample_media.write_bytes(b"test-media")
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    conn.execute(
+        "UPDATE messages SET local_media_path=? WHERE context='business:test-connection' AND chat_id=333 AND message_id=2",
+        (str(sample_media),),
+    )
+text_export = b.export_all_user_chats(999, 111, include_media=False)
+media_export = b.export_all_user_chats(999, 111, include_media=True)
+with __import__("zipfile").ZipFile(text_export) as archive:
+    text_names = archive.namelist()
+with __import__("zipfile").ZipFile(media_export) as archive:
+    media_names = archive.namelist()
+assert "index.html" in text_names and any(name.endswith("/chat.html") for name in text_names)
+assert not any("/media/" in name for name in text_names)
+assert any("/media/" in name for name in media_names)
+sent_exports = []
+original_send_document = b.send_document
+b.send_document = lambda chat_id, path, caption="": sent_exports.append((chat_id, path.name, caption))
+b.handle_callback_query({
+    "id": "export-all", "data": "uexall:t:111:0",
+    "from": {"id": 999}, "message": {"message_id": 11, "chat": {"id": 999, "type": "private"}},
+})
+b.send_document = original_send_document
+assert sent_exports and sent_exports[0][0] == 999 and "без медиа" in sent_exports[0][2]
 b.save_message("business:test-connection", {
     "message_id": 2, "from": {"id": 333, "first_name": "Клиент", "username": "client333"},
     "chat": {"id": 333, "type": "private", "first_name": "Клиент"}, "text": "Изменённое сообщение",
