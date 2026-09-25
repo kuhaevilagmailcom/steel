@@ -31,6 +31,9 @@ LOG_PATH = DATA_DIR / "bot.log"
 LOCK_PATH = DATA_DIR / "bot.lock"
 RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
 MENU_IMAGE_PATH = BASE_DIR / "assets" / "holly_menu.png"
+WEBAPP_URL = os.getenv(
+    "WEBAPP_URL", "https://bot-1789500279-7661-furadev.bothost.tech"
+).strip().rstrip("/")
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1274,6 +1277,7 @@ def btn(
     copy: str | None = None,
     emoji: str | None = None,
     style: str | None = None,
+    web_app: str | None = None,
 ) -> dict:
     item: dict[str, object] = {"text": text}
     if cb:
@@ -1287,6 +1291,8 @@ def btn(
         item["icon_custom_emoji_id"] = NEWS[emoji][1]
     if style:
         item["style"] = style
+    if web_app:
+        item["web_app"] = {"url": web_app}
     return item
 
 
@@ -2896,6 +2902,7 @@ def page_panel(user_id: int) -> tuple[str, dict]:
     ]
     if is_owner_admin(user_id):
         rows.extend([
+            [btn("Открыть чаты", web_app=WEBAPP_URL, emoji="view", style="success")],
             [btn("Администраторы", "admins", emoji="admin"), btn("Приватность чатов", "privacy", emoji="warning")],
             [btn("История просмотров", "viewaudit", emoji="history"), btn("Отчёты", "digsettings", emoji="history")],
             [btn("Хранение", "storage", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")],
@@ -5603,6 +5610,8 @@ def configure_bot() -> None:
 def run_polling() -> None:
     global POLLING_ERROR_COUNT
     init_db()
+    from webapp_server import start_webapp_server
+    start_webapp_server(sys.modules[__name__])
     telegram_call("deleteWebhook", {"drop_pending_updates": False})
     configure_bot()
     me = telegram_call("getMe")
@@ -5652,5 +5661,10 @@ if __name__ == "__main__":
         log(str(exc))
         raise SystemExit(1) from None
     finally:
+        try:
+            from webapp_server import stop_webapp_server
+            stop_webapp_server()
+        except Exception:
+            pass
         if lock_handle is not None:
             release_single_instance_lock(lock_handle)

@@ -450,6 +450,33 @@ b.send_message_digest()
 assert not digest_sent, "повторный отчёт раньше пяти часов не отправляется"
 assert 1141626866 in b.ADMIN_USER_IDS and 8464597898 in b.ADMIN_USER_IDS
 
+# Web App: подпись Telegram, приватность, списки чатов и сообщений
+import hashlib, hmac
+from urllib.parse import urlencode
+import webapp_server as web
+
+web_user = json.dumps({"id": 999, "first_name": "Owner"}, ensure_ascii=False, separators=(",", ":"))
+web_fields = {"auth_date": str(int(time.time())), "query_id": "test-query", "user": web_user}
+web_check = "\n".join(f"{key}={web_fields[key]}" for key in sorted(web_fields))
+web_secret = hmac.new(b"WebAppData", b.BOT_TOKEN.encode(), hashlib.sha256).digest()
+web_fields["hash"] = hmac.new(web_secret, web_check.encode(), hashlib.sha256).hexdigest()
+assert web.validate_init_data(urlencode(web_fields), b.BOT_TOKEN)["id"] == 999
+bad_fields = dict(web_fields); bad_fields["hash"] = "0" * 64
+try:
+    web.validate_init_data(urlencode(bad_fields), b.BOT_TOKEN)
+    raise AssertionError("поддельная подпись Web App принята")
+except PermissionError:
+    pass
+web_users = web.list_users(b)
+assert any(item["id"] == 111 and item["chat_count"] >= 1 for item in web_users["items"])
+assert all(not b.user_chats_are_hidden(item["id"]) for item in web_users["items"])
+web_chats = web.list_chats(b, 999, 111)
+assert any(item["id"] == 333 and item["message_count"] >= 1 for item in web_chats)
+web_messages = web.list_messages(b, 111, 333)
+assert web_messages["items"] and any(item["media"] for item in web_messages["items"])
+panel_markup = b.page_panel(999)[1]
+assert any(button.get("web_app", {}).get("url") == b.WEBAPP_URL for row in panel_markup["inline_keyboard"] for button in row)
+
 # миграция существующей базы без потери старых таблиц
 legacy_db = test_root / "legacy.sqlite3"
 with __import__("sqlite3").connect(legacy_db) as conn:

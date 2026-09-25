@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0f1014">
+  <title>Holy Gram — чаты</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
+  <link rel="stylesheet" href="/styles.css?v=1">
+  <script defer src="/app.js?v=1"></script>
+</head>
+<body>
+  <div id="app" class="app" data-view="users">
+    <aside class="brand-rail" aria-label="Holy Gram">
+      <div class="brand-mark">H</div>
+      <div class="brand-copy"><b>Holy Gram</b><span>Панель владельца</span></div>
+      <button class="rail-button active" type="button" title="Пользователи" aria-label="Пользователи">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </button>
+      <div class="rail-spacer"></div>
+      <div id="ownerAvatar" class="mini-avatar">H</div>
+    </aside>
+
+    <section id="usersPanel" class="panel users-panel">
+      <header class="panel-header">
+        <div><p class="eyebrow">Holy Gram</p><h1>Пользователи</h1></div>
+        <span id="usersCount" class="count-pill">—</span>
+      </header>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="userSearch" type="search" placeholder="Имя или @username" autocomplete="off"></label>
+      <div id="usersList" class="list" aria-live="polite"></div>
+    </section>
+
+    <section id="chatsPanel" class="panel chats-panel">
+      <header class="panel-header">
+        <button class="back-button mobile-only" data-back="users" type="button" aria-label="Назад">‹</button>
+        <div class="header-person">
+          <div id="selectedUserAvatar" class="avatar">?</div>
+          <div><p class="eyebrow">Чаты пользователя</p><h2 id="selectedUserName">Выберите пользователя</h2><p id="selectedUserMeta" class="muted"></p></div>
+        </div>
+      </header>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="chatSearch" type="search" placeholder="Поиск по чатам" autocomplete="off" disabled></label>
+      <div id="chatsList" class="list empty-state"><div class="empty-icon">☰</div><b>Выберите пользователя</b><span>Здесь появятся его диалоги</span></div>
+    </section>
+
+    <main id="messagesPanel" class="messages-panel">
+      <header class="conversation-header">
+        <button class="back-button mobile-only" data-back="chats" type="button" aria-label="Назад">‹</button>
+        <div id="chatAvatar" class="avatar">?</div>
+        <div class="conversation-title"><h2 id="chatName">Выберите чат</h2><p id="chatMeta">Сообщения и медиа</p></div>
+        <button id="refreshButton" class="icon-button" type="button" aria-label="Обновить" title="Обновить" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 1 0 2 5.3M20 4v7h-7"/></svg>
+        </button>
+      </header>
+      <div id="messageScroll" class="message-scroll empty-state">
+        <div class="empty-icon">H</div><b>Просмотр переписок</b><span>Выберите пользователя и нужный чат</span>
+      </div>
+      <footer class="viewer-notice"><span>Только просмотр</span><b>Исходные сообщения изменить нельзя</b></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <div id="authError" class="auth-error hidden">
+    <div class="brand-mark large">H</div><h1>Holy Gram</h1><p id="authErrorText">Откройте просмотр чатов из админ-панели бота.</p>
+  </div>
+</body>
+</html>
