@@ -15,6 +15,7 @@ b.send_message = lambda *a, **k: None  # заглушка сети
 b.init_db()
 assert b.format_display_time(0, "%H:%M") == "03:00", "время диалогов показывается по Москве"
 assert b.is_owner_admin(1141626866), "второй владелец имеет полный доступ владельца"
+assert b.is_owner_admin(8464597898), "основной владелец не зависит от переменных Bothost"
 assert b.is_admin_user(7284696561) and not b.is_owner_admin(7284696561)
 assert b.can_view_user_chats(7284696561), "новый администратор может просматривать чаты"
 assert b.user_chats_are_hidden(7284696561), "собственные чаты администратора не раскрываются"
