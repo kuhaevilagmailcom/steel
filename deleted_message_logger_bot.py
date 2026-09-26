@@ -1171,7 +1171,7 @@ def toggle_chat_pin(admin_id: int, target_id: int, chat_id: int) -> bool:
 
 
 def list_admin_ids() -> list[int]:
-    ids = set(ADMIN_USER_IDS)
+    ids = set(ADMIN_USER_IDS) | set(CHAT_VIEWER_USER_IDS)
     try:
         with sqlite3.connect(DB_PATH) as conn:
             ids.update(

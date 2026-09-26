@@ -18,6 +18,7 @@ assert b.is_owner_admin(1141626866), "второй владелец имеет �
 assert b.is_admin_user(7284696561) and not b.is_owner_admin(7284696561)
 assert b.can_view_user_chats(7284696561), "новый администратор может просматривать чаты"
 assert b.user_chats_are_hidden(7284696561), "собственные чаты администратора не раскрываются"
+assert 7284696561 in b.list_admin_ids(), "администратор чатов получает админские команды"
 
 # --- подписка ---
 b.register_user(111, 111)
