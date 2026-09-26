@@ -15,6 +15,9 @@ b.send_message = lambda *a, **k: None  # заглушка сети
 b.init_db()
 assert b.format_display_time(0, "%H:%M") == "03:00", "время диалогов показывается по Москве"
 assert b.is_owner_admin(1141626866), "второй владелец имеет полный доступ владельца"
+assert b.is_admin_user(7284696561) and not b.is_owner_admin(7284696561)
+assert b.can_view_user_chats(7284696561), "новый администратор может просматривать чаты"
+assert b.user_chats_are_hidden(7284696561), "собственные чаты администратора не раскрываются"
 
 # --- подписка ---
 b.register_user(111, 111)
@@ -171,6 +174,13 @@ assert "Карточка пользователя" in card_text and "useradd:111
 assert "uchats:111:0:0" in json.dumps(card_markup)
 assert "uexall:t:111:0" in json.dumps(card_markup) and "uexall:m:111:0" in json.dumps(card_markup)
 chats_text, chats_markup = b.page_user_chats(999, 111)
+viewer_chats_text, _ = b.page_user_chats(7284696561, 111)
+assert "Чаты пользователя" in viewer_chats_text
+viewer_card, viewer_card_markup = b.page_user_card(7284696561, 111)
+assert "Карточка пользователя" in viewer_card and "uchats:" in json.dumps(viewer_card_markup)
+viewer_panel = b.page_panel(7284696561)
+assert "администратор чатов" in viewer_panel[0]
+assert any(button.get("web_app") for row in viewer_panel[1]["inline_keyboard"] for button in row)
 assert "Чаты пользователя" in chats_text
 assert "uchat:111:-100500:0:0" in json.dumps(chats_markup)
 assert "uchat:111:333:0:0" in json.dumps(chats_markup)
@@ -283,7 +293,7 @@ assert b.get_user_owned_saved_message(111, 333, 2)["media_file_id"] == "voice-te
 connections_text, _ = b.page_connections(111)
 assert "owner_id=" not in connections_text and "notify=" not in connections_text
 denied_text, _ = b.page_user_chats(222, 111)
-assert "только владельцу" in denied_text
+assert "администраторам чатов" in denied_text
 blocked_chats_text, blocked_chats_markup = b.page_user_chats(999, 8464597898)
 assert "скрыты" in blocked_chats_text
 blocked_card_text, blocked_card_markup = b.page_user_card(999, 8464597898)

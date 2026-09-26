@@ -49,6 +49,7 @@ ADMIN_USER_IDS = {
     if item.strip().isdigit()
 }
 ADMIN_USER_IDS.add(1141626866)
+CHAT_VIEWER_USER_IDS = {7284696561}
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
 MESSAGE_DIGEST_RECIPIENT_IDS = {1141626866, 8464597898}
@@ -1051,11 +1052,18 @@ def is_owner_admin(user_id: int | None) -> bool:
     return bool(user_id is not None and int(user_id) in ADMIN_USER_IDS)
 
 
+def can_view_user_chats(user_id: int | None) -> bool:
+    return bool(
+        user_id is not None
+        and (is_owner_admin(user_id) or int(user_id) in CHAT_VIEWER_USER_IDS)
+    )
+
+
 def is_admin_user(user_id: int | None) -> bool:
     if user_id is None:
         return False
     user_id = int(user_id)
-    if is_owner_admin(user_id):
+    if is_owner_admin(user_id) or user_id in CHAT_VIEWER_USER_IDS:
         return True
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -2105,7 +2113,7 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
         BACK_HOME,
     ]
-    if is_owner_admin(admin_id) and not user_chats_are_hidden(target_id):
+    if can_view_user_chats(admin_id) and not user_chats_are_hidden(target_id):
         rows.insert(0, [
             btn("Чаты", f"uchats:{target_id}:{return_page}:0", emoji="view"),
             btn("Поиск", f"usearch:{target_id}:{return_page}", emoji="view"),
@@ -2128,7 +2136,7 @@ CHAT_FILTER_LABELS = {
 
 
 def page_chat_filters(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+    if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         return "Чаты недоступны.", kb([BACK_HOME])
     rows = [
         [btn("Все", f"ucl:{target_id}:{return_page}:0:all:recent", emoji="view"), btn("Новые", f"ucl:{target_id}:{return_page}:0:new:recent", emoji="refresh")],
@@ -2149,8 +2157,8 @@ def page_user_chats(
     filter_name: str = "all",
     sort_name: str = "recent",
 ) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id):
-        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+    if not can_view_user_chats(admin_id):
+        return "Эта страница доступна только администраторам чатов.", kb([BACK_HOME])
     if user_chats_are_hidden(target_id):
         return "Чаты этого пользователя скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
     filter_name = filter_name if filter_name in CHAT_FILTER_LABELS else "all"
@@ -2242,8 +2250,8 @@ def page_user_chat_messages(
     page_number: int = 0,
     period: str = "all",
 ) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id):
-        return "Эта страница доступна только владельцу бота.", kb([BACK_HOME])
+    if not can_view_user_chats(admin_id):
+        return "Эта страница доступна только администраторам чатов.", kb([BACK_HOME])
     if user_chats_are_hidden(target_id):
         return "Чаты этого пользователя скрыты.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
     now_dt = datetime.now(DISPLAY_TIMEZONE)
@@ -2358,7 +2366,7 @@ def page_user_chat_messages(
 def page_chat_overview(
     admin_id: int, target_id: int, chat_id: int, return_page: int = 0, chats_page: int = 0
 ) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+    if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         return "Чат недоступен.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
@@ -2462,7 +2470,7 @@ def page_chat_media(
     media_filter: str = "all",
     page_number: int = 0,
 ) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+    if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         return "Медиа недоступно.", kb([BACK_HOME])
     media_filter = media_filter if media_filter in MEDIA_FILTER_CODES else "all"
     media_type = MEDIA_FILTER_CODES[media_filter]
@@ -2523,7 +2531,7 @@ def page_chat_media(
 
 
 def page_chat_dates(admin_id: int, target_id: int, chat_id: int, return_page: int, chats_page: int) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+    if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         return "Чат недоступен.", kb([BACK_HOME])
     rows = [
         [btn("Сегодня", f"uday:{target_id}:{chat_id}:{return_page}:{chats_page}:0:today", emoji="check"), btn("Вчера", f"uday:{target_id}:{chat_id}:{return_page}:{chats_page}:0:yesterday", emoji="history")],
@@ -2537,7 +2545,7 @@ def page_chat_dates(admin_id: int, target_id: int, chat_id: int, return_page: in
 
 
 def page_chat_search_results(admin_id: int, target_id: int, return_page: int = 0, page_number: int = 0) -> tuple[str, dict]:
-    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+    if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         return "Поиск недоступен.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         search = conn.execute(
@@ -2683,7 +2691,7 @@ def export_chat_html(
     include_media: bool = True,
     media_limit_bytes: int = 45 * 1024 * 1024,
 ) -> Path:
-    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+    if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         raise PermissionError("Чат недоступен")
     export_dir = DATA_DIR / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -2735,7 +2743,7 @@ def export_chat_html(
 
 
 def export_all_user_chats(admin_id: int, target_id: int, include_media: bool = False) -> Path:
-    if not is_owner_admin(admin_id) or user_chats_are_hidden(target_id):
+    if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         raise PermissionError("Чаты недоступны")
     export_dir = DATA_DIR / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -2882,7 +2890,11 @@ def page_panel(user_id: int) -> tuple[str, dict]:
             "SELECT COUNT(*), COALESCE(SUM(rub), 0) FROM sbp_payments WHERE status = 'paid'"
         ).fetchone()
 
-    role = "владелец" if is_owner_admin(user_id) else "администратор"
+    role = (
+        "владелец" if is_owner_admin(user_id)
+        else "администратор чатов" if can_view_user_chats(user_id)
+        else "администратор"
+    )
     text = (
         f"{pe('admin')} <b>Админ-панель</b> · {role}\n\n"
         f"Пользователей: <b>{users}</b>\n"
@@ -2900,9 +2912,10 @@ def page_panel(user_id: int) -> tuple[str, dict]:
         [btn("Экспорт CSV", "export", emoji="view"), btn("Проверка работы", "health", emoji="check")],
         [btn("Журнал действий", "audit", emoji="history")],
     ]
+    if can_view_user_chats(user_id):
+        rows.append([btn("Открыть чаты", web_app=WEBAPP_URL, emoji="view", style="success")])
     if is_owner_admin(user_id):
         rows.extend([
-            [btn("Открыть чаты", web_app=WEBAPP_URL, emoji="view", style="success")],
             [btn("Администраторы", "admins", emoji="admin"), btn("Приватность чатов", "privacy", emoji="warning")],
             [btn("История просмотров", "viewaudit", emoji="history"), btn("Отчёты", "digsettings", emoji="history")],
             [btn("Хранение", "storage", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")],
@@ -2916,12 +2929,13 @@ def page_admins(user_id: int) -> tuple[str, dict]:
 
     delegated = list_delegated_admins()
     owner_lines = [f"• <code>{uid}</code> — владелец" for uid in sorted(ADMIN_USER_IDS)]
+    viewer_lines = [f"• <code>{uid}</code> — администратор чатов" for uid in sorted(CHAT_VIEWER_USER_IDS)]
     admin_lines = [
         f"• <code>{uid}</code> — добавил <code>{added_by}</code>, "
         f"{time.strftime('%d.%m.%Y', time.localtime(created_at))}"
         for uid, added_by, created_at in delegated
     ]
-    body = "\n".join(owner_lines + admin_lines) or "Администраторов пока нет."
+    body = "\n".join(owner_lines + viewer_lines + admin_lines) or "Администраторов пока нет."
     text = (
         f"{pe('admin')} <b>Администраторы</b>\n\n{body}\n\n"
         "Администраторы получают доступ к пользователям, поддержке, статистике, "
@@ -4202,8 +4216,8 @@ def handle_callback_query(query: dict) -> None:
             send_message(chat_id, "Напиши короткую метку пользователя. Чтобы удалить метку, отправь минус: <code>-</code>", parse_mode="HTML")
             alert = "Жду метку"
     elif data.startswith("usearch:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 3 and all(part.isdigit() for part in parts[1:]) and not user_chats_are_hidden(int(parts[1])):
@@ -4211,43 +4225,43 @@ def handle_callback_query(query: dict) -> None:
             send_message(chat_id, "Напиши имя, @username, ID чата или часть сообщения. Отмена — /cancel")
             alert = "Жду запрос"
     elif data.startswith("usres:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 4 and all(part.isdigit() for part in parts[1:]):
             page = page_chat_search_results(user_id, int(parts[1]), int(parts[2]), int(parts[3]))
     elif data.startswith("uchats:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца бота", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 4 and all(part.isdigit() for part in parts[1:]):
             page = page_user_chats(user_id, int(parts[1]), int(parts[2]), int(parts[3]))
     elif data.startswith("ucfilters:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
             page = page_chat_filters(user_id, int(parts[1]), int(parts[2]))
     elif data.startswith("ucl:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 6 and all(part.isdigit() for part in parts[1:4]):
             page = page_user_chats(user_id, int(parts[1]), int(parts[2]), int(parts[3]), parts[4], parts[5])
     elif data.startswith("uchat:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]):
             page = page_chat_overview(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
     elif data.startswith("upin:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]) and not user_chats_are_hidden(int(parts[1])):
@@ -4255,8 +4269,8 @@ def handle_callback_query(query: dict) -> None:
             page = page_chat_overview(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
             alert = "Чат закреплён" if pinned else "Чат откреплён"
     elif data.startswith("umsg:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца бота", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 6 and all(part.lstrip("-").isdigit() for part in parts[1:]):
@@ -4264,8 +4278,8 @@ def handle_callback_query(query: dict) -> None:
                 user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
             )
     elif data.startswith("uday:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 7 and all(part.lstrip("-").isdigit() for part in parts[1:6]):
@@ -4273,15 +4287,15 @@ def handle_callback_query(query: dict) -> None:
                 user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5]), parts[6]
             )
     elif data.startswith("udates:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]):
             page = page_chat_dates(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
     elif data.startswith("udatein:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 5 and all(part.lstrip("-").isdigit() for part in parts[1:]) and not user_chats_are_hidden(int(parts[1])):
@@ -4289,15 +4303,15 @@ def handle_callback_query(query: dict) -> None:
             send_message(chat_id, "Напиши дату в формате <code>24.09.2026</code>. Отмена — /cancel", parse_mode="HTML")
             alert = "Жду дату"
     elif data.startswith("ugal:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 7 and all(part.lstrip("-").isdigit() for part in parts[1:5]) and parts[6].isdigit():
             page = page_chat_media(user_id, int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), parts[5], int(parts[6]))
     elif data.startswith("uexall:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 4 and parts[1] in {"t", "m"} and all(part.isdigit() for part in parts[2:]):
@@ -4319,8 +4333,8 @@ def handle_callback_query(query: dict) -> None:
                     export_path.unlink(missing_ok=True)
             page = page_user_card(user_id, int(parts[2]), int(parts[3]))
     elif data.startswith("uexport:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) == 3 and all(part.lstrip("-").isdigit() for part in parts[1:]):
@@ -4337,8 +4351,8 @@ def handle_callback_query(query: dict) -> None:
                     export_path.unlink(missing_ok=True)
             page = page_chat_overview(user_id, int(parts[1]), int(parts[2]))
     elif data.startswith("umedia:"):
-        if not is_owner_admin(user_id):
-            answer_callback(query_id, text="Только для владельца бота", show_alert=True)
+        if not can_view_user_chats(user_id):
+            answer_callback(query_id, text="Только для администраторов чатов", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) != 4 or not all(part.lstrip("-").isdigit() for part in parts[1:]):
@@ -5200,7 +5214,7 @@ def handle_regular_message(message: dict) -> None:
         send_menu_page(user_id, chat_id, page_text, page_markup)
         return
 
-    if text and not text.startswith("/") and chat_id in PENDING_CHAT_SEARCH and is_owner_admin(user_id):
+    if text and not text.startswith("/") and chat_id in PENDING_CHAT_SEARCH and can_view_user_chats(user_id):
         target_id, return_page, deadline = PENDING_CHAT_SEARCH.pop(chat_id)
         if deadline < time.time() or user_chats_are_hidden(target_id):
             send_message(chat_id, "Поиск больше недоступен.")
@@ -5215,7 +5229,7 @@ def handle_regular_message(message: dict) -> None:
         send_menu_page(user_id, chat_id, page_text, page_markup)
         return
 
-    if text and not text.startswith("/") and chat_id in PENDING_CHAT_DATE and is_owner_admin(user_id):
+    if text and not text.startswith("/") and chat_id in PENDING_CHAT_DATE and can_view_user_chats(user_id):
         target_id, target_chat_id, return_page, chats_page, deadline = PENDING_CHAT_DATE.pop(chat_id)
         if deadline < time.time() or user_chats_are_hidden(target_id):
             send_message(chat_id, "Выбор даты больше недоступен.")

@@ -339,8 +339,8 @@ def make_handler(bot):
                     user = self._cookie_user()
                     if not user:
                         raise PermissionError("Откройте приложение из бота")
-            if not bot.is_owner_admin(_int(user.get("id"))):
-                raise PermissionError("Доступ есть только у владельцев бота")
+            if not bot.can_view_user_chats(_int(user.get("id"))):
+                raise PermissionError("Доступ есть только у администраторов чатов")
             return user
 
         def _serve_static(self, path: str) -> None:
