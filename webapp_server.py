@@ -353,6 +353,8 @@ def make_handler(bot):
                 candidate = STATIC_DIR / "index.html"
             data = candidate.read_bytes()
             mime = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+            if candidate.name.endswith(".bundle"):
+                mime = "application/javascript"
             self.send_response(HTTPStatus.OK)
             self._security_headers()
             self.send_header("Content-Type", f"{mime}; charset=utf-8" if mime.startswith("text/") or mime.endswith("javascript") else mime)
