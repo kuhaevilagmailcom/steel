@@ -53,7 +53,7 @@ style_samples = {
     "cute": ("привет, спасибо, ты где?", ("приветик", "спасибочки", "ты гдеее")),
     "vasya": ("что ты сейчас делаешь вообще?", ("чё", "щас", "ваще")),
     "brother": ("привет, спасибо, всё нормально", ("салам", "от души", "всё ровно")),
-    "dumb": ("короче, я не знаю что сейчас делать", ("кароч", "я хз", "чо", "щас")),
+    "dumb": ("короче, я не знаю что сейчас делать", ("я это... не знаю", "чо", "щас")),
 }
 for style, (source, expected_parts) in style_samples.items():
     b.set_communication_style(111, style)
@@ -61,6 +61,18 @@ for style, (source, expected_parts) in style_samples.items():
     assert styled != source, style
     assert all(part in styled.lower() for part in expected_parts), (style, styled)
     assert b.stylize_message_text(style, styled) == styled, "стиль не должен накладываться дважды"
+
+natural_style_samples = {
+    "cute": ("ты где, скоро придёшь?", ("ты гдеее", "🥺", ":3")),
+    "vasya": ("что ты сейчас делаешь вообще?", ("чё", "щас", "ваще")),
+    "brother": ("можешь позвонить мне вечером?", ("брат", "бро", "родной")),
+    "dumb": ("ты где, скоро придёшь?", ("это...",)),
+}
+for style, (source, alternatives) in natural_style_samples.items():
+    styled = b.stylize_message_text(style, source)
+    assert styled != source, (style, styled)
+    assert any(part in styled.lower() for part in alternatives), (style, styled)
+    assert b.stylize_message_text(style, styled) == styled, (style, "двойная стилизация", styled)
 
 for protected in ("/start", "https://example.com", "@username", "+7 999 123-45-67"):
     assert b.transform_message_style(111, protected) == protected

@@ -1467,20 +1467,19 @@ def _style_plain_segment(style: str, segment: str) -> str:
             "ты где": "ты гдеее",
             "доброе утро": "доброе утречко",
             "спокойной ночи": "сладких снов",
-            "пожалуйста": "пожааалуйста",
+            "пожалуйста": "пожалуйстаа",
             "спасибо": "спасибочки",
             "привет": "приветик",
             "здравствуй": "приветик",
             "пока": "поки",
-            "хорошо": "хорошенько",
-            "отлично": "суперски",
-            "очень": "очень-очень",
-            "люблю": "обожаю",
+            "хорошо": "хорошо, милаш",
+            "отлично": "супер",
+            "очень скучаю": "ужасно скучаю",
             "да": "ага",
             "нет": "неа",
         }
         result = _replace_style_phrases(segment, replacements)
-        return re.sub(r"(?<![!?])\?(?![!?])", "??", result)
+        return result
 
     if style == "vasya":
         replacements = {
@@ -1491,52 +1490,120 @@ def _style_plain_segment(style: str, segment: str) -> str:
             "сейчас": "щас",
             "вообще": "ваще",
             "конечно": "канеш",
-            "пожалуйста": "пж",
+            "пожалуйста": "будь добр",
             "нормально": "норм",
             "хорошо": "норм",
             "здесь": "тут",
             "теперь": "терь",
             "что": "чё",
-            "давай": "го",
+            "давай": "давай",
         }
         result = _replace_style_phrases(segment, replacements)
         return re.sub(r"(?iu)\bне знаю\b", "хз", result)
 
     if style == "brother":
         replacements = {
-            "большое спасибо": "от души, брат",
+            "большое спасибо": "от души",
             "спасибо": "от души",
-            "пожалуйста": "будь добр",
+            "пожалуйста": "будь добр, брат",
             "привет": "салам",
             "здравствуй": "салам",
             "хорошо": "договорились",
             "отлично": "красиво",
-            "друг": "брат",
-            "дружище": "брат",
+            "друг": "бро",
+            "дружище": "братан",
             "не переживай": "не кипишуй",
             "всё нормально": "всё ровно",
         }
         return _replace_style_phrases(segment, replacements)
 
     replacements = {
-        "потому что": "патамушта",
-        "получается": "палучаеца",
+        "потому что": "потому что, получается",
+        "получается": "выходит",
         "что-нибудь": "чо-нибудь",
         "что-то": "чо-то",
         "ничего": "ничо",
         "сейчас": "щас",
         "вообще": "ваще",
-        "конечно": "канешна",
-        "короче": "кароч",
-        "типа": "типо",
+        "конечно": "ну да, наверное",
+        "короче": "короче",
+        "типа": "типа",
         "что": "чо",
-        "зачем": "зач",
-        "почему": "пачиму",
-        "хорошо": "ну норм",
+        "зачем": "зачем это",
+        "почему": "почему это",
+        "хорошо": "ну, нормально",
     }
     result = _replace_style_phrases(segment, replacements)
-    result = re.sub(r"(?iu)\bя не знаю\b", "я хз", result)
-    return re.sub(r"(?iu)\bне знаю\b", "хз", result)
+    result = re.sub(r"(?iu)\bя не знаю\b", "я это... не знаю", result)
+    return re.sub(r"(?iu)(?<!это\.\.\. )\bне знаю\b", "как бы не знаю", result)
+
+
+def _style_intent(text: str) -> str:
+    plain = text.strip().lower()
+    if "?" in plain or re.match(r"^(где|когда|куда|почему|зачем|как|кто|что|ты|вы)\b", plain):
+        return "question"
+    if re.search(r"\b(спасибо|благодарю|от души|спасибочки)\b", plain):
+        return "thanks"
+    if re.search(r"\b(привет|здравствуй|доброе утро|салам|приветик)\b", plain):
+        return "greeting"
+    if re.search(r"\b(пожалуйста|можешь|сделай|пришли|позвони|напиши)\b", plain):
+        return "request"
+    return "statement"
+
+
+def _add_style_flavour(style: str, text: str, source: str) -> str:
+    """Adds one contextual touch at most; deterministic and idempotent."""
+    stripped = text.strip()
+    if not stripped:
+        return text
+    intent = _style_intent(source)
+    score = sum(ord(char) for char in source.lower())
+    leading = text[: len(text) - len(text.lstrip())]
+    body = text.strip()
+
+    if style == "cute":
+        if intent == "question" and len(body) > 10 and not re.search(r"[🥺💗♡]|:3", body):
+            body = body.rstrip() + (" 🥺" if score % 2 else " :3")
+        elif intent in {"greeting", "thanks"} and not re.search(r"[💗♡]|:3", body):
+            body = body.rstrip(" .!") + (" 💗" if score % 2 else " :3")
+        elif len(body) > 30 and score % 4 == 0 and not re.search(r"[💗♡]|:3", body):
+            body += " ♡"
+        elif text == source and len(body) > 5 and not re.search(r"[🥺💗✨♡]|:3", body):
+            body = body.rstrip(" .!") + (" 💗" if re.search(r"(?iu)\b(тебя|люблю|скучаю)\b", body) else " ✨")
+    elif style == "vasya":
+        if intent == "question" and len(body) > 15 and not re.match(r"(?iu)^(вась|слушай)\b", body):
+            body = ("вась, " if score % 2 else "слушай, ") + body[:1].lower() + body[1:]
+        elif intent == "statement" and len(body) > 32 and score % 4 == 0 and "ну ты понял" not in body.lower():
+            body = body.rstrip(" .") + ", ну ты понял"
+        elif text == source and len(body) > 5 and not re.search(r"(?iu)\b(вась|слушай|прикинь|ну ты понял)\b", body):
+            if score % 3 == 0:
+                body = "слушай, " + body[:1].lower() + body[1:]
+            elif score % 3 == 1:
+                body = body.rstrip(" .") + ", прикинь"
+            else:
+                body = "вась, " + body[:1].lower() + body[1:]
+    elif style == "brother":
+        if intent in {"question", "request"} and not re.search(r"(?iu)\b(брат|братан|бро|родной)\b", body):
+            address = ("брат" if score % 3 == 0 else "бро" if score % 3 == 1 else "родной")
+            body = f"{address}, " + body[:1].lower() + body[1:]
+        elif intent == "thanks" and not re.search(r"(?iu)\b(брат|братан|бро|родной)\b", body):
+            body = body.rstrip(" .!") + ", брат"
+        elif text == source and len(body) > 5 and not re.search(r"(?iu)\b(брат|братан|бро|родной)\b", body):
+            address = ("брат" if score % 3 == 0 else "бро" if score % 3 == 1 else "родной")
+            body = body.rstrip(" .") + f", {address}"
+    elif style == "dumb":
+        if intent == "question" and not re.match(r"(?iu)^(это|слушай|короче)\b", body):
+            body = "это... " + body[:1].lower() + body[1:]
+        elif len(body) > 24 and score % 3 == 0 and not re.search(r"(?iu)\b(получается|как бы|это\.\.\.)\b", body):
+            split = re.search(r"[,;]", body)
+            if split:
+                pos = split.end()
+                body = body[:pos] + " получается," + body[pos:]
+            else:
+                body = "короче, " + body[:1].lower() + body[1:]
+        elif text == source and len(body) > 5 and not re.match(r"(?iu)^(это|слушай|короче|ну это)\b", body):
+            body = "ну это... " + body[:1].lower() + body[1:]
+    return leading + body
 
 def stylize_message_text(style: str, text: str) -> str:
     if style not in STYLE_LABELS or not text or not text.strip() or text.lstrip().startswith("/"):
@@ -1553,20 +1620,7 @@ def stylize_message_text(style: str, text: str) -> str:
     parts.append(_style_plain_segment(style, text[last:]))
     result = "".join(parts)
 
-    # One finishing touch for the entire message, not for every fragment around
-    # a protected URL/username/phone.
-    stripped = result.strip()
-    score = sum(map(ord, stripped)) if stripped else 0
-
-    if style == "cute" and len(stripped) >= 8 and not re.search(r"(?i)(:3|♡|💗|🥺)\s*$", result):
-        result = result.rstrip() + (" :3" if score % 2 else " ♡")
-    elif style == "vasya" and len(stripped) > 18 and score % 3 == 0 and not re.match(r"(?iu)^\s*(вась|бро)\b", result):
-        leading = result[: len(result) - len(result.lstrip())]
-        result = leading + "вась, " + result.lstrip()
-    elif style == "brother" and len(stripped) > 16 and score % 2 and not re.search(r"(?iu)\b(брат|братан|бро|родной)\b", result):
-        result = result.rstrip() + ", брат"
-    elif style == "dumb" and len(stripped) > 20 and score % 3 == 1 and not re.search(r"(?iu)\b(кароч|короч)\s*$", result):
-        result = result.rstrip(" .") + " кароч"
+    result = _add_style_flavour(style, result, text)
 
     result = re.sub(r"(?:\s+:3){2,}\s*$", " :3", result)
     result = re.sub(r"(?:\s+♡){2,}\s*$", " ♡", result)
