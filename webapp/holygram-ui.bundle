@@ -1,6 +1,6 @@
 (() => {
   const tg = window.Telegram?.WebApp;
-  if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#111318'); tg.setBackgroundColor?.('#090a0d'); }
+  if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#17212b'); tg.setBackgroundColor?.('#0e1621'); }
 
   const state = { users: [], user: null, chats: [], chat: null, nextBefore: null, loadingMore: false };
   const $ = (id) => document.getElementById(id);
@@ -54,6 +54,16 @@
     const today = new Date();
     if (!withDate && date.toDateString() === today.toDateString()) return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
     return date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
+  }
+  function formatDay(ts) {
+    if (!ts) return '';
+    const date = new Date(ts * 1000);
+    const now = new Date();
+    const moscow = value => value.toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });
+    if (moscow(date) === moscow(now)) return 'Сегодня';
+    const yesterday = new Date(now.getTime() - 86400000);
+    if (moscow(date) === moscow(yesterday)) return 'Вчера';
+    return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric', timeZone: 'Europe/Moscow' });
   }
   function skeleton(count = 6) { return Array.from({length: count}, () => '<div class="skeleton"></div>').join(''); }
   function empty(icon, title, text) { return `<div class="empty-icon">${icon}</div><b>${escapeHtml(title)}</b><span>${escapeHtml(text)}</span>`; }
@@ -110,7 +120,7 @@
     if (!state.chat) return;
     document.querySelectorAll('[data-chat]').forEach(el => el.classList.toggle('active', Number(el.dataset.chat) === id));
     $('chatName').textContent = state.chat.name;
-    $('chatMeta').textContent = `${state.chat.message_count} сообщений · ${state.chat.media_count} медиа`;
+    $('chatMeta').textContent = `${state.chat.message_count} сообщений · ${state.chat.media_count} медиа · архив`;
     setAvatar($('chatAvatar'), {id: state.chat.avatar_id, name: state.chat.name});
     $('refreshButton').disabled = false;
     app.dataset.view = 'messages';
@@ -134,7 +144,12 @@
 
   function renderMessages(items, prepend = false) {
     const scroll = $('messageScroll');
-    const html = items.map(message => `
+    let currentDay = '';
+    const html = items.map(message => {
+      const day = formatDay(message.updated_at);
+      const separator = day && day !== currentDay ? `<div class="day-label">${escapeHtml(day)}</div>` : '';
+      currentDay = day;
+      return `${separator}
       <div class="message-row ${message.outgoing ? 'outgoing' : 'incoming'}" data-message="${message.id}">
         <article class="bubble${message.deleted ? ' deleted' : ''}">
           ${!message.outgoing ? `<div class="author">${escapeHtml(message.author)}</div>` : ''}
@@ -142,9 +157,10 @@
           ${mediaMarkup(message.media)}
           ${message.text ? `<div class="message-text">${escapeHtml(message.text)}</div>` : ''}
           ${message.deleted ? '<div class="message-text deleted-label">Сообщение удалено</div>' : ''}
-          <div class="message-meta">${message.edited ? `<span>изменено${message.edit_count > 1 ? ' ' + message.edit_count + '×' : ''}</span>` : ''}<time>${formatTime(message.updated_at)}</time>${message.outgoing ? '<span>✓✓</span>' : ''}</div>
+          <div class="message-meta">${message.edited ? `<span>изменено${message.edit_count > 1 ? ' ' + message.edit_count + '×' : ''}</span>` : ''}<time>${formatTime(message.updated_at)}</time>${message.outgoing ? '<span class="checks">✓✓</span>' : ''}</div>
         </article>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     if (prepend) {
       const oldHeight = scroll.scrollHeight; const holder = document.createElement('div'); holder.innerHTML = html;
       const load = scroll.querySelector('.load-more'); Array.from(holder.children).reverse().forEach(node => load?.after(node));
@@ -202,6 +218,12 @@
       const bootstrap = await api('/api/bootstrap');
       $('ownerAvatar').textContent = initials(bootstrap.owner.name);
       await loadUsers();
+      const targetUser = Number(qs.get('target'));
+      if (targetUser && state.users.some(user => user.id === targetUser)) {
+        await selectUser(targetUser);
+        const targetChat = Number(qs.get('chat'));
+        if (targetChat && state.chats.some(chat => chat.id === targetChat)) await selectChat(targetChat);
+      }
     } catch (error) { showFatal(error.message); }
   })();
 })();
