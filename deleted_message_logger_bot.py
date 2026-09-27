@@ -2757,6 +2757,45 @@ def page_storage_settings(user_id: int) -> tuple[str, dict]:
     return text, kb(rows)
 
 
+TELEGRAM_EXPORT_CSS = """
+:root{color-scheme:dark;--bg:#0e1621;--panel:#17212b;--panel2:#202b36;--line:#0b141d;--text:#f5f7fa;--muted:#8193a5;--accent:#5aa7e8;--selected:#2b5278;--in:#182533;--out:#2b5278}
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text)}a{color:inherit}.shell{min-height:100%;display:grid;grid-template-columns:360px 1fr}.sidebar{min-width:0;background:var(--panel);border-right:1px solid var(--line)}.side-head,.chat-head{height:64px;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}.side-head{justify-content:space-between}.side-head h1{font-size:18px;margin:0}.mode{color:var(--muted);font-size:11px}.owner{display:flex;align-items:center;gap:10px;padding:14px 16px}.avatar{width:44px;height:44px;display:grid;place-items:center;flex:0 0 auto;border-radius:50%;background:linear-gradient(145deg,#69b8f4,#387dba);font-weight:750}.owner b,.owner span{display:block}.owner span,.chat-meta{color:var(--muted);font-size:12px;margin-top:2px}.search{height:38px;margin:0 12px 10px;padding:0 12px;display:flex;align-items:center;border-radius:8px;background:var(--panel2);color:var(--muted);font-size:13px}.chat-list{padding-bottom:20px}.chat-row{min-height:70px;display:flex;align-items:center;gap:11px;padding:9px 13px;text-decoration:none}.chat-row:hover,.chat-row.active{background:var(--selected)}.chat-row .body{min-width:0;flex:1}.line{display:flex;justify-content:space-between;gap:10px}.name{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.time{flex:0 0 auto;color:#9fb0c0;font-size:11px}.preview{display:flex;justify-content:space-between;gap:8px;margin-top:5px;color:var(--muted);font-size:12px}.preview span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.count{min-width:21px;height:21px;display:grid;place-items:center;padding:0 6px;border-radius:11px;background:var(--accent);color:white;font-size:10px}.conversation{min-width:0;display:flex;min-height:100vh;flex-direction:column}.chat-head{box-shadow:0 1px 4px #0004}.chat-head .back{display:none;color:var(--accent);text-decoration:none;font-size:24px}.chat-title{min-width:0}.chat-title b,.chat-title span{display:block}.messages{flex:1;padding:20px clamp(14px,6vw,88px);background-color:var(--bg);background-image:linear-gradient(#0e1621ed,#0e1621ed),radial-gradient(circle at 12px 12px,#7a90a516 1px,transparent 1.5px);background-size:auto,28px 28px}.day{width:max-content;margin:5px auto 15px;padding:5px 11px;border-radius:13px;background:#1b2b39e8;color:#d6e1ea;font-size:11px;font-weight:650}.message{display:flex;margin:4px 0}.message.out{justify-content:flex-end}.bubble{position:relative;max-width:min(76%,680px);padding:7px 9px 5px;border-radius:10px 10px 10px 3px;background:var(--in);box-shadow:0 1px 2px #0005}.bubble:before{content:"";position:absolute;left:-7px;bottom:0;border-width:0 8px 8px 0;border-style:solid;border-color:transparent var(--in) transparent transparent}.out .bubble{border-radius:10px 10px 3px 10px;background:var(--out)}.out .bubble:before{left:auto;right:-7px;border-width:0 0 8px 8px;border-color:transparent transparent transparent var(--out)}.author{color:#68b5f2;font-size:12px;font-weight:700;margin-bottom:4px}.reply{margin-bottom:6px;padding:5px 8px;border-left:3px solid #64b5f6;border-radius:3px;background:#08121b55;font-size:11px}.reply b,.reply span{display:block}.reply b{color:#7fc4f8}.reply span{color:#cbd7e0;margin-top:2px}.text{font-size:14px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}.meta{display:flex;justify-content:flex-end;gap:4px;margin:3px 0 0 15px;color:#aec0cf;font-size:9px}.out .meta{color:#c8e2f6}.checks{color:#72c4ff;letter-spacing:-3px;padding-right:3px}.deleted{opacity:.68;font-style:italic}.media{margin:-3px -5px 6px;overflow:hidden;border-radius:7px}.media img,.media video{display:block;max-width:100%;width:100%;max-height:520px;object-fit:contain;background:#091019}.media video.round{width:220px;height:220px;border-radius:50%;object-fit:cover;border:3px solid #64b5f6}.media audio{display:block;width:min(350px,70vw);height:42px}.media.sticker img,.media.sticker video{width:190px;height:190px;object-fit:contain;background:transparent}.file,.media-missing{display:flex;align-items:center;gap:9px;min-width:240px;padding:9px;border-radius:8px;background:#07111a55;text-decoration:none}.file-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:50%;background:var(--accent);font-weight:800}.media-missing{color:#9eb0c0;font-size:12px}.summary{padding:30px;color:var(--muted);text-align:center}.summary b{display:block;color:var(--text);font-size:22px;margin-bottom:8px}
+@media(max-width:760px){.shell{display:block}.sidebar{min-height:100vh;border:0}.conversation .chat-head .back{display:block}.conversation .messages{padding:14px 10px}.bubble{max-width:88%}.chat-page .sidebar{display:none}.index-page .conversation{display:none}}
+"""
+
+
+def _export_initials(value: object) -> str:
+    parts = re.findall(r"[\wА-Яа-яЁё]+", chat_participant_label(value))
+    return "".join(part[0] for part in parts[:2]).upper() or "?"
+
+
+def _export_day(timestamp: int) -> str:
+    value = datetime.fromtimestamp(int(timestamp), DISPLAY_TIMEZONE)
+    months = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
+    return f"{value.day} {months[value.month - 1]}{f' {value.year}' if value.year != datetime.now(DISPLAY_TIMEZONE).year else ''}"
+
+
+def _export_media_markup(media_type: str | None, archive_name: str | None, file_name: str = "") -> str:
+    label = html.escape(MEDIA_LABELS.get(media_type, media_type or "медиа"))
+    if not archive_name:
+        return f'<div class="media-missing"><span class="file-icon">×</span><span>{label} не включено в этот экспорт</span></div>' if media_type else ""
+    href = html.escape(archive_name, quote=True)
+    suffix = Path(file_name).suffix.lower()
+    if media_type == "photo":
+        return f'<div class="media"><a href="{href}"><img src="{href}" alt="{label}" loading="lazy"></a></div>'
+    if media_type in {"video", "animation"}:
+        return f'<div class="media"><video src="{href}" controls preload="metadata"></video></div>'
+    if media_type == "video_note":
+        return f'<div class="media"><video class="round" src="{href}" controls preload="metadata"></video></div>'
+    if media_type in {"voice", "audio"}:
+        return f'<div class="media"><audio src="{href}" controls preload="metadata"></audio></div>'
+    if media_type == "sticker" and suffix == ".webm":
+        return f'<div class="media sticker"><video src="{href}" autoplay loop muted playsinline></video></div>'
+    if media_type == "sticker" and suffix in {".webp", ".png", ".jpg", ".jpeg", ".gif"}:
+        return f'<div class="media sticker"><img src="{href}" alt="Стикер" loading="lazy"></div>'
+    return f'<a class="file" href="{href}"><span class="file-icon">↓</span><span>{html.escape(file_name or label)}</span></a>'
+
+
 def export_chat_html(
     admin_id: int,
     target_id: int,
@@ -2764,6 +2803,7 @@ def export_chat_html(
     audit: bool = True,
     include_media: bool = True,
     media_limit_bytes: int = 45 * 1024 * 1024,
+    back_href: str = "",
 ) -> Path:
     if not can_view_user_chats(admin_id) or user_chats_are_hidden(target_id):
         raise PermissionError("Чат недоступен")
@@ -2774,7 +2814,7 @@ def export_chat_html(
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             """
-            SELECT m.message_id,m.author,m.content,m.media_type,m.local_media_path,
+            SELECT m.message_id,m.author,m.content,m.media_type,m.local_media_path,m.user_id,
                    m.created_at,m.updated_at,m.deleted_at,m.reply_to_author,m.reply_to_content,m.edit_count
             """ + OWNER_MESSAGES_FROM + " AND m.chat_id=? ORDER BY m.updated_at",
             (target_id, target_id, chat_id),
@@ -2782,30 +2822,49 @@ def export_chat_html(
     blocks = []
     attachments: list[tuple[Path, str]] = []
     total_attachment_bytes = 0
-    for message_id, author, content, media_type, local_path, created_at, updated_at, deleted_at, reply_author, reply_content, edit_count in rows:
-        media_link = ""
+    last_day = ""
+    participant = next((chat_participant_label(row[1]) for row in rows if not same_user_id(row[5], target_id)), f"Чат {chat_id}")
+    for message_id, author, content, media_type, local_path, message_user_id, created_at, updated_at, deleted_at, reply_author, reply_content, edit_count in rows:
+        archive_name = None
+        candidate_name = ""
         if local_path and include_media:
             candidate = Path(str(local_path))
             if candidate.exists() and candidate.is_file() and total_attachment_bytes + candidate.stat().st_size <= media_limit_bytes:
                 archive_name = f"media/{message_id}-{candidate.name}"
+                candidate_name = candidate.name
                 attachments.append((candidate, archive_name))
                 total_attachment_bytes += candidate.stat().st_size
-                media_link = f'<p><a href="{html.escape(archive_name, quote=True)}">{html.escape(MEDIA_LABELS.get(media_type, media_type or "медиа"))}</a></p>'
-        reply_html = f'<div class="reply">Ответ на {html.escape(str(reply_author or "сообщение"))}: {html.escape(str(reply_content or ""))}</div>' if reply_content else ""
+        day = _export_day(updated_at)
+        if day != last_day:
+            blocks.append(f'<div class="day">{html.escape(day)}</div>')
+            last_day = day
+        reply_html = f'<div class="reply"><b>{html.escape(str(reply_author or "Ответ"))}</b><span>{html.escape(str(reply_content or "Сообщение"))}</span></div>' if reply_content else ""
         flags = []
         if deleted_at:
             flags.append("удалено")
         if edit_count:
             flags.append(f"изменено {edit_count} раз")
-        blocks.append(
-            f'<article><header>{html.escape(str(author or "Без имени"))} · {format_display_time(updated_at)} · ID {message_id}'
-            f'{" · " + ", ".join(flags) if flags else ""}</header>{reply_html}<p>{html.escape(str(content or "[без текста]"))}</p>{media_link}</article>'
-        )
+        outgoing = same_user_id(message_user_id, target_id)
+        media_html = _export_media_markup(media_type, archive_name, candidate_name or str(local_path or ""))
+        text_html = f'<div class="text">{html.escape(str(content))}</div>' if content and not str(content).startswith("[") else ""
+        author_html = "" if outgoing else f'<div class="author">{html.escape(str(author or participant))}</div>'
+        checks_html = '<span class="checks">✓✓</span>' if outgoing else ""
+        direction_class = "out" if outgoing else "in"
+        deleted_class = "deleted" if deleted_at else ""
+        blocks.append(f'<div class="message {"out" if outgoing else "in"}"><article class="bubble {"deleted" if deleted_at else ""}">'
+                      f'{author_html}'
+                      f'{reply_html}{media_html}{text_html}'
+                      f'<div class="meta">{" · ".join(flags)} <time>{html.escape(format_display_time(updated_at, "%H:%M"))}</time>{checks_html}</div>'
+                      f'</article></div>')
+    back_link = f'<a class="back" href="{html.escape(back_href, quote=True)}">‹</a>' if back_href else ""
+    empty_messages = '<div class="summary"><b>Сообщений нет</b>В этом диалоге архив пуст.</div>'
+    messages_html = "".join(blocks) if blocks else empty_messages
     document = (
-        "<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
-        "<title>Экспорт диалога</title><style>body{font:16px system-ui;max-width:900px;margin:auto;padding:24px;background:#111;color:#eee}"
-        "article{background:#1d1d1d;padding:14px;margin:10px 0;border-radius:12px}header{color:#f477cf}.reply{border-left:3px solid #777;padding-left:10px;color:#bbb}a{color:#8cc8ff}</style>"
-        f"<body><h1>Диалог {chat_id}</h1><p>Пользователь {target_id} · сообщений {len(rows)}</p>{''.join(blocks)}</body></html>"
+        '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<title>{html.escape(participant)} — экспорт чата</title><style>{TELEGRAM_EXPORT_CSS}</style></head>'
+        f'<body class="chat-page"><main class="conversation"><header class="chat-head">{back_link}<div class="avatar">{html.escape(_export_initials(participant))}</div>'
+        f'<div class="chat-title"><b>{html.escape(participant)}</b><span class="chat-meta">{len(rows)} сообщений · {"с медиа" if include_media else "без медиа"}</span></div></header>'
+        f'<section class="messages">{messages_html}</section></main></body></html>'
     )
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("chat.html", document)
@@ -2828,18 +2887,26 @@ def export_all_user_chats(admin_id: int, target_id: int, include_media: bool = F
             """
             SELECT m.chat_id, COUNT(*),
                    COALESCE(MAX(CASE WHEN m.user_id != ? THEN m.author END), MAX(m.author)),
-                   MAX(m.updated_at)
+                   MAX(m.updated_at), COALESCE(MAX(m.content), '')
             """ + OWNER_MESSAGES_FROM + """
             GROUP BY m.chat_id ORDER BY MAX(m.updated_at) DESC
             """,
             (target_id, target_id, target_id),
         ).fetchall()
+        owner_row = conn.execute(
+            "SELECT first_name,last_name,username FROM users WHERE user_id=?", (target_id,)
+        ).fetchone()
+
+    owner_name = " ".join(str(part).strip() for part in (owner_row or ())[:2] if part).strip()
+    if not owner_name and owner_row and owner_row[2]:
+        owner_name = f"@{owner_row[2]}"
+    owner_name = owner_name or f"Пользователь {target_id}"
 
     index_rows = []
     included_media_bytes = 0
     media_limit = 45 * 1024 * 1024
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as destination:
-        for chat_id, message_count, author, updated_at in chats:
+        for index, (chat_id, message_count, author, updated_at, preview) in enumerate(chats):
             folder = f"chats/chat_{chat_id}"
             remaining_media_bytes = max(0, media_limit - included_media_bytes)
             chat_archive = export_chat_html(
@@ -2849,6 +2916,7 @@ def export_all_user_chats(admin_id: int, target_id: int, include_media: bool = F
                 audit=False,
                 include_media=include_media,
                 media_limit_bytes=remaining_media_bytes,
+                back_href="../../index.html",
             )
             try:
                 with zipfile.ZipFile(chat_archive, "r") as source:
@@ -2863,17 +2931,24 @@ def export_all_user_chats(admin_id: int, target_id: int, include_media: bool = F
             finally:
                 chat_archive.unlink(missing_ok=True)
             label = chat_participant_label(author)
+            safe_preview = str(preview or "Без текста")
+            if safe_preview.startswith("["):
+                safe_preview = MEDIA_LABELS.get(safe_preview.strip("[]"), safe_preview.strip("[]").capitalize())
             index_rows.append(
-                f'<li><a href="{folder}/chat.html">{html.escape(label)}</a> — '
-                f'{int(message_count)} сообщений, {html.escape(format_display_time(updated_at))}</li>'
+                f'<a class="chat-row{" active" if index == 0 else ""}" href="{folder}/chat.html">'
+                f'<span class="avatar">{html.escape(_export_initials(label))}</span><span class="body">'
+                f'<span class="line"><span class="name">{html.escape(label)}</span><span class="time">{html.escape(format_display_time(updated_at, "%d.%m %H:%M"))}</span></span>'
+                f'<span class="preview"><span>{html.escape(safe_preview[:90])}</span><span class="count">{int(message_count)}</span></span></span></a>'
             )
         index_document = (
-            "<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
-            "<title>Все диалоги</title><style>body{font:16px system-ui;max-width:900px;margin:auto;padding:24px;background:#111;color:#eee}"
-            "a{color:#f477cf}li{margin:12px 0}</style>"
-            f"<body><h1>Все диалоги пользователя {target_id}</h1><p>Чатов: {len(chats)} · "
-            f"{'с медиа' if include_media else 'без медиа'}</p>"
-            f"<ul>{''.join(index_rows)}</ul></body></html>"
+            '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>Экспорт чатов — {html.escape(owner_name)}</title><style>{TELEGRAM_EXPORT_CSS}</style></head>'
+            f'<body class="index-page"><div class="shell"><aside class="sidebar"><header class="side-head"><h1>Экспорт чатов</h1>'
+            f'<span class="mode">{"С медиа" if include_media else "Без медиа"}</span></header>'
+            f'<div class="owner"><span class="avatar">{html.escape(_export_initials(owner_name))}</span><div><b>{html.escape(owner_name)}</b><span>{len(chats)} чатов</span></div></div>'
+            f'<div class="search">Поиск недоступен в офлайн-архиве</div><nav class="chat-list">{"".join(index_rows)}</nav></aside>'
+            f'<section class="conversation"><header class="chat-head"><div class="avatar">{html.escape(_export_initials(owner_name))}</div><div class="chat-title"><b>{html.escape(owner_name)}</b><span class="chat-meta">Экспорт переписок</span></div></header>'
+            f'<div class="messages"><div class="summary"><b>Выберите диалог</b>Откройте любой чат в списке слева.</div></div></section></div></body></html>'
         )
         destination.writestr("index.html", index_document)
     log_admin_view(admin_id, target_id, None, "экспорт всех чатов", path.name)

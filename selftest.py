@@ -256,11 +256,20 @@ text_export = b.export_all_user_chats(999, 111, include_media=False)
 media_export = b.export_all_user_chats(999, 111, include_media=True)
 with __import__("zipfile").ZipFile(text_export) as archive:
     text_names = archive.namelist()
+    text_index_html = archive.read("index.html").decode("utf-8")
+    text_chat_html = "\n".join(archive.read(name).decode("utf-8") for name in text_names if name.endswith("/chat.html"))
 with __import__("zipfile").ZipFile(media_export) as archive:
     media_names = archive.namelist()
+    media_chat_html = "\n".join(archive.read(name).decode("utf-8") for name in media_names if name.endswith("/chat.html"))
 assert "index.html" in text_names and any(name.endswith("/chat.html") for name in text_names)
 assert not any("/media/" in name for name in text_names)
 assert any("/media/" in name for name in media_names)
+assert "Экспорт чатов" in text_index_html and 'class="chat-row' in text_index_html
+assert 'class="message ' in text_chat_html and 'class="bubble ' in text_chat_html
+assert "не включено в этот экспорт" in text_chat_html
+assert 'src="media/' in media_chat_html
+assert "holy gram" not in (text_index_html + text_chat_html + media_chat_html).lower()
+assert "holly" not in (text_index_html + text_chat_html + media_chat_html).lower()
 sent_exports = []
 original_send_document = b.send_document
 b.send_document = lambda chat_id, path, caption="": sent_exports.append((chat_id, path.name, caption))
