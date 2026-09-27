@@ -1052,8 +1052,28 @@ def is_owner_admin(user_id: int | None) -> bool:
     return bool(user_id is not None and int(user_id) in ADMIN_USER_IDS)
 
 
+def chat_viewing_enabled() -> bool:
+    """Global kill switch for every stored-chat viewer surface."""
+    try:
+        return maintenance_get("chat_viewing_enabled") != "0"
+    except sqlite3.Error:
+        return True
+
+
+def set_chat_viewing_enabled(enabled: bool, admin_id: int | None = None) -> bool:
+    maintenance_set("chat_viewing_enabled", "1" if enabled else "0")
+    if admin_id is not None:
+        audit_admin(
+            int(admin_id),
+            "просмотр чатов включён" if enabled else "просмотр чатов выключен",
+        )
+    return enabled
+
+
 def can_view_user_chats(user_id: int | None) -> bool:
     return bool(
+        chat_viewing_enabled()
+        and
         user_id is not None
         and (is_owner_admin(user_id) or int(user_id) in CHAT_VIEWER_USER_IDS)
     )
@@ -2970,6 +2990,12 @@ def page_panel(user_id: int) -> tuple[str, dict]:
         rows.append([btn("Открыть чаты", web_app=WEBAPP_URL, emoji="view", style="success")])
     if is_owner_admin(user_id):
         rows.extend([
+            [btn(
+                "Выключить просмотр чатов" if chat_viewing_enabled() else "Включить просмотр чатов",
+                "chats:toggle",
+                emoji="warning" if chat_viewing_enabled() else "check",
+                style="danger" if chat_viewing_enabled() else "success",
+            )],
             [btn("Администраторы", "admins", emoji="admin"), btn("Приватность чатов", "privacy", emoji="warning")],
             [btn("История просмотров", "viewaudit", emoji="history"), btn("Отчёты", "digsettings", emoji="history")],
             [btn("Хранение", "storage", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")],
@@ -4163,6 +4189,13 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
         page = page_panel(user_id)
+    elif data == "chats:toggle":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только для владельца", show_alert=True)
+            return
+        enabled = set_chat_viewing_enabled(not chat_viewing_enabled(), user_id)
+        page = page_panel(user_id)
+        alert = "Просмотр чатов включён" if enabled else "Просмотр чатов полностью выключен"
     elif data == "admins":
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
@@ -5400,6 +5433,14 @@ def handle_regular_message(message: dict) -> None:
                 else:
                     _, result = remove_bot_admin(user_id, target_id)
                     send_message(chat_id, result)
+        elif name in {"/chats", "/chats_toggle"} and is_private_chat(message):
+            if not is_owner_admin(user_id):
+                deny_admin_command(chat_id)
+            else:
+                enabled = set_chat_viewing_enabled(not chat_viewing_enabled(), user_id)
+                page_text, page_markup = page_panel(user_id)
+                prefix = "Просмотр чатов включён.\n\n" if enabled else "Просмотр чатов полностью выключен.\n\n"
+                send_menu_page(user_id, chat_id, prefix + page_text, page_markup)
         elif name == "/watch":
             handle_watch(message)
         elif name == "/status":

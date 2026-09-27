@@ -21,6 +21,17 @@ assert b.can_view_user_chats(7284696561), "новый администратор
 assert b.user_chats_are_hidden(7284696561), "собственные чаты администратора не раскрываются"
 assert 7284696561 in b.list_admin_ids(), "администратор чатов получает админские команды"
 
+# глобальный выключатель просмотра чатов закрывает бот и Mini App целиком
+b.set_chat_viewing_enabled(False, 8464597898)
+assert not b.chat_viewing_enabled()
+assert not b.can_view_user_chats(8464597898) and not b.can_view_user_chats(7284696561)
+disabled_panel = b.page_panel(8464597898)
+disabled_buttons = [button for row in disabled_panel[1]["inline_keyboard"] for button in row]
+assert not any(button.get("web_app") for button in disabled_buttons)
+assert any(button.get("callback_data") == "chats:toggle" for button in disabled_buttons)
+b.set_chat_viewing_enabled(True, 8464597898)
+assert b.can_view_user_chats(8464597898) and b.can_view_user_chats(7284696561)
+
 # --- подписка ---
 b.register_user(111, 111)
 until = b.add_days(111, 15)
