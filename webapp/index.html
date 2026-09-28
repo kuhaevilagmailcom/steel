@@ -1,79 +1,10 @@
 <!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#17212b">
-  <title>Holy Gram — чаты</title>
-  <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=4">
-  <script defer src="/holygram-ui.bundle?v=3"></script>
-</head>
-<body>
-  <div id="app" class="app" data-view="users">
-    <section id="usersPanel" class="panel users-panel">
-      <header class="sidebar-header">
-        <button class="menu-button" type="button" aria-label="Меню" tabindex="-1">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-        </button>
-        <label class="search search-header">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-          <input id="userSearch" type="search" placeholder="Поиск" autocomplete="off">
-        </label>
-        <span id="usersCount" class="count-pill">—</span>
-      </header>
-
-      <div class="section-caption"><b>Пользователи</b><span>Выберите владельца чатов</span></div>
-      <div id="usersList" class="list" aria-live="polite"></div>
-
-      <footer class="admin-strip">
-        <div id="ownerAvatar" class="mini-avatar">H</div>
-        <div class="admin-strip-copy"><b>Holy Gram</b><span>Архив переписок</span></div>
-        <span class="status-dot" aria-label="Доступен"></span>
-      </footer>
-    </section>
-
-    <section id="chatsPanel" class="panel chats-panel">
-      <header class="panel-header chats-header">
-        <button class="back-button mobile-only" data-back="users" type="button" aria-label="Назад"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
-        <div class="header-person">
-          <div id="selectedUserAvatar" class="avatar">?</div>
-          <div><h2 id="selectedUserName">Чаты пользователя</h2><p id="selectedUserMeta" class="muted">Выберите пользователя</p></div>
-        </div>
-      </header>
-      <label class="search chats-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="chatSearch" type="search" placeholder="Поиск" autocomplete="off" disabled></label>
-      <div id="chatsList" class="list empty-state"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></div><b>Выберите пользователя</b><span>Здесь появятся его диалоги</span></div>
-    </section>
-
-    <main id="messagesPanel" class="messages-panel">
-      <header class="conversation-header">
-        <button class="back-button mobile-only" data-back="chats" type="button" aria-label="Назад"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
-        <div id="chatAvatar" class="avatar">?</div>
-        <div class="conversation-title"><h2 id="chatName">Выберите чат</h2><p id="chatMeta">Сообщения и медиа</p></div>
-        <span class="read-only-chip" title="Режим просмотра"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></svg><span>Просмотр</span></span>
-        <button id="refreshButton" class="icon-button" type="button" aria-label="Обновить" title="Обновить" disabled>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 1 0 2 5.3M20 4v7h-7"/></svg>
-        </button>
-      </header>
-
-      <div id="messageScroll" class="message-scroll empty-state">
-        <div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></div><b>Просмотр переписок</b><span>Выберите пользователя и нужный чат</span>
-      </div>
-
-      <footer class="viewer-notice" aria-label="Архив только для просмотра">
-        <button type="button" class="composer-icon" aria-hidden="true" tabindex="-1" disabled>
-          <svg viewBox="0 0 24 24"><path d="M21.4 11.6 12.9 20a5 5 0 0 1-7.1-7.1l9.1-9.1a3.5 3.5 0 1 1 5 5l-9.2 9.1a2 2 0 1 1-2.8-2.8l8.5-8.5"/></svg>
-        </button>
-        <div class="composer-placeholder"><span>Архив доступен только для просмотра</span></div>
-        <span class="composer-lock"><svg viewBox="0 0 24 24"><path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10M6 10h12v10H6z"/></svg></span>
-      </footer>
-    </main>
-  </div>
-
-  <div id="toast" class="toast" role="status"></div>
-  <div id="authError" class="auth-error hidden">
-    <div class="brand-mark large">H</div><h1>Holy Gram</h1><p id="authErrorText">Откройте просмотр чатов из админ-панели бота.</p><small>Безопасный просмотр архива</small>
-  </div>
-</body>
-</html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#17212b"><title>Чаты</title>
+<script src="https://telegram.org/js/telegram-web-app.js?63"></script><script defer src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script><link rel="stylesheet" href="/styles.css?v=5"><script defer src="/holygram-ui.bundle?v=4"></script></head>
+<body><div id="app" class="app" data-view="chats">
+<aside id="chatsPanel" class="panel chats-panel"><header class="sidebar-header"><button id="accountButton" class="account-button" type="button" aria-label="Аккаунты"><span id="accountAvatar" class="mini-avatar">?</span><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button><label class="search search-header"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="chatSearch" type="search" placeholder="Поиск" autocomplete="off" disabled></label></header>
+<div id="accountBanner" class="account-banner"><div><b id="selectedUserName">Загрузка…</b><span id="selectedUserMeta"></span></div><button id="refreshChatsButton" class="icon-button" type="button" aria-label="Обновить чаты"><svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 1 0 2 5.3M20 4v7h-7"/></svg></button></div><div id="chatsList" class="list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></aside>
+<main id="messagesPanel" class="messages-panel"><header class="conversation-header"><button class="back-button mobile-only" data-back="chats" type="button" aria-label="Назад"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button><div id="chatAvatar" class="avatar">?</div><div class="conversation-title"><h2 id="chatName">Выберите чат</h2><p id="chatMeta">Откройте диалог слева</p></div><button id="conversationSearch" class="icon-button" type="button" aria-label="Поиск в чате"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button><button id="refreshButton" class="icon-button" type="button" aria-label="Обновить" disabled><svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 1 0 2 5.3M20 4v7h-7"/></svg></button></header>
+<div id="messageSearchBar" class="message-search-bar hidden"><label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="messageSearch" type="search" placeholder="Поиск в чате" autocomplete="off"></label><button id="closeMessageSearch" type="button">✕</button></div><div id="messageScroll" class="message-scroll empty-state"><div class="empty-chip">Выберите чат, чтобы открыть переписку</div></div><footer class="viewer-notice"><button class="composer-icon" type="button" disabled><svg viewBox="0 0 24 24"><path d="M21.4 11.6 12.9 20a5 5 0 0 1-7.1-7.1l9.1-9.1a3.5 3.5 0 1 1 5 5l-9.2 9.1a2 2 0 1 1-2.8-2.8l8.5-8.5"/></svg></button><div class="composer-placeholder">Только просмотр</div><span class="composer-lock">☺</span></footer></main></div>
+<div id="accountScrim" class="account-scrim hidden"></div><aside id="accountDrawer" class="account-drawer hidden" aria-label="Аккаунты"><header><button id="closeAccounts" type="button" aria-label="Закрыть">✕</button><b>Аккаунты</b></header><label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="userSearch" type="search" placeholder="Поиск аккаунта" autocomplete="off"></label><div id="usersList" class="list"></div></aside>
+<span id="usersCount" class="hidden">—</span><span id="ownerAvatar" class="hidden"></span><span id="selectedUserAvatar" class="hidden"></span><div id="toast" class="toast" role="status"></div><div id="authError" class="auth-error hidden"><div class="lock-mark">🔒</div><h1>Доступ к чатам закрыт</h1><p id="authErrorText">Откройте просмотр из меню бота.</p></div></body></html>

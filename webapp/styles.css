@@ -29,7 +29,7 @@ svg{fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-
 .app{
   height:100dvh;
   display:grid;
-  grid-template-columns:minmax(260px,304px) minmax(292px,352px) minmax(420px,1fr);
+  grid-template-columns:minmax(330px,420px) minmax(480px,1fr);
   overflow:hidden;
   background:var(--tg-bg);
 }
@@ -45,11 +45,11 @@ svg{fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-
   background:var(--tg-panel);
   border-bottom:1px solid rgba(10,18,25,.72);
 }
-.sidebar-header{gap:6px;padding:7px 8px}
+.sidebar-header{gap:8px;padding:7px 10px}
 .panel-header,.conversation-header{gap:10px;padding:6px 12px}
 .conversation-header{z-index:5;box-shadow:0 1px 3px rgba(0,0,0,.28)}
 
-.menu-button,.icon-button,.back-button,.composer-icon{
+.menu-button,.account-button,.icon-button,.back-button,.composer-icon{
   border:0;
   outline:0;
   background:transparent;
@@ -59,6 +59,10 @@ svg{fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-
 .menu-button{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;border-radius:50%}
 .menu-button:hover{background:var(--tg-hover);color:#aebdcc}
 .menu-button svg{width:23px;height:23px}
+.account-button{position:relative;width:44px;height:42px;flex:0 0 44px;padding:0;display:grid;place-items:center;border-radius:50%}
+.account-button:hover{background:var(--tg-hover)}
+.account-button .mini-avatar{width:36px;height:36px}
+.account-button>svg{position:absolute;right:-1px;bottom:0;width:15px;height:15px;padding:2px;border-radius:50%;background:var(--tg-panel);color:#c1d0dc}
 
 .search{
   height:36px;
@@ -167,6 +171,12 @@ h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-si
   border-top:1px solid var(--tg-line);
   background:var(--tg-panel);
 }
+.account-banner{height:38px;display:flex;align-items:center;gap:8px;padding:0 10px 1px 16px;border-bottom:1px solid rgba(10,18,25,.72);background:var(--tg-panel)}
+.account-banner>div{min-width:0;flex:1;display:flex;align-items:baseline;gap:7px}
+.account-banner b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e9f0f5;font-size:12px;font-weight:600}
+.account-banner span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tg-secondary);font-size:10.5px}
+.account-banner .icon-button{width:30px;height:30px}
+.account-banner .icon-button svg{width:17px;height:17px}
 .admin-strip-copy{min-width:0;flex:1}
 .admin-strip b,.admin-strip span{display:block}
 .admin-strip b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;font-weight:600}
@@ -296,6 +306,10 @@ h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-si
   border-top:1px solid var(--tg-line);
   background:var(--tg-panel);
 }
+.message-search-bar{height:48px;display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--tg-panel);border-bottom:1px solid var(--tg-line)}
+.message-search-bar .search{flex:1}
+.message-search-bar>button{width:36px;height:36px;border:0;background:transparent;color:#8295a7;cursor:pointer}
+.empty-chip{padding:6px 12px;border-radius:14px;background:rgba(27,43,57,.9);color:#d8e2ea;font-size:12px;box-shadow:0 1px 2px #0005}
 .composer-icon{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;border-radius:50%;cursor:default;color:#657b8f;opacity:.72}
 .composer-icon svg{width:22px;height:22px}
 .composer-placeholder{min-width:0;flex:1;height:40px;display:flex;align-items:center;padding:0 12px;border-radius:4px;background:#202b36;color:#6f8294;font-size:12.5px;user-select:none}
@@ -324,8 +338,18 @@ h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-si
 .hidden{display:none!important}
 .mobile-only{display:none}
 
+.account-scrim{position:fixed;z-index:19;inset:0;background:rgba(0,0,0,.46);backdrop-filter:blur(1px)}
+.account-drawer{position:fixed;z-index:20;left:10px;top:10px;bottom:10px;width:min(360px,calc(100vw - 20px));display:flex;flex-direction:column;overflow:hidden;border-radius:10px;background:var(--tg-panel);box-shadow:0 14px 60px rgba(0,0,0,.58);animation:drawer-in .16s ease-out}
+.account-drawer header{height:56px;display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--tg-line)}
+.account-drawer header button{width:36px;height:36px;border:0;border-radius:50%;background:transparent;color:#91a2b2;cursor:pointer}
+.account-drawer header button:hover{background:var(--tg-hover)}
+.account-drawer header b{font-size:15px}
+.account-drawer>.search{margin:8px 10px}
+.account-drawer .list-item{min-height:62px}
+@keyframes drawer-in{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+
 @media(max-width:1120px){
-  .app{grid-template-columns:minmax(230px,270px) minmax(260px,315px) 1fr}
+  .app{grid-template-columns:minmax(310px,370px) 1fr}
   .bubble{max-width:82%}
 }
 
@@ -333,10 +357,7 @@ h2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-si
   :root{--header-h:56px}
   .app{display:block;position:relative}
   .panel,.messages-panel{position:absolute;inset:0;border:0;transform:translateX(100%);transition:transform .2s cubic-bezier(.2,.75,.3,1)}
-  .users-panel{transform:translateX(0)}
-  .app[data-view="chats"] .users-panel{transform:translateX(-22%);pointer-events:none}
-  .app[data-view="chats"] .chats-panel{transform:translateX(0)}
-  .app[data-view="messages"] .users-panel{transform:translateX(-100%)}
+  .chats-panel{transform:translateX(0)}
   .app[data-view="messages"] .chats-panel{transform:translateX(-22%);pointer-events:none}
   .app[data-view="messages"] .messages-panel{transform:translateX(0)}
   .mobile-only{display:grid}

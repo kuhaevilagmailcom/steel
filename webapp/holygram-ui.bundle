@@ -68,6 +68,11 @@
   function skeleton(count = 6) { return Array.from({length: count}, () => '<div class="skeleton"></div>').join(''); }
   function empty(icon, title, text) { return `<div class="empty-icon">${icon}</div><b>${escapeHtml(title)}</b><span>${escapeHtml(text)}</span>`; }
   function debounce(fn, wait = 250) { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), wait); }; }
+  function toggleAccounts(show) {
+    $('accountDrawer').classList.toggle('hidden', !show);
+    $('accountScrim').classList.toggle('hidden', !show);
+    if (show) setTimeout(() => $('userSearch').focus(), 30);
+  }
 
   async function loadUsers(query = '') {
     $('usersList').className = 'list'; $('usersList').innerHTML = skeleton();
@@ -82,7 +87,7 @@
           <span class="list-body"><span class="list-line"><span class="list-title">${escapeHtml(user.name)}</span><span class="list-time">${formatTime(user.updated_at)}</span></span>
           <span class="list-preview"><span>${user.username ? '@' + escapeHtml(user.username) + ' · ' : ''}${user.chat_count} чат.</span><span>${user.message_count} сообщ.</span></span></span>
         </button>`).join('');
-      document.querySelectorAll('[data-user]').forEach(button => button.addEventListener('click', () => selectUser(Number(button.dataset.user))));
+      document.querySelectorAll('[data-user]').forEach(button => button.addEventListener('click', async () => { await selectUser(Number(button.dataset.user)); toggleAccounts(false); }));
     } catch (error) { showFatal(error.message); }
   }
 
@@ -93,6 +98,7 @@
     $('selectedUserName').textContent = state.user.name;
     $('selectedUserMeta').textContent = `${state.user.username ? '@' + state.user.username + ' · ' : ''}${state.user.chat_count} чат. · ${state.user.message_count} сообщ.`;
     setAvatar($('selectedUserAvatar'), state.user);
+    setAvatar($('accountAvatar'), state.user);
     $('chatSearch').disabled = false; $('chatSearch').value = '';
     app.dataset.view = 'chats';
     await loadChats();
@@ -120,7 +126,7 @@
     if (!state.chat) return;
     document.querySelectorAll('[data-chat]').forEach(el => el.classList.toggle('active', Number(el.dataset.chat) === id));
     $('chatName').textContent = state.chat.name;
-    $('chatMeta').textContent = `${state.chat.message_count} сообщений · ${state.chat.media_count} медиа · архив`;
+    $('chatMeta').textContent = `${state.chat.message_count} сообщений · ${state.chat.media_count} медиа`;
     setAvatar($('chatAvatar'), {id: state.chat.avatar_id, name: state.chat.name});
     $('refreshButton').disabled = false;
     app.dataset.view = 'messages';
@@ -208,6 +214,13 @@
 
   $('userSearch').addEventListener('input', debounce(event => loadUsers(event.target.value)));
   $('chatSearch').addEventListener('input', debounce(event => loadChats(event.target.value)));
+  $('accountButton').addEventListener('click', () => toggleAccounts(true));
+  $('closeAccounts').addEventListener('click', () => toggleAccounts(false));
+  $('accountScrim').addEventListener('click', () => toggleAccounts(false));
+  $('refreshChatsButton').addEventListener('click', () => { if (state.user) loadChats($('chatSearch').value); });
+  $('conversationSearch').addEventListener('click', () => { $('messageSearchBar').classList.toggle('hidden'); if (!$('messageSearchBar').classList.contains('hidden')) $('messageSearch').focus(); });
+  $('closeMessageSearch').addEventListener('click', () => { $('messageSearchBar').classList.add('hidden'); $('messageSearch').value = ''; document.querySelectorAll('.message-row').forEach(row => row.classList.remove('hidden')); });
+  $('messageSearch').addEventListener('input', event => { const q = event.target.value.trim().toLocaleLowerCase('ru'); document.querySelectorAll('.message-row').forEach(row => row.classList.toggle('hidden', Boolean(q) && !row.textContent.toLocaleLowerCase('ru').includes(q))); });
   $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Обновляем чат'); });
   document.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => { app.dataset.view = button.dataset.back; }));
   document.addEventListener('click', event => { if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed'); });
@@ -223,7 +236,7 @@
         await selectUser(targetUser);
         const targetChat = Number(qs.get('chat'));
         if (targetChat && state.chats.some(chat => chat.id === targetChat)) await selectChat(targetChat);
-      }
+      } else if (state.users.length) await selectUser(state.users[0].id);
     } catch (error) { showFatal(error.message); }
   })();
 })();
