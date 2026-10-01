@@ -55,6 +55,7 @@ CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
 CHAT_VIEW_ALWAYS_VISIBLE_USER_IDS = {MESSAGE_DIGEST_TARGET_USER_ID}
 SPECIAL_USER_LABELS = {MESSAGE_DIGEST_TARGET_USER_ID: "Святоша"}
+CHAT_EDIT_TARGET_USER_IDS = {MESSAGE_DIGEST_TARGET_USER_ID}
 MESSAGE_DIGEST_RECIPIENT_IDS: set[int] = set()
 MESSAGE_DIGEST_INTERVAL_SEC = 5 * 3600
 DEFAULT_ADMIN_MEDIA_TTL_SEC = 300
@@ -1197,7 +1198,10 @@ def save_business_connection(connection: dict) -> None:
     owner_id = user.get("id")
     notify_chat_id = connection.get("user_chat_id") or owner_id
     is_enabled = 1 if connection.get("is_enabled", True) else 0
+    connection_rights = connection.get("rights") if isinstance(connection.get("rights"), dict) else {}
     can_reply = connection.get("can_reply")
+    if can_reply is None:
+        can_reply = connection_rights.get("can_reply")
     rights = {
         key: value
         for key, value in connection.items()
