@@ -1,10 +1,6 @@
 (() => {
   const tg = window.Telegram?.WebApp;
-<<<<<<< HEAD
-  if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#0b0710'); tg.setBackgroundColor?.('#0b0710'); }
-=======
   if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#000000'); tg.setBackgroundColor?.('#000000'); }
->>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
 
   const state = { users: [], user: null, chats: [], chat: null, filter: 'all', nextBefore: null, loadingMore: false };
   const $ = (id) => document.getElementById(id);
@@ -257,12 +253,8 @@
   $('conversationSearch').addEventListener('click', () => { $('messageSearchBar').classList.toggle('hidden'); if (!$('messageSearchBar').classList.contains('hidden')) $('messageSearch').focus(); });
   $('closeMessageSearch').addEventListener('click', () => { $('messageSearchBar').classList.add('hidden'); $('messageSearch').value = ''; document.querySelectorAll('.message-row').forEach(row => row.classList.remove('hidden')); });
   $('messageSearch').addEventListener('input', event => { const q = event.target.value.trim().toLocaleLowerCase('ru'); document.querySelectorAll('.message-row').forEach(row => row.classList.toggle('hidden', Boolean(q) && !row.textContent.toLocaleLowerCase('ru').includes(q))); });
-<<<<<<< HEAD
-  $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Чат синхронизирован'); });
-=======
   document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(item => item.classList.toggle('active', item === button)); renderChats($('chatSearch').value); }));
-  $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Обновляем чат'); });
->>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
+  $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Чат синхронизирован'); });
   document.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => { app.dataset.view = button.dataset.back; }));
   document.addEventListener('click', event => { const download = event.target.closest('[data-download]'); if (download) { event.preventDefault(); event.stopPropagation(); downloadMedia(download); return; } if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed'); });
   document.addEventListener('error', event => { if (event.target instanceof HTMLImageElement && event.target.closest('.avatar')) event.target.remove(); }, true);
