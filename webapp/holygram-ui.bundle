@@ -1,6 +1,6 @@
 (() => {
   const tg = window.Telegram?.WebApp;
-  if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#17212b'); tg.setBackgroundColor?.('#0e1621'); }
+  if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#0b0710'); tg.setBackgroundColor?.('#0b0710'); }
 
   const state = { users: [], user: null, chats: [], chat: null, nextBefore: null, loadingMore: false };
   const $ = (id) => document.getElementById(id);
