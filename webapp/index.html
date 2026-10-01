@@ -7,8 +7,8 @@
   <title>Чаты</title>
   <script src="https://telegram.org/js/telegram-web-app.js?66"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=7">
-  <script defer src="/holygram-ui.bundle?v=6"></script>
+  <link rel="stylesheet" href="/styles.css?v=8">
+  <script defer src="/holygram-ui.bundle?v=7"></script>
 </head>
 <body>
   <div id="app" class="app" data-view="chats">
@@ -55,6 +55,20 @@
   </aside>
 
   <span id="usersCount" class="hidden">—</span><span id="ownerAvatar" class="hidden"></span><span id="selectedUserAvatar" class="hidden"></span>
+
+  <div id="editScrim" class="edit-scrim hidden"></div>
+  <section id="editSheet" class="edit-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="editSheetTitle">
+    <header class="edit-sheet-header">
+      <button id="cancelEdit" class="edit-sheet-action" type="button">Отмена</button>
+      <b id="editSheetTitle">Редактировать</b>
+      <button id="saveEdit" class="edit-sheet-action edit-save" type="button">Готово</button>
+    </header>
+    <div class="edit-sheet-body">
+      <textarea id="editMessageText" maxlength="4096" rows="5" placeholder="Текст сообщения"></textarea>
+      <div class="edit-sheet-hint">Изменение будет отправлено в Telegram от имени выбранного Business-аккаунта.</div>
+    </div>
+  </section>
+
   <div id="toast" class="toast" role="status"></div>
   <div id="authError" class="auth-error hidden"><div class="lock-mark">🔒</div><h1>Доступ к чатам закрыт</h1><p id="authErrorText">Откройте просмотр из меню бота.</p></div>
 </body>
