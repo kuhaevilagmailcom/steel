@@ -90,3 +90,57 @@ html,body,button,input,textarea,select{
 @media(max-width:760px){
   .floating-sync{right:16px;bottom:82px;width:44px;height:44px;border-radius:15px}
 }
+
+
+/* Business message editor */
+.message-edit{
+  width:22px;height:22px;flex:0 0 22px;display:grid;place-items:center;
+  margin-right:2px;padding:0;border:0;border-radius:50%;
+  background:transparent;color:inherit;opacity:.74;cursor:pointer;
+}
+.message-edit:hover{background:#ffffff1a;opacity:1}
+.message-edit:active{transform:scale(.9)}
+.message-edit svg{width:13px;height:13px;stroke-width:1.9}
+
+.edit-scrim{
+  position:fixed;z-index:49;inset:0;background:#0009;
+  backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);
+}
+.edit-sheet{
+  position:fixed;z-index:50;left:50%;bottom:18px;
+  width:min(560px,calc(100vw - 24px));
+  transform:translateX(-50%);
+  overflow:hidden;border:1px solid #343437;border-radius:20px;
+  background:#1c1c1e;box-shadow:0 24px 80px #000c;
+  animation:edit-sheet-in .18s ease-out;
+}
+.edit-sheet-header{
+  min-height:54px;display:grid;grid-template-columns:1fr auto 1fr;
+  align-items:center;padding:0 12px;border-bottom:1px solid #303033;
+}
+.edit-sheet-header b{font-size:15px;text-align:center}
+.edit-sheet-action{
+  min-height:40px;padding:0;border:0;background:transparent;
+  color:#0a84ff;font-size:14px;font-weight:650;cursor:pointer;
+}
+.edit-sheet-action:first-child{text-align:left}
+.edit-sheet-action:last-child{text-align:right}
+.edit-sheet-action:disabled{opacity:.4;cursor:default}
+.edit-save{font-weight:750}
+.edit-sheet-body{padding:12px}
+.edit-sheet textarea{
+  width:100%;min-height:118px;max-height:42vh;resize:vertical;
+  padding:11px 12px;border:1px solid #3a3a3c;border-radius:14px;
+  outline:0;background:#242426;color:#fff;font:inherit;font-size:14px;
+  line-height:20px;caret-color:#0a84ff;
+}
+.edit-sheet textarea:focus{border-color:#0a84ff;box-shadow:0 0 0 2px #0a84ff24}
+.edit-sheet-hint{margin:8px 2px 1px;color:#8e8e93;font-size:10.5px;line-height:15px}
+@keyframes edit-sheet-in{from{opacity:0;transform:translate(-50%,18px)}to{opacity:1;transform:translate(-50%,0)}}
+@media(max-width:780px){
+  .edit-sheet{
+    bottom:0;width:100%;border-left:0;border-right:0;border-bottom:0;
+    border-radius:18px 18px 0 0;padding-bottom:env(safe-area-inset-bottom);
+  }
+  .edit-sheet textarea{min-height:104px;max-height:34vh}
+}
