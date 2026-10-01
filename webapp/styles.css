@@ -20,7 +20,7 @@
   --radius-lg:20px;
   --radius-md:15px;
   --radius-sm:11px;
-  font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-family:"Trebuchet MS","Avenir Next","Segoe UI",Arial,sans-serif;
   font-synthesis:none;
 }
 
@@ -345,3 +345,63 @@ h1,h2,p{margin:0}
 }
 
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+
+/* Typography refresh: intentionally not Telegram-like */
+html,body,button,input,textarea,select{
+  font-family:"Trebuchet MS","Avenir Next","Segoe UI",Arial,sans-serif!important;
+}
+.brand-copy strong,.conversation-title h2,.list-title,.viewer-copy b,.account-banner b{
+  font-family:"Avenir Next","Trebuchet MS","Segoe UI",Arial,sans-serif!important;
+  letter-spacing:-.018em;
+}
+.eyebrow,.section-heading,.list-time,.message-time,.day-label{
+  font-family:"Trebuchet MS","Avenir Next","Segoe UI",Arial,sans-serif!important;
+  letter-spacing:.055em;
+}
+
+/* New sync controls */
+.section-heading{min-height:36px;padding-right:12px}
+.section-heading>span:first-child{flex:1}
+.sync-button{
+  border:1px solid rgba(255,255,255,.08);
+  outline:0;
+  display:grid;
+  place-items:center;
+  color:#c3aebb;
+  background:#120d14;
+  cursor:pointer;
+  transition:transform .16s ease,border-color .16s ease,background .16s ease,color .16s ease;
+  box-shadow:0 10px 24px rgba(0,0,0,.18);
+}
+.sync-button:hover:not(:disabled){
+  transform:translateY(-1px);
+  color:#fff;
+  border-color:rgba(255,58,167,.34);
+  background:#211421;
+}
+.sync-button:active:not(:disabled){transform:translateY(0) scale(.96)}
+.sync-button:disabled{opacity:.3;cursor:default}
+.sync-button svg{width:18px;height:18px;stroke-width:1.9}
+.sync-button-compact{
+  width:32px;height:32px;flex:0 0 32px;
+  border-radius:11px;
+  margin-left:2px;
+}
+.floating-sync{
+  position:absolute;
+  right:24px;
+  bottom:88px;
+  z-index:7;
+  width:46px;height:46px;
+  border-radius:16px;
+  color:#fff;
+  background:linear-gradient(145deg,#281725,#171018);
+  border-color:rgba(255,58,167,.3);
+  box-shadow:0 14px 34px rgba(0,0,0,.34),0 0 0 1px rgba(255,58,167,.04);
+}
+.floating-sync:hover:not(:disabled){
+  background:linear-gradient(145deg,#351a30,#21131f);
+}
+@media(max-width:760px){
+  .floating-sync{right:16px;bottom:82px;width:44px;height:44px;border-radius:15px}
+}
