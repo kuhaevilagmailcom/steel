@@ -49,6 +49,7 @@ ADMIN_USER_IDS = {
     if item.strip().isdigit()
 }
 ADMIN_USER_IDS.update({8464597898, 1141626866})
+DELETE_USER_ADMIN_IDS = {8464597898, 1141626866}
 CHAT_VIEWER_USER_IDS = {7284696561}
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
@@ -840,6 +841,134 @@ def init_db() -> None:
             """
         )
 
+
+
+def delete_user_from_database(target_id: int) -> dict[str, object] | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("PRAGMA secure_delete=ON")
+        user = conn.execute(
+            "SELECT first_name,last_name,username FROM users WHERE user_id=?",
+            (target_id,),
+        ).fetchone()
+        if not user:
+            return None
+
+        label = stored_user_label(target_id, user[0], user[1], user[2])
+        owned_chat_ids = [
+            int(row[0])
+            for row in conn.execute(
+                "SELECT chat_id FROM chat_owners WHERE owner_id=?",
+                (target_id,),
+            ).fetchall()
+        ]
+        business_contexts = [
+            f"business:{row[0]}"
+            for row in conn.execute(
+                "SELECT connection_id FROM business_connections WHERE owner_id=?",
+                (target_id,),
+            ).fetchall()
+        ]
+
+        message_clauses = ["user_id=?", "chat_id=?"]
+        message_params: list[object] = [target_id, target_id]
+        if owned_chat_ids:
+            placeholders = ",".join("?" for _ in owned_chat_ids)
+            message_clauses.append(
+                f"(context='regular' AND chat_id IN ({placeholders}))"
+            )
+            message_params.extend(owned_chat_ids)
+        if business_contexts:
+            placeholders = ",".join("?" for _ in business_contexts)
+            message_clauses.append(f"context IN ({placeholders})")
+            message_params.extend(business_contexts)
+
+        deleted_messages = conn.execute(
+            f"DELETE FROM messages WHERE {' OR '.join(message_clauses)}",
+            tuple(message_params),
+        ).rowcount
+
+        cleanup_rules = {
+            "chat_owners": ("owner_id",),
+            "business_connections": ("owner_id",),
+            "subs": ("user_id",),
+            "referrals": ("referrer_id", "invitee_id"),
+            "payments": ("user_id", "payer_id"),
+            "sbp_payments": ("user_id", "payer_id"),
+            "blocked_users": ("user_id",),
+            "admin_actions": ("target_id",),
+            "promo_activations": ("user_id",),
+            "support_tickets": ("user_id",),
+            "subscription_reminders": ("user_id",),
+            "menu_messages": ("user_id",),
+            "chat_view_state": ("target_id",),
+            "admin_user_labels": ("target_id",),
+            "hidden_chat_users": ("target_id",),
+            "admin_searches": ("target_id",),
+            "admin_view_log": ("target_id",),
+            "temporary_admin_messages": ("chat_id",),
+            "digest_settings": ("recipient_id", "target_id"),
+        }
+        existing_tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        deleted_related = 0
+        for table, candidate_columns in cleanup_rules.items():
+            if table not in existing_tables:
+                continue
+            columns = {
+                str(row[1])
+                for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+            }
+            matched = [column for column in candidate_columns if column in columns]
+            if not matched:
+                continue
+            where = " OR ".join(f'"{column}"=?' for column in matched)
+            deleted_related += max(
+                0,
+                conn.execute(
+                    f'DELETE FROM "{table}" WHERE {where}',
+                    tuple(target_id for _ in matched),
+                ).rowcount,
+            )
+
+        conn.execute("DELETE FROM users WHERE user_id=?", (target_id,))
+
+    return {
+        "user_id": target_id,
+        "label": label,
+        "messages": max(0, int(deleted_messages)),
+        "related": deleted_related,
+    }
+
+
+def page_delete_user_confirm(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
+    if admin_id not in DELETE_USER_ADMIN_IDS:
+        return "Нет доступа.", kb([BACK_HOME])
+    if target_id in DELETE_USER_ADMIN_IDS or is_admin_user(target_id):
+        return "Администраторский аккаунт удалять через эту функцию нельзя.", kb([[btn("Назад", f"user:{target_id}:{return_page}", emoji="home")], BACK_HOME])
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT first_name,last_name,username FROM users WHERE user_id=?",
+            (target_id,),
+        ).fetchone()
+    if not row:
+        return "Пользователь уже отсутствует в базе.", kb([[btn("К пользователям", f"users:{return_page}", emoji="home")], BACK_HOME])
+    label = stored_user_label(target_id, row[0], row[1], row[2])
+    text = (
+        f"{pe('warning')} <b>Удалить пользователя из базы?</b>\n\n"
+        f"{label}\nID: <code>{target_id}</code>\n\n"
+        "Будут удалены профиль, подписка, платежные привязки, подключения, "
+        "сохранённые чаты/сообщения и связанные служебные записи.\n\n"
+        "<b>Действие необратимо.</b>"
+    )
+    return text, kb([
+        [btn("Удалить полностью", f"userdelgo:{target_id}:{return_page}", emoji="warning", style="danger")],
+        [btn("Отмена", f"user:{target_id}:{return_page}", emoji="home")],
+        BACK_HOME,
+    ])
 
 
 def purge_user_once_by_username(username: str) -> int | None:
@@ -2304,6 +2433,8 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
         BACK_HOME,
     ]
+    if admin_id in DELETE_USER_ADMIN_IDS and target_id not in DELETE_USER_ADMIN_IDS and not is_admin_user(target_id):
+        rows.insert(-2, [btn("Удалить из базы", f"userdel:{target_id}:{return_page}", emoji="warning", style="danger")])
     if can_view_user_chats(admin_id) and not user_chats_are_hidden(target_id):
         rows.insert(0, [
             btn("Чаты", f"uchats:{target_id}:{return_page}:0", emoji="view"),
@@ -4484,6 +4615,44 @@ def handle_callback_query(query: dict) -> None:
         parts = data.split(":")
         if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
             page = page_user_card(user_id, int(parts[1]), int(parts[2]))
+    elif data.startswith("userdelgo:"):
+        if user_id not in DELETE_USER_ADMIN_IDS:
+            answer_callback(query_id, text="Нет доступа", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts[1:]):
+            answer_callback(query_id, text="Некорректный пользователь", show_alert=True)
+            return
+        target_id, return_page = int(parts[1]), int(parts[2])
+        if target_id in DELETE_USER_ADMIN_IDS or is_admin_user(target_id):
+            answer_callback(query_id, text="Администраторский аккаунт удалить нельзя", show_alert=True)
+            return
+        deleted = delete_user_from_database(target_id)
+        if deleted is None:
+            page = page_users(user_id, return_page)
+            alert = "Пользователь уже отсутствует в базе"
+        else:
+            audit_admin(
+                user_id,
+                "удаление пользователя из базы",
+                target_id,
+                f"{deleted['label']} · сообщений: {deleted['messages']} · связанных записей: {deleted['related']}",
+            )
+            page = page_users(user_id, return_page)
+            alert = "Пользователь полностью удалён из базы"
+    elif data.startswith("userdel:"):
+        if user_id not in DELETE_USER_ADMIN_IDS:
+            answer_callback(query_id, text="Нет доступа", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts[1:]):
+            answer_callback(query_id, text="Некорректный пользователь", show_alert=True)
+            return
+        target_id, return_page = int(parts[1]), int(parts[2])
+        if target_id in DELETE_USER_ADMIN_IDS or is_admin_user(target_id):
+            answer_callback(query_id, text="Администраторский аккаунт удалить нельзя", show_alert=True)
+            return
+        page = page_delete_user_confirm(user_id, target_id, return_page)
     elif data.startswith("ulabel:"):
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
