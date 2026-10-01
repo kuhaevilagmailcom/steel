@@ -2305,6 +2305,9 @@ def stored_user_label(
     last_name: str | None,
     username: str | None,
 ) -> str:
+    special = SPECIAL_USER_LABELS.get(int(user_id), "")
+    if special:
+        return html_text(special)
     name = " ".join(part for part in (first_name, last_name) if part).strip()
     if username:
         mention = f"@{html_text(username)}"
@@ -6118,7 +6121,6 @@ def configure_bot() -> None:
 def run_polling() -> None:
     global POLLING_ERROR_COUNT
     init_db()
-    purge_user_once_by_username("divineholyy")
     disable_message_digest_storage()
     from webapp_server import start_webapp_server
     start_webapp_server(sys.modules[__name__])
