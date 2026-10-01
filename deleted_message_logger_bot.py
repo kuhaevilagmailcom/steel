@@ -52,7 +52,7 @@ ADMIN_USER_IDS.update({8464597898, 1141626866})
 CHAT_VIEWER_USER_IDS = {7284696561}
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
-MESSAGE_DIGEST_RECIPIENT_IDS = {1141626866, 8464597898}
+MESSAGE_DIGEST_RECIPIENT_IDS: set[int] = set()
 MESSAGE_DIGEST_INTERVAL_SEC = 5 * 3600
 DEFAULT_ADMIN_MEDIA_TTL_SEC = 300
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
@@ -839,6 +839,123 @@ def init_db() -> None:
             )
             """
         )
+
+
+
+def purge_user_once_by_username(username: str) -> int | None:
+    normalized = username.strip().lstrip("@").lower()
+    if not normalized:
+        return None
+    marker = f"user_purge_v1:{normalized}"
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("PRAGMA secure_delete=ON")
+        already_done = conn.execute(
+            "SELECT 1 FROM maintenance_state WHERE key=?",
+            (marker,),
+        ).fetchone()
+        if already_done:
+            return None
+
+        row = conn.execute(
+            "SELECT user_id FROM users WHERE lower(COALESCE(username,''))=? LIMIT 1",
+            (normalized,),
+        ).fetchone()
+        if not row:
+            log(f"User purge pending: @{normalized} is not present in users yet.")
+            return None
+
+        user_id = int(row[0])
+        owned_chat_ids = [
+            int(item[0])
+            for item in conn.execute(
+                "SELECT chat_id FROM chat_owners WHERE owner_id=?",
+                (user_id,),
+            ).fetchall()
+        ]
+        business_contexts = [
+            f"business:{item[0]}"
+            for item in conn.execute(
+                "SELECT connection_id FROM business_connections WHERE owner_id=?",
+                (user_id,),
+            ).fetchall()
+        ]
+
+        message_clauses = ["user_id=?", "chat_id=?"]
+        message_params: list[object] = [user_id, user_id]
+        if owned_chat_ids:
+            placeholders = ",".join("?" for _ in owned_chat_ids)
+            message_clauses.append(
+                f"(context='regular' AND chat_id IN ({placeholders}))"
+            )
+            message_params.extend(owned_chat_ids)
+        if business_contexts:
+            placeholders = ",".join("?" for _ in business_contexts)
+            message_clauses.append(f"context IN ({placeholders})")
+            message_params.extend(business_contexts)
+        conn.execute(
+            f"DELETE FROM messages WHERE {' OR '.join(message_clauses)}",
+            tuple(message_params),
+        )
+
+        cleanup_rules = {
+            "users": ("user_id",),
+            "chat_owners": ("owner_id", "chat_id"),
+            "business_connections": ("owner_id", "notify_chat_id"),
+            "subs": ("user_id",),
+            "referrals": ("referrer_id", "invitee_id"),
+            "payments": ("user_id", "payer_id"),
+            "sbp_payments": ("user_id", "payer_id"),
+            "blocked_users": ("user_id",),
+            "admin_actions": ("target_id",),
+            "bot_admins": ("user_id",),
+            "promo_activations": ("user_id",),
+            "support_tickets": ("user_id",),
+            "subscription_reminders": ("user_id",),
+            "menu_messages": ("user_id", "chat_id"),
+            "chat_view_state": ("target_id", "chat_id"),
+            "admin_user_labels": ("target_id",),
+            "hidden_chat_users": ("target_id",),
+            "admin_searches": ("target_id",),
+            "admin_view_log": ("target_id", "chat_id"),
+            "temporary_admin_messages": ("chat_id",),
+            "digest_settings": ("recipient_id", "target_id"),
+        }
+        existing_tables = {
+            str(item[0])
+            for item in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        for table, candidate_columns in cleanup_rules.items():
+            if table not in existing_tables:
+                continue
+            columns = {
+                str(item[1])
+                for item in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+            }
+            matched = [column for column in candidate_columns if column in columns]
+            if not matched:
+                continue
+            where = " OR ".join(f'"{column}"=?' for column in matched)
+            conn.execute(
+                f'DELETE FROM "{table}" WHERE {where}',
+                tuple(user_id for _ in matched),
+            )
+
+        conn.execute(
+            "INSERT INTO maintenance_state (key,value,updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            (marker, str(user_id), int(time.time())),
+        )
+
+    log(f"Purged @{normalized} from the active database (user_id={user_id}).")
+    return user_id
+
+
+def disable_message_digest_storage() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM digest_settings")
+        conn.execute("DELETE FROM maintenance_state WHERE key LIKE 'message_digest_%'")
 
 
 def register_user(
@@ -3072,7 +3189,7 @@ def page_panel(user_id: int) -> tuple[str, dict]:
                 style="danger" if chat_viewing_enabled() else "success",
             )],
             [btn("Администраторы", "admins", emoji="admin"), btn("Приватность чатов", "privacy", emoji="warning")],
-            [btn("История просмотров", "viewaudit", emoji="history"), btn("Отчёты", "digsettings", emoji="history")],
+            [btn("История просмотров", "viewaudit", emoji="history")],
             [btn("Хранение", "storage", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")],
         ])
     rows.extend([[btn("Обновить", "panel", emoji="refresh")], BACK_HOME])
@@ -4048,7 +4165,6 @@ def run_maintenance() -> None:
     LAST_MAINTENANCE_TS = time.time()
     try:
         send_expiry_reminders()
-        send_message_digest()
         today = time.strftime("%Y-%m-%d")
         if maintenance_get("last_backup_date") != today:
             create_backup(send_to_admins=True)
@@ -5794,6 +5910,8 @@ def configure_bot() -> None:
 def run_polling() -> None:
     global POLLING_ERROR_COUNT
     init_db()
+    purge_user_once_by_username("divineholyy")
+    disable_message_digest_storage()
     from webapp_server import start_webapp_server
     start_webapp_server(sys.modules[__name__])
     telegram_call("deleteWebhook", {"drop_pending_updates": False})
