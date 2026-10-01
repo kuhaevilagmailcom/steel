@@ -30,6 +30,14 @@
     if (devUser) params.push(`devUser=${encodeURIComponent(devUser)}`);
     return params.length ? `${url}${separator}${params.join('&')}` : url;
   }
+  function cleanChatName(value) {
+    return String(value || 'Диалог')
+      .replace(/,?\s*ID:\s*-?\d+/gi, '')
+      .replace(/\(\s*,?\s*\)/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim() || 'Диалог';
+  }
+
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
   }
@@ -113,8 +121,8 @@
       if (!data.items.length) { $('chatsList').className = 'list empty-state'; $('chatsList').innerHTML = empty('☰', 'Чатов нет', query ? 'Поиск ничего не нашёл' : 'Сохранённых сообщений пока нет'); return; }
       $('chatsList').innerHTML = data.items.map(chat => `
         <button class="list-item ${state.chat?.id === chat.id ? 'active' : ''}" data-chat="${chat.id}" type="button">
-          ${avatarHtml({id: chat.avatar_id, name: chat.name})}
-          <span class="list-body"><span class="list-line"><span class="list-title">${chat.pinned ? '📌 ' : ''}${escapeHtml(chat.name)}</span><span class="list-time">${formatTime(chat.updated_at)}</span></span>
+          ${avatarHtml({id: chat.avatar_id, name: cleanChatName(chat.name)})}
+          <span class="list-body"><span class="list-line"><span class="list-title">${chat.pinned ? '📌 ' : ''}${escapeHtml(cleanChatName(chat.name))}</span><span class="list-time">${formatTime(chat.updated_at)}</span></span>
           <span class="list-preview"><span>${chat.preview ? escapeHtml(chat.preview) : (chat.media_count ? `Медиа: ${chat.media_count}` : 'Без текста')}</span>${chat.unread ? `<span class="unread">${chat.unread}</span>` : `<span>${chat.message_count}</span>`}</span></span>
         </button>`).join('');
       document.querySelectorAll('[data-chat]').forEach(button => button.addEventListener('click', () => selectChat(Number(button.dataset.chat))));
@@ -125,9 +133,9 @@
     state.chat = state.chats.find(item => item.id === id);
     if (!state.chat) return;
     document.querySelectorAll('[data-chat]').forEach(el => el.classList.toggle('active', Number(el.dataset.chat) === id));
-    $('chatName').textContent = state.chat.name;
+    $('chatName').textContent = cleanChatName(state.chat.name);
     $('chatMeta').textContent = `${state.chat.message_count} сообщений · ${state.chat.media_count} медиа`;
-    setAvatar($('chatAvatar'), {id: state.chat.avatar_id, name: state.chat.name});
+    setAvatar($('chatAvatar'), {id: state.chat.avatar_id, name: cleanChatName(state.chat.name)});
     $('refreshButton').disabled = false;
     app.dataset.view = 'messages';
     await loadMessages(false);
@@ -221,7 +229,7 @@
   $('conversationSearch').addEventListener('click', () => { $('messageSearchBar').classList.toggle('hidden'); if (!$('messageSearchBar').classList.contains('hidden')) $('messageSearch').focus(); });
   $('closeMessageSearch').addEventListener('click', () => { $('messageSearchBar').classList.add('hidden'); $('messageSearch').value = ''; document.querySelectorAll('.message-row').forEach(row => row.classList.remove('hidden')); });
   $('messageSearch').addEventListener('input', event => { const q = event.target.value.trim().toLocaleLowerCase('ru'); document.querySelectorAll('.message-row').forEach(row => row.classList.toggle('hidden', Boolean(q) && !row.textContent.toLocaleLowerCase('ru').includes(q))); });
-  $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Обновляем чат'); });
+  $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Чат синхронизирован'); });
   document.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => { app.dataset.view = button.dataset.back; }));
   document.addEventListener('click', event => { if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed'); });
   document.addEventListener('error', event => { if (event.target instanceof HTMLImageElement && event.target.closest('.avatar')) event.target.remove(); }, true);
