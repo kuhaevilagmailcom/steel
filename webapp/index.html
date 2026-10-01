@@ -3,15 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<<<<<<< HEAD
   <meta name="theme-color" content="#0b0710">
   <title>Диалоги</title>
   <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+=======
+  <meta name="theme-color" content="#000000">
+  <title>Чаты</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?66"></script>
+>>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
   <link rel="stylesheet" href="/styles.css?v=7">
   <script defer src="/holygram-ui.bundle?v=6"></script>
 </head>
 <body>
   <div id="app" class="app" data-view="chats">
+<<<<<<< HEAD
     <aside id="chatsPanel" class="panel chats-panel">
       <div class="sidebar-brand">
         <div class="brand-badge">A</div>
@@ -48,11 +55,32 @@
           <svg viewBox="0 0 24 24"><path d="M5 7h12"/><path d="m14 4 3 3-3 3"/><path d="M19 17H7"/><path d="m10 14-3 3 3 3"/></svg>
         </button>
       </div>
+=======
+    <aside id="chatsPanel" class="chats-panel">
+      <header class="chats-topbar">
+        <button id="accountButton" class="account-button" type="button" aria-label="Переключить аккаунт">
+          <span id="accountAvatar" class="mini-avatar">?</span>
+          <span class="switch-glyph">⇄</span>
+        </button>
+        <h1>Чаты</h1>
+        <button id="refreshChatsButton" class="top-icon" type="button" aria-label="Обновить чаты">
+          <svg viewBox="0 0 24 24"><path d="M7 7h10l-2.7-2.7M17 17H7l2.7 2.7M19 8.5A7 7 0 0 1 18.5 15M5 15.5A7 7 0 0 1 5.5 9"/></svg>
+        </button>
+      </header>
+      <div id="accountBanner" class="account-line"><b id="selectedUserName">Загрузка…</b><span id="selectedUserMeta"></span></div>
+      <label class="search chat-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="chatSearch" type="search" placeholder="Поиск" autocomplete="off" disabled></label>
+      <nav class="chat-filters" aria-label="Фильтры чатов">
+        <button class="filter active" data-filter="all" type="button">Все</button>
+        <button class="filter" data-filter="private" type="button">Личные</button>
+        <button class="filter" data-filter="groups" type="button">Группы</button>
+      </nav>
+>>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
       <div id="chatsList" class="list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
     </aside>
 
     <main id="messagesPanel" class="messages-panel">
       <header class="conversation-header">
+<<<<<<< HEAD
         <button class="back-button mobile-only" data-back="chats" type="button" aria-label="Назад">
           <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
         </button>
@@ -97,11 +125,23 @@
         <div class="composer-placeholder">Только чтение</div>
         <span class="composer-lock">⌁</span>
       </footer>
+=======
+        <button class="back-button mobile-only" data-back="chats" type="button" aria-label="Назад"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+        <div class="conversation-title"><h2 id="chatName">Выберите чат</h2><p id="chatMeta">Откройте диалог</p></div>
+        <div id="chatAvatar" class="avatar">?</div>
+        <button id="conversationSearch" class="top-icon desktop-only" type="button" aria-label="Поиск в чате"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+        <button id="refreshButton" class="top-icon desktop-only" type="button" aria-label="Обновить" disabled><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 1.2 4.2M20 4v7h-7"/></svg></button>
+      </header>
+      <div id="messageSearchBar" class="message-search-bar hidden"><label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="messageSearch" type="search" placeholder="Поиск в чате" autocomplete="off"></label><button id="closeMessageSearch" type="button" aria-label="Закрыть">✕</button></div>
+      <div id="messageScroll" class="message-scroll empty-state"><div class="empty-chip">Выберите чат, чтобы открыть переписку</div></div>
+      <footer class="viewer-notice"><span class="composer-icon"><svg viewBox="0 0 24 24"><path d="M21.4 11.6 12.9 20a5 5 0 0 1-7.1-7.1l9.1-9.1a3.5 3.5 0 1 1 5 5l-9.2 9.1a2 2 0 1 1-2.8-2.8l8.5-8.5"/></svg></span><div class="composer-placeholder">Только просмотр</div><span class="composer-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5s1.2 2 3.5 2 3.5-2 3.5-2M9 9.5h.01M15 9.5h.01"/></svg></span></footer>
+>>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
     </main>
   </div>
 
   <div id="accountScrim" class="account-scrim hidden"></div>
   <aside id="accountDrawer" class="account-drawer hidden" aria-label="Аккаунты">
+<<<<<<< HEAD
     <header>
       <div>
         <span class="eyebrow">Переключение</span>
@@ -128,3 +168,15 @@
   </div>
 </body>
 </html>
+=======
+    <header><button id="closeAccounts" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button><b>Аккаунты</b></header>
+    <label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="userSearch" type="search" placeholder="Поиск" autocomplete="off"></label>
+    <div id="usersList" class="list"></div>
+  </aside>
+
+  <span id="usersCount" class="hidden">—</span><span id="ownerAvatar" class="hidden"></span><span id="selectedUserAvatar" class="hidden"></span>
+  <div id="toast" class="toast" role="status"></div>
+  <div id="authError" class="auth-error hidden"><div class="lock-mark">🔒</div><h1>Доступ к чатам закрыт</h1><p id="authErrorText">Откройте просмотр из меню бота.</p></div>
+</body>
+</html>
+>>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)

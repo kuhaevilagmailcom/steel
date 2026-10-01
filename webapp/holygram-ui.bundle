@@ -1,8 +1,12 @@
 (() => {
   const tg = window.Telegram?.WebApp;
+<<<<<<< HEAD
   if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#0b0710'); tg.setBackgroundColor?.('#0b0710'); }
+=======
+  if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#000000'); tg.setBackgroundColor?.('#000000'); }
+>>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
 
-  const state = { users: [], user: null, chats: [], chat: null, nextBefore: null, loadingMore: false };
+  const state = { users: [], user: null, chats: [], chat: null, filter: 'all', nextBefore: null, loadingMore: false };
   const $ = (id) => document.getElementById(id);
   const app = $('app');
   const qs = new URLSearchParams(location.search);
@@ -118,15 +122,21 @@
     try {
       const data = await api(`/api/users/${state.user.id}/chats?q=${encodeURIComponent(query)}`);
       state.chats = data.items;
-      if (!data.items.length) { $('chatsList').className = 'list empty-state'; $('chatsList').innerHTML = empty('☰', 'Чатов нет', query ? 'Поиск ничего не нашёл' : 'Сохранённых сообщений пока нет'); return; }
-      $('chatsList').innerHTML = data.items.map(chat => `
+      renderChats(query);
+    } catch (error) { $('chatsList').className = 'list empty-state'; $('chatsList').innerHTML = empty('!', 'Не удалось открыть чаты', error.message); }
+  }
+
+  function renderChats(query = '') {
+      const items = state.chats.filter(chat => state.filter === 'all' || (state.filter === 'groups' ? chat.id < 0 : chat.id > 0));
+      if (!items.length) { $('chatsList').className = 'list empty-state'; $('chatsList').innerHTML = empty('☰', 'Чатов нет', query ? 'Поиск ничего не нашёл' : 'В этой категории пока пусто'); return; }
+      $('chatsList').className = 'list';
+      $('chatsList').innerHTML = items.map(chat => `
         <button class="list-item ${state.chat?.id === chat.id ? 'active' : ''}" data-chat="${chat.id}" type="button">
           ${avatarHtml({id: chat.avatar_id, name: cleanChatName(chat.name)})}
           <span class="list-body"><span class="list-line"><span class="list-title">${chat.pinned ? '📌 ' : ''}${escapeHtml(cleanChatName(chat.name))}</span><span class="list-time">${formatTime(chat.updated_at)}</span></span>
           <span class="list-preview"><span>${chat.preview ? escapeHtml(chat.preview) : (chat.media_count ? `Медиа: ${chat.media_count}` : 'Без текста')}</span>${chat.unread ? `<span class="unread">${chat.unread}</span>` : `<span>${chat.message_count}</span>`}</span></span>
         </button>`).join('');
       document.querySelectorAll('[data-chat]').forEach(button => button.addEventListener('click', () => selectChat(Number(button.dataset.chat))));
-    } catch (error) { $('chatsList').className = 'list empty-state'; $('chatsList').innerHTML = empty('!', 'Не удалось открыть чаты', error.message); }
   }
 
   async function selectChat(id) {
@@ -145,15 +155,33 @@
     if (!media) return '';
     const spoiler = media.spoiler ? ' spoiler' : '';
     const url = mediaUrl(media.url);
-    if (media.type === 'photo') return `<div class="message-media${spoiler}"><img src="${url}" alt="Фото" loading="lazy"></div>`;
-    if (['video','animation'].includes(media.type)) return `<div class="message-media${spoiler}"><video src="${url}" controls playsinline preload="metadata"></video></div>`;
-    if (media.type === 'video_note') return `<div class="message-media"><video class="round${spoiler}" src="${url}" controls playsinline preload="metadata"></video></div>`;
-    if (['voice','audio'].includes(media.type)) return `<div class="message-media"><audio src="${url}" controls preload="metadata"></audio></div>`;
-    if (media.type === 'sticker' && media.animated_sticker) return `<div class="message-media sticker-media"><div class="lottie-sticker" data-lottie="${mediaUrl(media.url, true)}"></div></div>`;
-    if (media.type === 'sticker' && (media.mime_type.includes('webm') || media.file_name.endsWith('.webm'))) return `<div class="message-media sticker-media"><video src="${url}" autoplay loop muted playsinline></video></div>`;
-    if (media.type === 'sticker') return `<div class="message-media sticker-media"><img src="${url}" alt="Стикер" loading="lazy"></div>`;
-    const label = media.file_name || ({document:'Файл', audio:'Аудио'}[media.type] || 'Медиа');
-    return `<a class="file-card" href="${url}" target="_blank" rel="noopener"><span class="file-icon">↓</span><span>${escapeHtml(label)}</span></a>`;
+    const label = media.file_name || ({photo:'photo.jpg',video:'video.mp4',video_note:'circle.mp4',voice:'voice.ogg',audio:'audio.mp3',sticker:'sticker.webp',document:'file'}[media.type] || 'media');
+    const download = `<button class="media-download" type="button" data-download="${escapeHtml(media.url)}" data-name="${escapeHtml(label)}" aria-label="Скачать"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg></button>`;
+    if (media.type === 'photo') return `<div class="message-media${spoiler}"><img src="${url}" alt="Фото" loading="lazy">${download}</div>`;
+    if (['video','animation'].includes(media.type)) return `<div class="message-media${spoiler}"><video src="${url}" controls playsinline preload="metadata"></video>${download}</div>`;
+    if (media.type === 'video_note') return `<div class="message-media"><video class="round${spoiler}" src="${url}" controls playsinline preload="metadata"></video>${download}</div>`;
+    if (['voice','audio'].includes(media.type)) return `<div class="message-media"><audio src="${url}" controls preload="metadata"></audio>${download}</div>`;
+    if (media.type === 'sticker' && media.animated_sticker) return `<div class="message-media sticker-media"><div class="lottie-sticker" data-lottie="${mediaUrl(media.url, true)}"></div>${download}</div>`;
+    if (media.type === 'sticker' && (media.mime_type.includes('webm') || media.file_name.endsWith('.webm'))) return `<div class="message-media sticker-media"><video src="${url}" autoplay loop muted playsinline></video>${download}</div>`;
+    if (media.type === 'sticker') return `<div class="message-media sticker-media"><img src="${url}" alt="Стикер" loading="lazy">${download}</div>`;
+    return `<button class="file-card media-file-download" type="button" data-download="${escapeHtml(media.url)}" data-name="${escapeHtml(label)}"><span class="file-icon">↓</span><span>${escapeHtml(label)}</span></button>`;
+  }
+
+  async function downloadMedia(button) {
+    if (button.dataset.loading === '1') return;
+    button.dataset.loading = '1';
+    try {
+      const endpoint = button.dataset.download.replace('/api/media/', '/api/download/').split('?')[0];
+      const data = await api(endpoint);
+      const fileName = data.file_name || button.dataset.name || 'media';
+      if (tg?.downloadFile && (!tg.isVersionAtLeast || tg.isVersionAtLeast('8.0'))) {
+        tg.downloadFile({url: data.url, file_name: fileName}, accepted => toast(accepted ? 'Скачивание началось' : 'Скачивание отменено'));
+      } else {
+        const link = document.createElement('a'); link.href = data.url; link.download = fileName; link.target = '_blank'; link.rel = 'noopener'; document.body.appendChild(link); link.click(); link.remove();
+        toast('Скачивание началось');
+      }
+    } catch (error) { toast(error.message || 'Не удалось скачать файл'); }
+    finally { delete button.dataset.loading; }
   }
 
   function renderMessages(items, prepend = false) {
@@ -229,9 +257,14 @@
   $('conversationSearch').addEventListener('click', () => { $('messageSearchBar').classList.toggle('hidden'); if (!$('messageSearchBar').classList.contains('hidden')) $('messageSearch').focus(); });
   $('closeMessageSearch').addEventListener('click', () => { $('messageSearchBar').classList.add('hidden'); $('messageSearch').value = ''; document.querySelectorAll('.message-row').forEach(row => row.classList.remove('hidden')); });
   $('messageSearch').addEventListener('input', event => { const q = event.target.value.trim().toLocaleLowerCase('ru'); document.querySelectorAll('.message-row').forEach(row => row.classList.toggle('hidden', Boolean(q) && !row.textContent.toLocaleLowerCase('ru').includes(q))); });
+<<<<<<< HEAD
   $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Чат синхронизирован'); });
+=======
+  document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(item => item.classList.toggle('active', item === button)); renderChats($('chatSearch').value); }));
+  $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Обновляем чат'); });
+>>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
   document.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => { app.dataset.view = button.dataset.back; }));
-  document.addEventListener('click', event => { if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed'); });
+  document.addEventListener('click', event => { const download = event.target.closest('[data-download]'); if (download) { event.preventDefault(); event.stopPropagation(); downloadMedia(download); return; } if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed'); });
   document.addEventListener('error', event => { if (event.target instanceof HTMLImageElement && event.target.closest('.avatar')) event.target.remove(); }, true);
 
   (async () => {

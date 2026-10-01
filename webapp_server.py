@@ -80,8 +80,11 @@ def _media_meta(raw: object) -> dict:
 def _display_user(row: sqlite3.Row) -> dict:
     name = " ".join(part for part in (row["first_name"], row["last_name"]) if part).strip()
     username = str(row["username"] or "").strip()
+    user_id = int(row["user_id"])
+    if user_id == 7732538826:
+        name = "Святоша"
     return {
-        "id": int(row["user_id"]),
+        "id": user_id,
         "name": name or (f"@{username}" if username else "Пользователь"),
         "username": username,
         "updated_at": int(row["updated_at"] or row["created_at"] or 0),
@@ -108,12 +111,18 @@ def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
                 UNION ALL
                 SELECT bc.owner_id,m.chat_id FROM messages m
                 JOIN business_connections bc ON m.context='business:' || bc.connection_id
+            ), accounts AS (
+                SELECT user_id FROM users
+                UNION
+                SELECT owner_id AS user_id FROM owned
             )
-            SELECT u.user_id,u.first_name,u.last_name,u.username,u.created_at,u.updated_at,
+            SELECT a.user_id,u.first_name,u.last_name,u.username,u.created_at,u.updated_at,
                    COUNT(DISTINCT owned.chat_id) AS chat_count,COUNT(owned.chat_id) AS message_count
-            FROM users u LEFT JOIN owned ON owned.owner_id=u.user_id
+            FROM accounts a
+            LEFT JOIN users u ON u.user_id=a.user_id
+            LEFT JOIN owned ON owned.owner_id=a.user_id
             {where}
-            GROUP BY u.user_id ORDER BY u.updated_at DESC,u.user_id DESC
+            GROUP BY a.user_id ORDER BY COALESCE(u.updated_at,0) DESC,a.user_id DESC
             LIMIT ? OFFSET ?
             """,
             (*params, limit + 1, max(0, offset)),
@@ -365,7 +374,7 @@ def make_handler(bot):
             self.end_headers()
             self.wfile.write(data)
 
-        def _stream_source(self, source, total: int | None, mime: str, filename: str = "") -> None:
+        def _stream_source(self, source, total: int | None, mime: str, filename: str = "", attachment: bool = False) -> None:
             start = 0
             end = total - 1 if total else None
             range_header = self.headers.get("Range", "")
@@ -383,7 +392,10 @@ def make_handler(bot):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "private, max-age=300")
             if filename:
-                self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(filename)}")
+                disposition = "attachment" if attachment else "inline"
+                self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(filename)}")
+            if attachment:
+                self.send_header("Access-Control-Allow-Origin", "https://web.telegram.org")
             if total:
                 length = end - start + 1
                 self.send_header("Content-Length", str(length))
@@ -401,7 +413,7 @@ def make_handler(bot):
                 if remaining is not None:
                     remaining -= len(chunk)
 
-        def _serve_media(self, target_id: int, chat_id: int, message_id: int, lottie: bool = False) -> None:
+        def _serve_media(self, target_id: int, chat_id: int, message_id: int, lottie: bool = False, attachment: bool = False) -> None:
             local, saved, remote_url = _message_media(bot, target_id, chat_id, message_id)
             meta = _media_meta(saved.get("media_json"))
             mime = str(meta.get("mime_type") or "")
@@ -422,7 +434,7 @@ def make_handler(bot):
                     self.wfile.write(raw)
                     return
                 with local.open("rb") as stream:
-                    self._stream_source(stream, local.stat().st_size, mime, filename)
+                    self._stream_source(stream, local.stat().st_size, mime, filename, attachment)
                 return
             if not remote_url:
                 raise FileNotFoundError("Файл не сохранился и недоступен в Telegram")
@@ -432,7 +444,24 @@ def make_handler(bot):
             with urlopen(Request(remote_url, headers=headers), timeout=120) as response:
                 remote_mime = mime or response.headers.get_content_type() or "application/octet-stream"
                 total = _int(response.headers.get("Content-Length")) or None
-                self._stream_source(response, total, remote_mime, filename)
+                self._stream_source(response, total, remote_mime, filename, attachment)
+
+        def _download_url(self, target_id: int, chat_id: int, message_id: int) -> str:
+            expires = int(time.time()) + 600
+            payload = f"{target_id}:{chat_id}:{message_id}:{expires}"
+            signature = hmac.new(bot.BOT_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+            host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or ""
+            scheme = self.headers.get("X-Forwarded-Proto") or ("http" if host.startswith(("127.0.0.1", "localhost")) else "https")
+            return f"{scheme}://{host}/api/media/{target_id}/{chat_id}/{message_id}?download=1&expires={expires}&signature={signature}"
+
+        def _valid_download_signature(self, target_id: int, chat_id: int, message_id: int, query: dict) -> bool:
+            expires = _int(query.get("expires", [0])[0])
+            signature = str(query.get("signature", [""])[0])
+            if expires < int(time.time()) or expires > int(time.time()) + 900:
+                return False
+            payload = f"{target_id}:{chat_id}:{message_id}:{expires}"
+            expected = hmac.new(bot.BOT_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+            return hmac.compare_digest(signature, expected)
 
         def _serve_avatar(self, user_id: int) -> None:
             file_id = _avatar_file_id(bot, user_id)
@@ -448,6 +477,7 @@ def make_handler(bot):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
+            query = parse_qs(parsed.query)
             if path == "/healthz":
                 self._send_json(HTTPStatus.OK, {"ok": True, "service": "holy-gram-webapp"})
                 return
@@ -460,9 +490,16 @@ def make_handler(bot):
                 self._serve_static(path)
                 return
             try:
+                if re.fullmatch(r"/api/media/\d+/-?\d+/\d+", path) and query.get("download", [""])[0] == "1":
+                    parts = path.split("/")
+                    target_id, chat_id, message_id = _int(parts[3]), _int(parts[4]), _int(parts[5])
+                    if not self._valid_download_signature(target_id, chat_id, message_id, query):
+                        self._send_json(HTTPStatus.FORBIDDEN, {"error": "Ссылка для скачивания устарела"})
+                        return
+                    self._serve_media(target_id, chat_id, message_id, attachment=True)
+                    return
                 user = self._auth()
                 admin_id = _int(user.get("id"))
-                query = parse_qs(parsed.query)
                 if path == "/api/bootstrap":
                     cookie = "" if (os.getenv("WEBAPP_DEV_MODE", "0") == "1" and self.client_address[0] in {"127.0.0.1", "::1"}) else self._session_cookie(admin_id, int(time.time()) + 86400)
                     self._send_json(HTTPStatus.OK, {"ok": True, "owner": {"id": admin_id, "name": str(user.get("first_name") or "Владелец"), "username": str(user.get("username") or "")}, "timezone": "Europe/Moscow"}, cookie)
@@ -481,6 +518,13 @@ def make_handler(bot):
                 elif re.fullmatch(r"/api/media/\d+/-?\d+/\d+", path):
                     parts = path.split("/")
                     self._serve_media(_int(parts[3]), _int(parts[4]), _int(parts[5]), query.get("format", [""])[0] == "lottie")
+                elif re.fullmatch(r"/api/download/\d+/-?\d+/\d+", path):
+                    parts = path.split("/")
+                    target_id, chat_id, message_id = _int(parts[3]), _int(parts[4]), _int(parts[5])
+                    local, saved, _ = _message_media(bot, target_id, chat_id, message_id)
+                    meta = _media_meta(saved.get("media_json"))
+                    filename = str(meta.get("file_name") or (local.name if local else f"media-{message_id}"))
+                    self._send_json(HTTPStatus.OK, {"url": self._download_url(target_id, chat_id, message_id), "file_name": filename})
                 elif re.fullmatch(r"/api/avatar/-?\d+", path):
                     self._serve_avatar(_int(path.rsplit("/", 1)[1]))
                 else:

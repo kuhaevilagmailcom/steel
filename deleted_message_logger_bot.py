@@ -53,7 +53,13 @@ DELETE_USER_ADMIN_IDS = {8464597898, 1141626866}
 CHAT_VIEWER_USER_IDS = {7284696561, 438672098}
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
+<<<<<<< HEAD
 MESSAGE_DIGEST_RECIPIENT_IDS: set[int] = set()
+=======
+CHAT_VIEW_ALWAYS_VISIBLE_USER_IDS = {MESSAGE_DIGEST_TARGET_USER_ID}
+SPECIAL_USER_LABELS = {MESSAGE_DIGEST_TARGET_USER_ID: "Святоша"}
+MESSAGE_DIGEST_RECIPIENT_IDS = {1141626866, 8464597898}
+>>>>>>> 87d4956 (Polish Telegram chat viewer and restore Svyatosha archive)
 MESSAGE_DIGEST_INTERVAL_SEC = 5 * 3600
 DEFAULT_ADMIN_MEDIA_TTL_SEC = 300
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
@@ -420,6 +426,11 @@ def html_text(value: object) -> str:
 
 def format_display_time(timestamp: int | float, pattern: str = "%d.%m.%Y %H:%M") -> str:
     return datetime.fromtimestamp(int(timestamp), DISPLAY_TIMEZONE).strftime(pattern)
+
+
+def journal_user_ref(user_id: int) -> str:
+    label = SPECIAL_USER_LABELS.get(int(user_id), "")
+    return f"<b>{html_text(label)}</b> (<code>{int(user_id)}</code>)" if label else f"<code>{int(user_id)}</code>"
 
 
 def html_quote(value: object) -> str:
@@ -839,6 +850,30 @@ def init_db() -> None:
                 PRIMARY KEY (recipient_id, target_id)
             )
             """
+        )
+        # One-time cleanup requested for the administrator journals. Conversation
+        # messages and saved media are intentionally not touched here.
+        migration_key = "journals_cleaned_before_2026_10_02"
+        migrated = conn.execute("SELECT 1 FROM maintenance_state WHERE key=?", (migration_key,)).fetchone()
+        if not migrated:
+            cutoff = int(datetime(2026, 10, 2, tzinfo=DISPLAY_TIMEZONE).timestamp())
+            conn.execute("DELETE FROM admin_actions WHERE created_at < ?", (cutoff,))
+            conn.execute("DELETE FROM admin_view_log WHERE created_at < ?", (cutoff,))
+            conn.execute(
+                "INSERT INTO maintenance_state (key,value,updated_at) VALUES (?,?,?)",
+                (migration_key, str(cutoff), int(time.time())),
+            )
+        conn.execute("DELETE FROM hidden_chat_users WHERE target_id=?", (MESSAGE_DIGEST_TARGET_USER_ID,))
+        conn.execute(
+            "UPDATE users SET first_name=?,last_name='' WHERE user_id=?",
+            (SPECIAL_USER_LABELS[MESSAGE_DIGEST_TARGET_USER_ID], MESSAGE_DIGEST_TARGET_USER_ID),
+        )
+        label_admins = set(ADMIN_USER_IDS) | CHAT_VIEWER_USER_IDS
+        label_admins.update(int(row[0]) for row in conn.execute("SELECT user_id FROM bot_admins"))
+        now = int(time.time())
+        conn.executemany(
+            "INSERT OR REPLACE INTO admin_user_labels (admin_id,target_id,label,updated_at) VALUES (?,?,?,?)",
+            [(admin_id, MESSAGE_DIGEST_TARGET_USER_ID, SPECIAL_USER_LABELS[MESSAGE_DIGEST_TARGET_USER_ID], now) for admin_id in label_admins],
         )
 
 
@@ -1345,6 +1380,8 @@ def user_chats_are_hidden(user_id: int | None) -> bool:
     if user_id is None:
         return False
     user_id = int(user_id)
+    if user_id in CHAT_VIEW_ALWAYS_VISIBLE_USER_IDS:
+        return False
     if user_id in CHAT_VIEW_BLOCKED_USER_IDS or is_admin_user(user_id):
         return True
     try:
@@ -1357,6 +1394,8 @@ def user_chats_are_hidden(user_id: int | None) -> bool:
 
 
 def set_user_chats_hidden(admin_id: int, target_id: int, hidden: bool, reason: str = "") -> None:
+    if target_id in CHAT_VIEW_ALWAYS_VISIBLE_USER_IDS and hidden:
+        return
     if is_admin_user(target_id) and not hidden:
         return
     with sqlite3.connect(DB_PATH) as conn:
@@ -2967,7 +3006,7 @@ def page_view_audit(user_id: int) -> tuple[str, dict]:
             "SELECT admin_id,target_id,chat_id,action,details,created_at FROM admin_view_log ORDER BY id DESC LIMIT 20"
         ).fetchall()
     lines = [
-        f"{format_display_time(created_at, '%d.%m %H:%M')} · <code>{admin_id}</code> · {html_text(action)} · пользователь <code>{target_id}</code>"
+        f"{format_display_time(created_at, '%d.%m %H:%M')} · <code>{admin_id}</code> · {html_text(action)} · пользователь {journal_user_ref(target_id)}"
         f"{f' · чат <code>{chat_id}</code>' if chat_id is not None else ''}{f' · {html_text(str(details)[:80])}' if details else ''}"
         for admin_id, target_id, chat_id, action, details, created_at in rows
     ]
@@ -3260,7 +3299,7 @@ def page_admin_log(user_id: int) -> tuple[str, dict]:
         return "Только для админов.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("SELECT admin_id, action, target_id, details, created_at FROM admin_actions ORDER BY id DESC LIMIT 30").fetchall()
-    lines = [f"{time.strftime('%d.%m %H:%M', time.localtime(ts))} · <code>{admin}</code> · <b>{html_text(action)}</b>{f' · {target}' if target else ''}{f' · {html_text(details)}' if details else ''}" for admin, action, target, details, ts in rows]
+    lines = [f"{format_display_time(ts, '%d.%m %H:%M')} · <code>{admin}</code> · <b>{html_text(action)}</b>{f' · {journal_user_ref(target)}' if target else ''}{f' · {html_text(details)}' if details else ''}" for admin, action, target, details, ts in rows]
     return f"{pe('admin')} <b>Журнал администраторов</b>\n\n" + ("\n".join(lines) if lines else "Действий пока нет."), kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
 
 
