@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import gzip
+import hashlib
 import html
 import json
 import mimetypes
@@ -26,6 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "logger_data"))).expanduser().resolve()
 MEDIA_DIR = DATA_DIR / "media"
 BACKUP_DIR = DATA_DIR / "backups"
+IMPORT_DIR = DATA_DIR / "imports"
 DB_PATH = DATA_DIR / "bot_test.sqlite3"
 LOG_PATH = DATA_DIR / "bot.log"
 LOCK_PATH = DATA_DIR / "bot.lock"
@@ -38,6 +41,7 @@ WEBAPP_URL = os.getenv(
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+IMPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 load_dotenv(BASE_DIR / ".env.deleted_logger", encoding="utf-8-sig", override=True)
 
@@ -1119,6 +1123,164 @@ def disable_message_digest_storage() -> None:
         conn.execute("DELETE FROM maintenance_state WHERE key LIKE 'message_digest_%'")
 
 
+def import_text_archive_file(path: Path) -> tuple[int, int]:
+    """Import data-only HolyGram text archive without importing any HTML/CSS design."""
+    raw_bytes = path.read_bytes()
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    marker = f"text_archive_import:{digest}"
+    with sqlite3.connect(DB_PATH) as conn:
+        if conn.execute("SELECT 1 FROM maintenance_state WHERE key=?", (marker,)).fetchone():
+            return 0, 0
+
+    try:
+        if path.suffix.lower() == ".gz":
+            payload = json.loads(gzip.decompress(raw_bytes).decode("utf-8"))
+        else:
+            payload = json.loads(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Invalid text import file {path.name}: {exc}") from exc
+
+    if not isinstance(payload, dict) or payload.get("format") != "holygram-text-import-v1":
+        raise RuntimeError(f"Unsupported text import format: {path.name}")
+
+    owner_id = int(payload.get("owner_id") or 0)
+    if not owner_id:
+        raise RuntimeError(f"Text import has no owner_id: {path.name}")
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        raise RuntimeError(f"Text import has no messages array: {path.name}")
+
+    owner_name = str(payload.get("owner_name") or SPECIAL_USER_LABELS.get(owner_id) or "Пользователь").strip()
+    username = str(payload.get("source_username") or "").strip().lstrip("@")
+    register_user(
+        owner_id,
+        None,
+        {"first_name": owner_name, "last_name": "", "username": username or None},
+    )
+
+    connection_id = f"__archive_text__:{owner_id}"
+    context = f"business:{connection_id}"
+    now = int(time.time())
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO business_connections
+                (connection_id,owner_id,notify_chat_id,is_enabled,can_reply,rights_json,created_at,updated_at)
+            VALUES (?,?,NULL,0,0,?, ?, ?)
+            ON CONFLICT(connection_id) DO UPDATE SET
+                owner_id=excluded.owner_id,
+                is_enabled=0,
+                can_reply=0,
+                rights_json=excluded.rights_json,
+                updated_at=excluded.updated_at
+            """,
+            (connection_id, owner_id, json.dumps({"archive_only": True}, ensure_ascii=False), now, now),
+        )
+
+        existing_rows = conn.execute(
+            """
+            SELECT m.chat_id,m.user_id,m.content,m.updated_at
+            FROM messages AS m
+            LEFT JOIN chat_owners AS co
+              ON m.context='regular' AND co.chat_id=m.chat_id
+            LEFT JOIN business_connections AS bc
+              ON m.context='business:' || bc.connection_id
+            WHERE co.owner_id=? OR bc.owner_id=?
+            """,
+            (owner_id, owner_id),
+        ).fetchall()
+
+        existing_counts: dict[tuple[int, int, str, int], int] = {}
+        for chat_id, user_id, content, updated_at in existing_rows:
+            key = (int(chat_id), int(user_id or 0), str(content or ""), int(updated_at or 0) // 60)
+            existing_counts[key] = existing_counts.get(key, 0) + 1
+
+        seen_counts: dict[tuple[int, int, str, int], int] = {}
+        inserted = 0
+        skipped = 0
+
+        for item in messages:
+            if not isinstance(item, dict):
+                skipped += 1
+                continue
+            try:
+                chat_id = int(item.get("chat_id"))
+                sender_id = int(item.get("sender_id"))
+                timestamp = int(item.get("timestamp") or 0)
+                seq = int(item.get("message_seq") or 0)
+            except (TypeError, ValueError):
+                skipped += 1
+                continue
+
+            text = str(item.get("text") or "")
+            if not text or not timestamp:
+                skipped += 1
+                continue
+            sender = str(item.get("sender") or ("Святоша" if sender_id == owner_id else f"Пользователь {sender_id}"))
+            key = (chat_id, sender_id, text, timestamp // 60)
+            seen_counts[key] = seen_counts.get(key, 0) + 1
+            if existing_counts.get(key, 0) >= seen_counts[key]:
+                skipped += 1
+                continue
+
+            # Negative IDs keep imported archive rows separate from real Telegram message IDs.
+            synthetic_id = -(timestamp * 100000 + max(1, seq))
+            reply_text = str(item.get("reply_text") or "").strip()
+            reply_author = str(item.get("reply_author") or "").strip()
+            reply_id = -1 if reply_text else None
+
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO messages (
+                    context,chat_id,message_id,user_id,author,content,
+                    media_type,media_file_id,media_unique_id,media_json,local_media_path,
+                    has_media_spoiler,ttl_seconds,reply_to_message_id,reply_to_author,reply_to_content,
+                    created_at,updated_at,deleted_at,original_content,edit_count
+                ) VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,0,NULL,?,?,?,?,?,NULL,?,0)
+                """,
+                (
+                    context,
+                    chat_id,
+                    synthetic_id,
+                    sender_id,
+                    sender,
+                    text,
+                    reply_id,
+                    reply_author or None,
+                    reply_text or None,
+                    timestamp,
+                    timestamp,
+                    text,
+                ),
+            )
+            if conn.total_changes:
+                inserted += 1
+                existing_counts[key] = existing_counts.get(key, 0) + 1
+
+        conn.execute(
+            """
+            INSERT INTO maintenance_state (key,value,updated_at) VALUES (?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (marker, json.dumps({"file": path.name, "inserted": inserted, "skipped": skipped}, ensure_ascii=False), now),
+        )
+
+    log(f"Text archive imported: {path.name}; inserted={inserted}; skipped={skipped}; owner={owner_id}")
+    return inserted, skipped
+
+
+def import_pending_text_archives() -> None:
+    for path in sorted(IMPORT_DIR.glob("*.json*")):
+        if not path.is_file():
+            continue
+        try:
+            import_text_archive_file(path)
+        except Exception as exc:
+            log(f"Text archive import failed for {path.name}: {type(exc).__name__}: {exc}")
+            report_technical_issue("text_archive_import", f"{path.name}: {type(exc).__name__}: {exc}")
+
+
 def register_user(
     user_id: int,
     private_chat_id: int | None = None,
@@ -1273,10 +1435,11 @@ def list_business_connections(owner_id: int | None = None) -> list[dict]:
     query = """
         SELECT connection_id, owner_id, notify_chat_id, is_enabled, can_reply, created_at, updated_at
         FROM business_connections
+        WHERE connection_id NOT LIKE '__archive_text__:%'
     """
     params: tuple[object, ...] = ()
     if owner_id is not None:
-        query += " WHERE owner_id = ?"
+        query += " AND owner_id = ?"
         params = (owner_id,)
     query += " ORDER BY is_enabled DESC, updated_at DESC"
 
@@ -6121,6 +6284,7 @@ def configure_bot() -> None:
 def run_polling() -> None:
     global POLLING_ERROR_COUNT
     init_db()
+    import_pending_text_archives()
     disable_message_digest_storage()
     from webapp_server import start_webapp_server
     start_webapp_server(sys.modules[__name__])
