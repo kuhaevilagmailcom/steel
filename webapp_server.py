@@ -192,7 +192,10 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
             SELECT m.context,m.chat_id,m.message_id,m.user_id,m.author,m.content,m.media_type,
                    m.media_json,m.local_media_path,m.has_media_spoiler,m.ttl_seconds,
                    m.reply_to_message_id,m.reply_to_author,m.reply_to_content,
-                   m.created_at,m.updated_at,m.deleted_at,m.edit_count,m.original_content
+                   m.created_at,m.updated_at,m.deleted_at,m.edit_count,m.original_content,
+                   bc.connection_id AS business_connection_id,
+                   bc.is_enabled AS business_enabled,
+                   bc.can_reply AS business_can_reply
             """ + bot.OWNER_MESSAGES_FROM + " AND m.chat_id=?" + before_sql + """
             ORDER BY m.updated_at DESC,m.message_id DESC LIMIT ?
             """,
@@ -202,11 +205,25 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
     items = []
     for row in reversed(page):
         meta = _media_meta(row["media_json"])
+        outgoing = _int(row["user_id"]) == target_id
+        is_edit_target = target_id in getattr(bot, "CHAT_EDIT_TARGET_USER_IDS", set())
+        business_context = str(row["context"] or "").startswith("business:")
+        within_edit_window = int(time.time()) - int(row["created_at"] or 0) <= 48 * 3600
+        text_message = not row["media_type"]
+        editable = bool(
+            is_edit_target
+            and outgoing
+            and business_context
+            and bool(row["business_enabled"])
+            and not bool(row["deleted_at"])
+            and within_edit_window
+            and text_message
+        )
         item = {
             "id": int(row["message_id"]),
             "author_id": _int(row["user_id"]),
             "author": _plain_author(row["author"]),
-            "outgoing": _int(row["user_id"]) == target_id,
+            "outgoing": outgoing,
             "text": str(row["content"] or ""),
             "created_at": int(row["created_at"] or 0),
             "updated_at": int(row["updated_at"] or 0),
@@ -214,6 +231,8 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
             "edited": bool(row["edit_count"]),
             "edit_count": int(row["edit_count"] or 0),
             "original_text": str(row["original_content"] or ""),
+            "editable": editable,
+            "edit_limit": 4096,
             "reply": None,
             "media": None,
         }
@@ -245,6 +264,99 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
         "has_more": len(rows) > limit,
         "next_before": int(page[-1]["updated_at"]) if page and len(rows) > limit else None,
     }
+
+
+def edit_business_message(
+    bot,
+    admin_id: int,
+    target_id: int,
+    chat_id: int,
+    message_id: int,
+    new_text: str,
+) -> dict:
+    if target_id not in getattr(bot, "CHAT_EDIT_TARGET_USER_IDS", set()):
+        raise PermissionError("Редактирование для этого аккаунта отключено")
+    if bot.user_chats_are_hidden(target_id):
+        raise PermissionError("Чат недоступен")
+
+    text = str(new_text or "")
+    if not text.strip():
+        raise ValueError("Сообщение не может быть пустым")
+    if len(text) > 4096:
+        raise ValueError("Сообщение длиннее 4096 символов")
+
+    with sqlite3.connect(bot.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT m.context,m.chat_id,m.message_id,m.user_id,m.content,m.media_type,
+                   m.created_at,m.deleted_at,
+                   bc.connection_id,bc.owner_id,bc.is_enabled,bc.can_reply
+            FROM messages AS m
+            LEFT JOIN business_connections AS bc
+              ON m.context='business:' || bc.connection_id
+            WHERE m.chat_id=? AND m.message_id=? AND bc.owner_id=?
+            ORDER BY m.updated_at DESC
+            LIMIT 1
+            """,
+            (chat_id, message_id, target_id),
+        ).fetchone()
+
+    if not row:
+        raise FileNotFoundError("Сообщение не найдено в Business-архиве")
+    if _int(row["user_id"]) != target_id:
+        raise PermissionError("Можно редактировать только сообщения выбранного аккаунта")
+    if row["deleted_at"]:
+        raise ValueError("Удалённое сообщение нельзя редактировать")
+    if row["media_type"]:
+        raise ValueError("Сейчас редактируется только обычный текст сообщения")
+    if not str(row["context"] or "").startswith("business:") or not row["connection_id"]:
+        raise PermissionError("Сообщение не связано с Telegram Business")
+    if not bool(row["is_enabled"]):
+        raise PermissionError("Telegram Business-подключение отключено")
+    if row["can_reply"] is not None and not bool(row["can_reply"]):
+        raise PermissionError("У Business-бота нет права редактировать сообщения")
+    if int(time.time()) - int(row["created_at"] or 0) > 48 * 3600:
+        raise ValueError("Telegram разрешает редактировать это сообщение только в течение 48 часов")
+
+    payload = {
+        "business_connection_id": str(row["connection_id"]),
+        "chat_id": int(chat_id),
+        "message_id": int(message_id),
+        "text": text,
+    }
+    try:
+        result = bot.telegram_call("editMessageText", payload, timeout=30)
+    except bot.TelegramApiError as exc:
+        message = str(exc)
+        if "message is not modified" not in message.lower():
+            raise
+
+    if isinstance(locals().get("result"), dict):
+        bot.save_message(str(row["context"]), result)
+    else:
+        now = int(time.time())
+        with sqlite3.connect(bot.DB_PATH) as conn:
+            conn.execute(
+                """
+                UPDATE messages
+                SET original_content=COALESCE(original_content,content),
+                    content=?,
+                    edit_count=edit_count + CASE WHEN content != ? THEN 1 ELSE 0 END,
+                    updated_at=?
+                WHERE context=? AND chat_id=? AND message_id=?
+                """,
+                (text, text, now, str(row["context"]), chat_id, message_id),
+            )
+
+    bot.log_admin_view(
+        admin_id,
+        target_id,
+        chat_id,
+        "Web App: редактирование сообщения",
+        f"message_id={message_id}",
+    )
+    return {"ok": True, "id": message_id, "text": text}
 
 
 def _message_media(bot, target_id: int, chat_id: int, message_id: int) -> tuple[Path | None, dict, str | None]:
@@ -473,6 +585,52 @@ def make_handler(bot):
                 raise FileNotFoundError("Аватар не найден")
             with urlopen(Request(bot.FILE_API_URL + quote(path, safe="/")), timeout=30) as response:
                 self._stream_source(response, _int(response.headers.get("Content-Length")) or None, response.headers.get_content_type() or "image/jpeg")
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            try:
+                user = self._auth()
+                admin_id = _int(user.get("id"))
+                match = re.fullmatch(r"/api/users/(\d+)/chats/(-?\d+)/messages/(\d+)/edit", path)
+                if not match:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "Маршрут не найден"})
+                    return
+
+                target_id, chat_id, message_id = map(_int, match.groups())
+                length = _int(self.headers.get("Content-Length"), 0)
+                if length <= 0 or length > 16384:
+                    raise ValueError("Некорректный размер запроса")
+                try:
+                    body = json.loads(self.rfile.read(length).decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Некорректный JSON") from exc
+                if not isinstance(body, dict):
+                    raise ValueError("Некорректный запрос")
+
+                result = edit_business_message(
+                    bot,
+                    admin_id,
+                    target_id,
+                    chat_id,
+                    message_id,
+                    str(body.get("text") or ""),
+                )
+                self._send_json(HTTPStatus.OK, result)
+            except PermissionError as exc:
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": str(exc)})
+            except FileNotFoundError as exc:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            except bot.TelegramApiError as exc:
+                message = str(exc)
+                if ": " in message:
+                    message = message.split(": ", 1)[1]
+                self._send_json(HTTPStatus.CONFLICT, {"error": message})
+            except Exception as exc:
+                bot.log(f"WebApp POST failed: {type(exc).__name__}: {exc}")
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Не удалось изменить сообщение"})
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
