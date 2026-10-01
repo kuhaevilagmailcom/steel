@@ -63,7 +63,9 @@ def _int(value: object, default: int = 0) -> int:
 
 def _plain_author(value: object, fallback: str = "Без имени") -> str:
     text = str(value or "").strip()
-    text = re.sub(r"\s*\(ID:\s*\d+\)\s*$", "", text).strip()
+    text = re.sub(r",?\s*ID:\s*-?\d+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\(\s*,?\s*\)", "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
     return text or fallback
 
 
@@ -156,7 +158,7 @@ def list_chats(bot, admin_id: int, target_id: int, query: str = "", limit: int =
         {
             "id": int(row["chat_id"]),
             "avatar_id": int(row["peer_id"] or row["chat_id"]),
-            "name": _plain_author(row["peer"], f"Чат {row['chat_id']}"),
+            "name": _plain_author(row["peer"], "Диалог"),
             "preview": str(row["preview"] or ""),
             "message_count": int(row["message_count"] or 0),
             "media_count": int(row["media_count"] or 0),
