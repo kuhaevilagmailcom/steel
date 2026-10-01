@@ -2,7 +2,7 @@
   const tg = window.Telegram?.WebApp;
   if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#000000'); tg.setBackgroundColor?.('#000000'); }
 
-  const state = { users: [], user: null, chats: [], chat: null, filter: 'all', nextBefore: null, loadingMore: false };
+  const state = { users: [], user: null, chats: [], chat: null, filter: 'all', nextBefore: null, loadingMore: false, messages: new Map(), editingMessage: null };
   const $ = (id) => document.getElementById(id);
   const app = $('app');
   const qs = new URLSearchParams(location.search);
@@ -15,10 +15,10 @@
     const el = $('toast'); el.textContent = message; el.classList.add('show');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
   }
-  async function api(path) {
-    const headers = { 'X-Telegram-Init-Data': initData };
+  async function api(path, options = {}) {
+    const headers = { 'X-Telegram-Init-Data': initData, ...(options.headers || {}) };
     if (devUser) headers['X-Holygram-Dev-User'] = devUser;
-    const response = await fetch(path, { headers });
+    const response = await fetch(path, { ...options, headers });
     let body = {}; try { body = await response.json(); } catch (_) {}
     if (!response.ok) throw new Error(body.error || `Ошибка ${response.status}`);
     return body;
@@ -180,8 +180,63 @@
     finally { delete button.dataset.loading; }
   }
 
+  function openMessageEditor(messageId) {
+    const message = state.messages.get(Number(messageId));
+    if (!message || !message.editable || !state.user || !state.chat) return;
+    state.editingMessage = message;
+    const input = $('editMessageText');
+    input.maxLength = Number(message.edit_limit || 4096);
+    input.value = message.text || '';
+    $('editScrim').classList.remove('hidden');
+    $('editSheet').classList.remove('hidden');
+    requestAnimationFrame(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+    tg?.HapticFeedback?.selectionChanged?.();
+  }
+
+  function closeMessageEditor() {
+    state.editingMessage = null;
+    $('editScrim').classList.add('hidden');
+    $('editSheet').classList.add('hidden');
+    $('editMessageText').value = '';
+    $('saveEdit').disabled = false;
+  }
+
+  async function saveMessageEdit() {
+    const message = state.editingMessage;
+    if (!message || !state.user || !state.chat) return;
+    const input = $('editMessageText');
+    const text = input.value;
+    if (!text.trim()) { toast('Сообщение не может быть пустым'); input.focus(); return; }
+    if (text.length > Number(message.edit_limit || 4096)) { toast('Сообщение слишком длинное'); return; }
+    if (text === message.text) { closeMessageEditor(); return; }
+
+    const button = $('saveEdit');
+    button.disabled = true;
+    try {
+      await api(
+        `/api/users/${state.user.id}/chats/${state.chat.id}/messages/${message.id}/edit`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        }
+      );
+      closeMessageEditor();
+      tg?.HapticFeedback?.notificationOccurred?.('success');
+      toast('Сообщение изменено');
+      await loadMessages(false);
+      await loadChats($('chatSearch').value);
+    } catch (error) {
+      button.disabled = false;
+      tg?.HapticFeedback?.notificationOccurred?.('error');
+      toast(error.message || 'Не удалось изменить сообщение');
+    }
+  }
+
   function renderMessages(items, prepend = false) {
     const scroll = $('messageScroll');
+    if (!prepend) state.messages.clear();
+    items.forEach(message => state.messages.set(Number(message.id), message));
     let currentDay = '';
     const html = items.map(message => {
       const day = formatDay(message.updated_at);
@@ -195,7 +250,7 @@
           ${mediaMarkup(message.media)}
           ${message.text ? `<div class="message-text">${escapeHtml(message.text)}</div>` : ''}
           ${message.deleted ? '<div class="message-text deleted-label">Сообщение удалено</div>' : ''}
-          <div class="message-meta">${message.edited ? `<span>изменено${message.edit_count > 1 ? ' ' + message.edit_count + '×' : ''}</span>` : ''}<time>${formatTime(message.updated_at)}</time>${message.outgoing ? '<span class="checks">✓✓</span>' : ''}</div>
+          <div class="message-meta">${message.editable ? `<button class="message-edit" type="button" data-edit-message="${message.id}" aria-label="Редактировать сообщение"><svg viewBox="0 0 24 24"><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z"/><path d="m14 7 3 3"/></svg></button>` : ''}${message.edited ? `<span>изменено${message.edit_count > 1 ? ' ' + message.edit_count + '×' : ''}</span>` : ''}<time>${formatTime(message.updated_at)}</time>${message.outgoing ? '<span class="checks">✓✓</span>' : ''}</div>
         </article>
       </div>`;
     }).join('');
@@ -255,8 +310,18 @@
   $('messageSearch').addEventListener('input', event => { const q = event.target.value.trim().toLocaleLowerCase('ru'); document.querySelectorAll('.message-row').forEach(row => row.classList.toggle('hidden', Boolean(q) && !row.textContent.toLocaleLowerCase('ru').includes(q))); });
   document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(item => item.classList.toggle('active', item === button)); renderChats($('chatSearch').value); }));
   $('refreshButton').addEventListener('click', () => { loadMessages(false); loadChats($('chatSearch').value); toast('Чат синхронизирован'); });
+  $('cancelEdit').addEventListener('click', closeMessageEditor);
+  $('editScrim').addEventListener('click', closeMessageEditor);
+  $('saveEdit').addEventListener('click', saveMessageEdit);
   document.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => { app.dataset.view = button.dataset.back; }));
-  document.addEventListener('click', event => { const download = event.target.closest('[data-download]'); if (download) { event.preventDefault(); event.stopPropagation(); downloadMedia(download); return; } if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed'); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('editSheet').classList.contains('hidden')) closeMessageEditor(); });
+  document.addEventListener('click', event => {
+    const edit = event.target.closest('[data-edit-message]');
+    if (edit) { event.preventDefault(); event.stopPropagation(); openMessageEditor(Number(edit.dataset.editMessage)); return; }
+    const download = event.target.closest('[data-download]');
+    if (download) { event.preventDefault(); event.stopPropagation(); downloadMedia(download); return; }
+    if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed');
+  });
   document.addEventListener('error', event => { if (event.target instanceof HTMLImageElement && event.target.closest('.avatar')) event.target.remove(); }, true);
 
   (async () => {
