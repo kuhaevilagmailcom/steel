@@ -1230,7 +1230,7 @@ def import_text_archive_file(path: Path) -> tuple[int, int]:
             reply_author = str(item.get("reply_author") or "").strip()
             reply_id = -1 if reply_text else None
 
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO messages (
                     context,chat_id,message_id,user_id,author,content,
@@ -1254,9 +1254,11 @@ def import_text_archive_file(path: Path) -> tuple[int, int]:
                     text,
                 ),
             )
-            if conn.total_changes:
+            if cursor.rowcount > 0:
                 inserted += 1
                 existing_counts[key] = existing_counts.get(key, 0) + 1
+            else:
+                skipped += 1
 
         conn.execute(
             """
