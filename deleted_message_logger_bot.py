@@ -52,13 +52,12 @@ load_dotenv(BASE_DIR / ".env.deleted_logger", encoding="utf-8-sig", override=Tru
 
 BOT_TOKEN = (os.getenv("LOGGER_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
 BOT_USERNAME = os.getenv("LOGGER_BOT_USERNAME", "").strip().lstrip("@")
-ADMIN_USER_IDS = {
-    int(item.strip())
-    for item in os.getenv("ADMIN_USER_IDS", "").replace(";", ",").split(",")
-    if item.strip().isdigit()
-}
-ADMIN_USER_IDS.update({8464597898, 1141626866})
-DELETE_USER_ADMIN_IDS = {8464597898, 1141626866}
+# Only these two accounts are owners with full administrative control.
+# Environment variables must never silently promote another account to owner.
+ADMIN_USER_IDS = {8464597898, 1141626866}
+DELETE_USER_ADMIN_IDS = set(ADMIN_USER_IDS)
+
+# Existing chat-view access is preserved and seeded into the database once.
 CHAT_VIEWER_USER_IDS = {438672098, 363137851, 1326330352}
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 
@@ -732,6 +731,15 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS chat_viewer_admins (
+                user_id INTEGER PRIMARY KEY,
+                granted_by INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS promo_codes (
                 code TEXT PRIMARY KEY,
                 discount_percent INTEGER NOT NULL,
@@ -787,6 +795,17 @@ def init_db() -> None:
             )
             """
         )
+        viewer_seed_key = "chat_viewer_admins_seed_v1"
+        if not conn.execute("SELECT 1 FROM maintenance_state WHERE key=?", (viewer_seed_key,)).fetchone():
+            now = int(time.time())
+            conn.executemany(
+                "INSERT OR IGNORE INTO chat_viewer_admins (user_id,granted_by,created_at) VALUES (?,?,?)",
+                [(viewer_id, min(ADMIN_USER_IDS), now) for viewer_id in sorted(CHAT_VIEWER_USER_IDS)],
+            )
+            conn.execute(
+                "INSERT INTO maintenance_state (key,value,updated_at) VALUES (?,?,?)",
+                (viewer_seed_key, "seeded", now),
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS menu_messages (
@@ -906,7 +925,8 @@ def init_db() -> None:
             "UPDATE users SET first_name=?,last_name='' WHERE user_id=?",
             (SPECIAL_USER_LABELS[MESSAGE_DIGEST_TARGET_USER_ID], MESSAGE_DIGEST_TARGET_USER_ID),
         )
-        label_admins = set(ADMIN_USER_IDS) | CHAT_VIEWER_USER_IDS
+        label_admins = set(ADMIN_USER_IDS)
+        label_admins.update(int(row[0]) for row in conn.execute("SELECT user_id FROM chat_viewer_admins"))
         label_admins.update(int(row[0]) for row in conn.execute("SELECT user_id FROM bot_admins"))
         now = int(time.time())
         conn.executemany(
@@ -1591,12 +1611,55 @@ def set_chat_viewing_enabled(enabled: bool, admin_id: int | None = None) -> bool
     return enabled
 
 
+def list_chat_viewer_ids() -> set[int]:
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            return {
+                int(row[0])
+                for row in conn.execute("SELECT user_id FROM chat_viewer_admins").fetchall()
+            }
+    except sqlite3.Error:
+        # Safe startup fallback before init_db has created the table.
+        return set(CHAT_VIEWER_USER_IDS)
+
+
+def grant_chat_view_access(owner_id: int, target_id: int) -> tuple[bool, str]:
+    if not is_owner_admin(owner_id):
+        return False, "Выдавать просмотр чатов может только владелец."
+    if is_owner_admin(target_id):
+        return False, "У владельца уже есть полный доступ к чатам."
+    if not user_exists(target_id):
+        return False, "Пользователь должен хотя бы один раз открыть бота."
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO chat_viewer_admins (user_id,granted_by,created_at) VALUES (?,?,?)",
+            (target_id, owner_id, now),
+        )
+    if cur.rowcount == 0:
+        return False, f"У пользователя {target_id} уже есть просмотр чатов."
+    audit_admin(owner_id, "выдача просмотра чатов", target_id)
+    return True, f"Просмотр чатов выдан пользователю {target_id}."
+
+
+def revoke_chat_view_access(owner_id: int, target_id: int) -> tuple[bool, str]:
+    if not is_owner_admin(owner_id):
+        return False, "Забирать просмотр чатов может только владелец."
+    if is_owner_admin(target_id):
+        return False, "У владельца нельзя забрать полный доступ."
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute("DELETE FROM chat_viewer_admins WHERE user_id=?", (target_id,))
+    if cur.rowcount == 0:
+        return False, f"У пользователя {target_id} нет отдельного доступа к чатам."
+    audit_admin(owner_id, "снятие просмотра чатов", target_id)
+    return True, f"Просмотр чатов снят у пользователя {target_id}."
+
+
 def can_view_user_chats(user_id: int | None) -> bool:
     return bool(
         chat_viewing_enabled()
-        and
-        user_id is not None
-        and (is_owner_admin(user_id) or int(user_id) in CHAT_VIEWER_USER_IDS)
+        and user_id is not None
+        and (is_owner_admin(user_id) or int(user_id) in list_chat_viewer_ids())
     )
 
 
@@ -1604,7 +1667,7 @@ def is_admin_user(user_id: int | None) -> bool:
     if user_id is None:
         return False
     user_id = int(user_id)
-    if is_owner_admin(user_id) or user_id in CHAT_VIEWER_USER_IDS:
+    if is_owner_admin(user_id) or user_id in list_chat_viewer_ids():
         return True
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -1716,7 +1779,7 @@ def toggle_chat_pin(admin_id: int, target_id: int, chat_id: int) -> bool:
 
 
 def list_admin_ids() -> list[int]:
-    ids = set(ADMIN_USER_IDS) | set(CHAT_VIEWER_USER_IDS)
+    ids = set(ADMIN_USER_IDS) | list_chat_viewer_ids()
     try:
         with sqlite3.connect(DB_PATH) as conn:
             ids.update(
@@ -1874,6 +1937,7 @@ PENDING_SUPPORT: dict[int, float] = {}
 PENDING_SUPPORT_REPLY: dict[int, tuple[int, int, float]] = {}
 PENDING_BLOCK_REASON: dict[int, tuple[int, int, float]] = {}
 PENDING_ADMIN_ADD: dict[int, float] = {}
+PENDING_CHAT_VIEW_ACCESS: dict[int, tuple[str, float]] = {}
 PENDING_CHAT_SEARCH: dict[int, tuple[int, int, float]] = {}
 PENDING_CHAT_DATE: dict[int, tuple[int, int, int, int, float]] = {}
 PENDING_USER_LABEL: dict[int, tuple[int, int, float]] = {}
@@ -3608,13 +3672,70 @@ def page_promos(user_id: int) -> tuple[str, dict]:
         kb([BACK_PANEL]),
     )
 
+def clear_admin_logs(owner_id: int) -> tuple[int, int]:
+    if not is_owner_admin(owner_id):
+        raise PermissionError("Только владелец может очищать журналы.")
+    with sqlite3.connect(DB_PATH) as conn:
+        actions = int(conn.execute("SELECT COUNT(*) FROM admin_actions").fetchone()[0])
+        views = int(conn.execute("SELECT COUNT(*) FROM admin_view_log").fetchone()[0])
+        conn.execute("DELETE FROM admin_actions")
+        conn.execute("DELETE FROM admin_view_log")
+    # Keep one explicit audit marker so it is always visible who cleared the journals.
+    audit_admin(owner_id, "очистка журналов", None, f"удалено действий: {actions}, просмотров: {views}")
+    log(f"Admin journals cleared by owner {owner_id}: actions={actions}, views={views}")
+    return actions, views
+
+
+def page_clear_logs_confirm(user_id: int) -> tuple[str, dict]:
+    if not is_owner_admin(user_id):
+        return "Только для владельца.", kb([BACK_HOME])
+    return (
+        f"{pe('warning')} <b>Очистить журналы администраторов?</b>\n\n"
+        "Будут удалены записи о действиях и просмотрах чатов. "
+        "После очистки останется только запись о том, кто выполнил очистку.",
+        kb([
+            [btn("Да, очистить", "logs:clear:confirm", emoji="warning", style="danger")],
+            [btn("Отмена", "admins", emoji="back")],
+            BACK_HOME,
+        ]),
+    )
+
+
 def page_admin_log(user_id: int) -> tuple[str, dict]:
     if not is_admin_user(user_id):
         return "Только для админов.", kb([BACK_HOME])
     with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("SELECT admin_id, action, target_id, details, created_at FROM admin_actions ORDER BY id DESC LIMIT 30").fetchall()
-    lines = [f"{format_display_time(ts, '%d.%m %H:%M')} · <code>{admin}</code> · <b>{html_text(action)}</b>{f' · {journal_user_ref(target)}' if target else ''}{f' · {html_text(details)}' if details else ''}" for admin, action, target, details, ts in rows]
-    return f"{pe('admin')} <b>Журнал администраторов</b>\n\n" + ("\n".join(lines) if lines else "Действий пока нет."), kb([BACK_PANEL])
+        rows = conn.execute(
+            """
+            SELECT kind,admin_id,action,target_id,chat_id,details,created_at
+            FROM (
+                SELECT 'action' AS kind,admin_id,action,target_id,NULL AS chat_id,details,created_at
+                FROM admin_actions
+                UNION ALL
+                SELECT 'view' AS kind,admin_id,action,target_id,chat_id,details,created_at
+                FROM admin_view_log
+            )
+            ORDER BY created_at DESC
+            LIMIT 50
+            """
+        ).fetchall()
+    lines = []
+    for kind, admin, action, target, chat_id, details, ts in rows:
+        icon = "👁" if kind == "view" else "⚙️"
+        suffix = f" · {journal_user_ref(target)}" if target else ""
+        if chat_id is not None:
+            suffix += f" · чат <code>{chat_id}</code>"
+        if details:
+            suffix += f" · {html_text(str(details)[:180])}"
+        lines.append(
+            f"{icon} {format_display_time(ts, '%d.%m %H:%M')} · <code>{admin}</code> · "
+            f"<b>{html_text(action)}</b>{suffix}"
+        )
+    return (
+        f"{pe('admin')} <b>Журнал администраторов</b>\n\n"
+        + ("\n".join(lines) if lines else "Действий пока нет."),
+        kb([BACK_PANEL]),
+    )
 
 
 def page_gift_buy(payer_id: int, target_id: int) -> tuple[str, dict]:
@@ -3705,7 +3826,7 @@ def page_admins(user_id: int) -> tuple[str, dict]:
 
     delegated = list_delegated_admins()
     owner_lines = [f"• <code>{uid}</code> — владелец" for uid in sorted(ADMIN_USER_IDS)]
-    viewer_lines = [f"• <code>{uid}</code> — администратор чатов" for uid in sorted(CHAT_VIEWER_USER_IDS)]
+    viewer_lines = [f"• <code>{uid}</code> — администратор чатов" for uid in sorted(list_chat_viewer_ids())]
     admin_lines = [
         f"• <code>{uid}</code> — добавил <code>{added_by}</code>, "
         f"{time.strftime('%d.%m.%Y', time.localtime(created_at))}"
@@ -3721,6 +3842,11 @@ def page_admins(user_id: int) -> tuple[str, dict]:
     rows: list[list[dict]] = []
     if is_owner_admin(user_id):
         rows.append([btn("Добавить админа", "admin:add", emoji="add", style="success")])
+        rows.append([
+            btn("Выдать просмотр чатов", "chatview:add", emoji="view", style="success"),
+            btn("Забрать просмотр чатов", "chatview:remove", emoji="warning", style="danger"),
+        ])
+        rows.append([btn("Очистить логи", "logs:clear", emoji="warning", style="danger")])
         for uid, _, _ in delegated[:20]:
             rows.append([btn(f"Удалить админа · {uid}", f"admin:remove:{uid}", emoji="warning", style="danger")])
     rows.extend([BACK_PANEL])
@@ -4971,6 +5097,34 @@ def handle_callback_query(query: dict) -> None:
         audit_admin(user_id, "настройка хранения", None, f"{key}={parts[2]}")
         page = page_storage_settings(user_id)
         alert = "Настройка сохранена"
+    elif data == "chatview:add":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только владелец может выдавать просмотр чатов", show_alert=True)
+            return
+        PENDING_CHAT_VIEW_ACCESS[chat_id] = ("grant", time.time() + 300)
+        send_message(chat_id, "Отправь Telegram ID пользователя, которому нужно выдать просмотр чатов. Отмена — /cancel")
+        page = page_admins(user_id)
+        alert = "Жду ID"
+    elif data == "chatview:remove":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только владелец может забирать просмотр чатов", show_alert=True)
+            return
+        PENDING_CHAT_VIEW_ACCESS[chat_id] = ("revoke", time.time() + 300)
+        send_message(chat_id, "Отправь Telegram ID пользователя, у которого нужно забрать просмотр чатов. Отмена — /cancel")
+        page = page_admins(user_id)
+        alert = "Жду ID"
+    elif data == "logs:clear":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только владелец может очищать логи", show_alert=True)
+            return
+        page = page_clear_logs_confirm(user_id)
+    elif data == "logs:clear:confirm":
+        if not is_owner_admin(user_id):
+            answer_callback(query_id, text="Только владелец может очищать логи", show_alert=True)
+            return
+        actions, views = clear_admin_logs(user_id)
+        page = page_admins(user_id)
+        alert = f"Логи очищены: {actions} действий, {views} просмотров"
     elif data == "admin:add":
         if not is_owner_admin(user_id):
             answer_callback(query_id, text="Только владелец может выдавать админку", show_alert=True)
@@ -6078,7 +6232,7 @@ def handle_regular_message(message: dict) -> None:
     pending_maps = (
         PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_BROADCAST_BUTTON, PENDING_PROMO_CREATE,
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
-        PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
+        PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_VIEW_ACCESS, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
         PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
@@ -6144,6 +6298,25 @@ def handle_regular_message(message: dict) -> None:
         page_text, page_markup = page_user_chat_messages(
             user_id, target_id, target_chat_id, return_page, chats_page, 0, period
         )
+        send_menu_page(user_id, chat_id, page_text, page_markup)
+        return
+
+    if text and not text.startswith("/") and chat_id in PENDING_CHAT_VIEW_ACCESS and is_owner_admin(user_id):
+        mode, deadline = PENDING_CHAT_VIEW_ACCESS.pop(chat_id)
+        if deadline < time.time():
+            send_message(chat_id, "Время изменения доступа к чатам истекло.")
+            return
+        try:
+            target_id = int(text.strip())
+        except ValueError:
+            send_message(chat_id, "Нужен Telegram ID числом.")
+            return
+        if mode == "grant":
+            _, result = grant_chat_view_access(user_id, target_id)
+        else:
+            _, result = revoke_chat_view_access(user_id, target_id)
+        page_text, page_markup = page_admins(user_id)
+        send_message(chat_id, result)
         send_menu_page(user_id, chat_id, page_text, page_markup)
         return
 
