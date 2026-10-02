@@ -1796,7 +1796,8 @@ PENDING_GRANT: dict[int, float] = {}
 PENDING_PRICE: dict[int, tuple[int, str, float]] = {}
 # admin chat_id -> (scope, deadline); preview is stored after the message arrives
 PENDING_BROADCAST: dict[int, tuple[str, float]] = {}
-BROADCAST_PREVIEWS: dict[int, tuple[str, str, float]] = {}
+PENDING_BROADCAST_BUTTON: dict[int, float] = {}
+BROADCAST_PREVIEWS: dict[int, dict[str, object]] = {}
 PENDING_PROMO_CREATE: dict[int, float] = {}
 PENDING_PROMO_ACTIVATE: dict[int, float] = {}
 PENDING_GIFT: dict[int, float] = {}
@@ -2360,7 +2361,7 @@ def page_home(user_id: int) -> tuple[str, dict]:
             btn("Пригласить друзей", "ref", emoji="invite"),
         ],
         [
-            btn("Помощь", "help", emoji="support"),
+            btn("Настроить за минуту", "help", emoji="support"),
             btn("Поддержка", "support", emoji="support"),
         ],
     ]
@@ -2451,15 +2452,18 @@ def page_ref(user_id: int) -> tuple[str, dict]:
 
 def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
+    guide_url = f"{WEBAPP_URL}/setup.html"
     text = (
-        f"{pe('support')} <b>Подключение HolyGram</b>\n\n"
-        "1. Telegram → <b>Настройки</b> → <b>Telegram Business</b> → <b>Чат-боты</b>.\n"
-        f"2. Добавь <code>@{username}</code>.\n"
-        "3. Выбери нужные чаты и сохрани настройки.\n\n"
-        f"{pe('check')} После этого новые сообщения сохраняются автоматически."
+        f"{pe('support')} <b>Настроить за минуту</b>\n\n"
+        "Открой пошаговые скриншоты — там показано, куда нажимать:\n"
+        "1. Профиль → <b>Изм.</b>\n"
+        "2. <b>Автоматизация чатов</b>\n"
+        f"3. Найди <code>@{username}</code> и нажми <b>Добавить</b>.\n\n"
+        f"{pe('check')} После подключения выбери нужные чаты и сохрани настройки."
     )
     rows = [
-        [btn("Проверить подключение", "conns", emoji="refresh", style="primary")],
+        [btn("Показать скриншоты", web_app=guide_url, emoji="view", style="primary")],
+        [btn("Проверить подключение", "conns", emoji="refresh")],
         [btn("← Назад", "home", emoji="back")],
     ]
     return text, kb(rows)
@@ -4020,6 +4024,62 @@ def handle_price_input(admin_id: int, chat_id: int, text: str) -> bool:
     return True
 
 
+def broadcast_recipient_button(preview: dict[str, object]) -> dict | None:
+    kind = str(preview.get("button_type") or "none")
+    text = str(preview.get("button_text") or "")
+    value = str(preview.get("button_value") or "")
+    if kind == "support":
+        return kb([[btn(text or "Написать в поддержку", "support", emoji="support", style="primary")]])
+    if kind == "help":
+        return kb([[btn(text or "Настроить за минуту", "help", emoji="support", style="primary")]])
+    if kind == "home":
+        return kb([[btn(text or "Открыть HolyGram", "home", emoji="home", style="primary")]])
+    if kind == "custom" and value.startswith(("https://", "http://", "tg://")):
+        return kb([[btn(text or "Открыть", url=value, style="primary")]])
+    return None
+
+
+def broadcast_preview_page(chat_id: int) -> tuple[str, dict]:
+    preview = BROADCAST_PREVIEWS.get(chat_id)
+    if not preview or float(preview.get("expires_at") or 0) < time.time():
+        return (
+            f"{pe('warning')} <b>Черновик рассылки устарел</b>\n\nНачни рассылку заново.",
+            kb([BACK_PANEL]),
+        )
+
+    selected = str(preview.get("button_type") or "none")
+    names = {
+        "none": "без кнопки",
+        "support": "Поддержка",
+        "help": "Настроить за минуту",
+        "home": "Главное меню",
+        "custom": str(preview.get("button_text") or "Своя ссылка"),
+    }
+    text = str(preview.get("text") or "")
+    rows = [
+        [
+            btn(("✓ " if selected == "support" else "") + "Поддержка", "broadcast:button:support", emoji="support"),
+            btn(("✓ " if selected == "help" else "") + "Настроить", "broadcast:button:help", emoji="support"),
+        ],
+        [
+            btn(("✓ " if selected == "home" else "") + "Главное меню", "broadcast:button:home", emoji="home"),
+            btn(("✓ " if selected == "custom" else "") + "Своя ссылка", "broadcast:button:custom", emoji="view"),
+        ],
+        [btn(("✓ " if selected == "none" else "") + "Без кнопки", "broadcast:button:none", emoji="warning")],
+        [
+            btn("Отправить рассылку", "broadcast:send", emoji="check", style="success"),
+            btn("Отмена", "broadcast:cancel", emoji="warning", style="danger"),
+        ],
+    ]
+    return (
+        f"{pe('support')} <b>Предпросмотр рассылки</b>\n\n"
+        f"{html_quote(text)}\n\n"
+        f"Кнопка снизу: <b>{html_text(names.get(selected, 'без кнопки'))}</b>\n"
+        "Выбери кнопку и только потом отправляй.",
+        kb(rows),
+    )
+
+
 def handle_broadcast_input(admin_id: int, chat_id: int, text: str) -> bool:
     pending = PENDING_BROADCAST.pop(chat_id, None)
     if not pending:
@@ -4028,22 +4088,77 @@ def handle_broadcast_input(admin_id: int, chat_id: int, text: str) -> bool:
     if deadline < time.time():
         send_message(chat_id, "Окно рассылки закрылось — начни заново.")
         return True
-    BROADCAST_PREVIEWS[chat_id] = (scope, text[:3900], time.time() + 600)
-    audience = "всем пользователям" if scope == "all" else "только с активной подпиской"
-    send_message(
-        chat_id,
-        f"{pe('support')} <b>Предпросмотр рассылки</b>\nПолучатели: <b>{audience}</b>\n\n{html_quote(text)}",
-        parse_mode="HTML",
-        reply_markup=kb([[btn("Отправить", "broadcast:send", emoji="check", style="success"), btn("Отмена", "broadcast:cancel", emoji="warning", style="danger")]]),
-    )
+
+    clean_text = text.strip()[:3900]
+    if not clean_text:
+        send_message(chat_id, "Текст рассылки не может быть пустым.")
+        return True
+
+    BROADCAST_PREVIEWS[chat_id] = {
+        "scope": scope,
+        "text": clean_text,
+        "expires_at": time.time() + 900,
+        "button_type": "none",
+        "button_text": "",
+        "button_value": "",
+    }
+    preview_text, preview_markup = broadcast_preview_page(chat_id)
+    send_message(chat_id, preview_text, parse_mode="HTML", reply_markup=preview_markup)
     return True
 
 
+def handle_broadcast_button_input(admin_id: int, chat_id: int, text: str) -> bool:
+    deadline = PENDING_BROADCAST_BUTTON.pop(chat_id, None)
+    if deadline is None:
+        return False
+    if deadline < time.time():
+        send_message(chat_id, "Окно настройки кнопки закрылось — начни заново.")
+        return True
+
+    preview = BROADCAST_PREVIEWS.get(chat_id)
+    if not preview:
+        send_message(chat_id, "Черновик рассылки не найден.")
+        return True
+
+    raw = text.strip()
+    if "|" not in raw:
+        send_message(
+            chat_id,
+            "Формат: <code>Текст кнопки | https://ссылка</code>\n"
+            "Например: <code>Открыть канал | https://t.me/anonmgn</code>",
+            parse_mode="HTML",
+        )
+        PENDING_BROADCAST_BUTTON[chat_id] = time.time() + 600
+        return True
+
+    label, url = (part.strip() for part in raw.split("|", 1))
+    if not label or len(label) > 64:
+        send_message(chat_id, "Название кнопки должно быть от 1 до 64 символов.")
+        PENDING_BROADCAST_BUTTON[chat_id] = time.time() + 600
+        return True
+    if not url.startswith(("https://", "http://", "tg://")):
+        send_message(chat_id, "Ссылка должна начинаться с https://, http:// или tg://")
+        PENDING_BROADCAST_BUTTON[chat_id] = time.time() + 600
+        return True
+
+    preview["button_type"] = "custom"
+    preview["button_text"] = label
+    preview["button_value"] = url
+    preview["expires_at"] = time.time() + 900
+    preview_text, preview_markup = broadcast_preview_page(chat_id)
+    send_message(chat_id, preview_text, parse_mode="HTML", reply_markup=preview_markup)
+    audit_admin(admin_id, "кнопка рассылки", None, f"{label} -> {url[:180]}")
+    return True
+
 def execute_broadcast(admin_id: int, chat_id: int) -> tuple[int, int]:
     preview = BROADCAST_PREVIEWS.pop(chat_id, None)
-    if not preview or preview[2] < time.time():
+    PENDING_BROADCAST_BUTTON.pop(chat_id, None)
+    if not preview or float(preview.get("expires_at") or 0) < time.time():
         return 0, 0
-    scope, text, _ = preview
+
+    text = str(preview.get("text") or "")
+    reply_markup = broadcast_recipient_button(preview)
+
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             """
@@ -4052,15 +4167,25 @@ def execute_broadcast(admin_id: int, chat_id: int) -> tuple[int, int]:
             WHERE u.private_chat_id IS NOT NULL AND b.user_id IS NULL
             """
         ).fetchall()
+
     sent = failed = 0
     for (target_chat,) in rows:
+        payload: dict[str, object] = {"chat_id": int(target_chat), "text": text}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         try:
-            telegram_call("sendMessage", {"chat_id": int(target_chat), "text": text})
+            telegram_call("sendMessage", payload)
             sent += 1
         except TelegramApiError:
             failed += 1
         time.sleep(0.04)
-    audit_admin(admin_id, "рассылка", None, f"scope=all, sent={sent}, failed={failed}")
+
+    audit_admin(
+        admin_id,
+        "рассылка",
+        None,
+        f"scope=all, button={preview.get('button_type')}, sent={sent}, failed={failed}",
+    )
     return sent, failed
 
 def handle_promo_create_input(admin_id: int, chat_id: int, text: str) -> bool:
@@ -4976,14 +5101,54 @@ def handle_callback_query(query: dict) -> None:
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
-        page = (f"{pe('support')} <b>Рассылка</b>\n\nРассылка отправляется всем незаблокированным пользователям.", kb([[btn("Начать рассылку", "broadcast:all", emoji="view")], [btn("Админ-панель", "panel", emoji="home")]]))
+        page = (
+            f"{pe('support')} <b>Рассылка</b>\n\n"
+            "1. Отправь текст рассылки.\n"
+            "2. Выбери кнопку снизу или оставь без кнопки.\n"
+            "3. Проверь предпросмотр и отправь.",
+            kb([
+                [btn("Создать рассылку", "broadcast:all", emoji="add", style="success")],
+                BACK_PANEL,
+            ]),
+        )
     elif data in {"broadcast:all", "broadcast:active"}:
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
-        PENDING_BROADCAST[chat_id] = (data.split(":")[1], time.time() + 600)
+        PENDING_BROADCAST[chat_id] = ("all", time.time() + 600)
+        BROADCAST_PREVIEWS.pop(chat_id, None)
+        PENDING_BROADCAST_BUTTON.pop(chat_id, None)
         send_message(chat_id, "Отправь текст рассылки одним сообщением. Отмена — /cancel")
         alert = "Жду текст"
+    elif data.startswith("broadcast:button:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        preview = BROADCAST_PREVIEWS.get(chat_id)
+        if not preview:
+            answer_callback(query_id, text="Черновик рассылки не найден", show_alert=True)
+            return
+        kind = data.split(":", 2)[2]
+        if kind == "custom":
+            PENDING_BROADCAST_BUTTON[chat_id] = time.time() + 600
+            send_message(
+                chat_id,
+                "Отправь кнопку в формате:\n"
+                "<code>Текст кнопки | https://ссылка</code>\n\n"
+                "Например:\n<code>Открыть поддержку | https://t.me/holy_gram_bot</code>",
+                parse_mode="HTML",
+            )
+            alert = "Жду текст кнопки и ссылку"
+        elif kind in {"none", "support", "help", "home"}:
+            preview["button_type"] = kind
+            preview["button_text"] = ""
+            preview["button_value"] = ""
+            preview["expires_at"] = time.time() + 900
+            page = broadcast_preview_page(chat_id)
+            alert = "Кнопка выбрана"
+        else:
+            answer_callback(query_id, text="Неизвестный тип кнопки", show_alert=True)
+            return
     elif data == "broadcast:send":
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
@@ -4994,6 +5159,7 @@ def handle_callback_query(query: dict) -> None:
     elif data == "broadcast:cancel":
         BROADCAST_PREVIEWS.pop(chat_id, None)
         PENDING_BROADCAST.pop(chat_id, None)
+        PENDING_BROADCAST_BUTTON.pop(chat_id, None)
         page = page_panel(user_id)
         alert = "Рассылка отменена"
     elif data == "stats":
@@ -5757,7 +5923,7 @@ def handle_regular_message(message: dict) -> None:
             return
 
     pending_maps = (
-        PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_PROMO_CREATE,
+        PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_BROADCAST_BUTTON, PENDING_PROMO_CREATE,
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
         PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
         PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER,
@@ -5766,6 +5932,7 @@ def handle_regular_message(message: dict) -> None:
         for pending in pending_maps:
             pending.pop(chat_id, None)
         BROADCAST_PREVIEWS.pop(chat_id, None)
+        PENDING_BROADCAST_BUTTON.pop(chat_id, None)
         send_message(chat_id, "Отменено.")
         return
 
@@ -5846,6 +6013,9 @@ def handle_regular_message(message: dict) -> None:
             return
     if text and not text.startswith("/") and chat_id in PENDING_BLOCK_REASON and is_admin_user(user_id):
         if handle_block_reason_input(user_id, chat_id, text):
+            return
+    if text and not text.startswith("/") and chat_id in PENDING_BROADCAST_BUTTON and is_admin_user(user_id):
+        if handle_broadcast_button_input(user_id, chat_id, text):
             return
     if text and not text.startswith("/") and chat_id in PENDING_BROADCAST and is_admin_user(user_id):
         if handle_broadcast_input(user_id, chat_id, text):
