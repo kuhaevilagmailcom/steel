@@ -99,7 +99,7 @@ def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
     where = ""
     params: list[object] = []
     if query.strip():
-        where = "WHERE lower(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') || ' ' || COALESCE(u.username,'') || ' ' || CAST(a.user_id AS TEXT) || CASE WHEN a.user_id=7732538826 THEN ' святоша' ELSE '' END) LIKE ?"
+        where = "WHERE lower(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') || ' ' || COALESCE(u.username,'') || ' ' || CAST(a.user_id AS TEXT)) LIKE ?"
         params.append(needle)
     with sqlite3.connect(bot.DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -115,8 +115,7 @@ def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
                 SELECT DISTINCT owner_id AS user_id
                 FROM business_connections
                 WHERE owner_id IS NOT NULL AND is_enabled=1
-                UNION
-                SELECT 7732538826 AS user_id
+                  AND owner_id != 7732538826
             )
             SELECT a.user_id,u.first_name,u.last_name,u.username,u.created_at,u.updated_at,
                    COUNT(DISTINCT owned.chat_id) AS chat_count,COUNT(owned.chat_id) AS message_count
