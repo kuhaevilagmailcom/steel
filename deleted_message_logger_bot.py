@@ -1885,6 +1885,7 @@ def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict
             marker = "✅ "
         rows.append([btn(marker + channel["title"], url=channel["url"])])
     rows.append([btn("✅ Проверить подписку", "required:check", style="success")])
+    rows.append([btn("← Назад", "home", emoji="back")])
 
     if errors:
         issue = (
@@ -2574,7 +2575,10 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
         buttons.append([btn(f"{short_name} · {uid}", f"user:{uid}:{page_number}", emoji="view")])
     if navigation:
         buttons.append(navigation)
-    buttons.extend([[btn("Обновить", f"users:{page_number}", emoji="refresh")], [btn("Админ-панель", "panel", emoji="admin")], BACK_HOME])
+    buttons.extend([
+        [btn("Обновить", f"users:{page_number}", emoji="refresh")],
+        BACK_PANEL,
+    ])
     return text, kb(buttons)
 
 def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
@@ -2758,9 +2762,8 @@ def page_user_chats(
     rows.extend([
         [btn("Фильтры", f"ucfilters:{target_id}:{return_page}", emoji="view"), btn("Поиск", f"usearch:{target_id}:{return_page}", emoji="view")],
         [btn("Обновить список", f"ucl:{target_id}:{return_page}:{page_number}:{filter_name}:{sort_name}", emoji="refresh")],
-        [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
-        [btn("Все пользователи", f"users:{return_page}", emoji="home")],
-        BACK_HOME,
+        [btn("← Назад", f"user:{target_id}:{return_page}", emoji="back")],
+        [btn("Главное меню", "home", emoji="home")],
     ])
     return text, kb(rows)
 
@@ -2877,10 +2880,9 @@ def page_user_chat_messages(
     rows.extend([
         [btn("Обновить чат", f"{callback_prefix}:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number}{callback_suffix}", emoji="refresh")],
         [btn("Медиа", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:all:0", emoji="view"), btn("По дате", f"udates:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="history")],
-        [btn("Карточка чата", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="profile")],
-        [btn("К чатам пользователя", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="view")],
-        [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")],
-        BACK_HOME,
+        [btn("← Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
+        [btn("К списку чатов", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="view")],
+        [btn("Главное меню", "home", emoji="home")],
     ])
     set_chat_seen(admin_id, target_id, chat_id)
     log_admin_view(admin_id, target_id, chat_id, "просмотр сообщений", period_label)
@@ -3047,8 +3049,8 @@ def page_chat_media(
         [btn("Видео", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:video:0"), btn("Голосовые", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:voice:0")],
         [btn("Кружки", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:round:0"), btn("Стикеры", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:sticker:0")],
         [btn("Файлы", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:file:0")],
-        [btn("Карточка чата", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="home")],
-        BACK_HOME,
+        [btn("← Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
+        [btn("Главное меню", "home", emoji="home")],
     ])
     log_admin_view(admin_id, target_id, chat_id, "просмотр медиа", filter_label)
     return text, kb(rows)
@@ -3062,8 +3064,8 @@ def page_chat_dates(admin_id: int, target_id: int, chat_id: int, return_page: in
         [btn("Последние 7 дней", f"uday:{target_id}:{chat_id}:{return_page}:{chats_page}:0:7d", emoji="history")],
         [btn("Выбрать дату", f"udatein:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="view")],
         [btn("Вся история", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:0", emoji="refresh")],
-        [btn("Карточка чата", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="home")],
-        BACK_HOME,
+        [btn("← Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
+        [btn("Главное меню", "home", emoji="home")],
     ]
     return f"{pe('history')} <b>Сообщения по дате</b>\n\nВыбери нужный период.", kb(rows)
 
@@ -3108,7 +3110,11 @@ def page_chat_search_results(admin_id: int, target_id: int, return_page: int = 0
         navigation.append(btn("Дальше", f"usres:{target_id}:{return_page}:{page_number + 1}", emoji="view"))
     if navigation:
         rows.append(navigation)
-    rows.extend([[btn("Новый поиск", f"usearch:{target_id}:{return_page}", emoji="refresh")], [btn("Карточка пользователя", f"user:{target_id}:{return_page}", emoji="profile")], BACK_HOME])
+    rows.extend([
+        [btn("Новый поиск", f"usearch:{target_id}:{return_page}", emoji="refresh")],
+        [btn("← Назад", f"user:{target_id}:{return_page}", emoji="back")],
+        [btn("Главное меню", "home", emoji="home")],
+    ])
     log_admin_view(admin_id, target_id, None, "поиск сообщений", query)
     return text, kb(rows)
 
@@ -3131,7 +3137,7 @@ def page_chat_privacy(user_id: int) -> tuple[str, dict]:
     )
     rows = [[btn("Скрыть ещё пользователя", "privacy:add", emoji="add")]]
     rows.extend([[btn(f"Вернуть · {uid}", f"privacy:remove:{uid}", emoji="refresh")] for uid, _ in extra[:15]])
-    rows.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    rows.extend([BACK_PANEL])
     return text, kb(rows)
 
 
@@ -3157,7 +3163,7 @@ def page_digest_settings(user_id: int) -> tuple[str, dict]:
         f"digset:{recipient}:{MESSAGE_DIGEST_TARGET_USER_ID}",
         emoji="warning" if enabled else "check",
     )] for recipient, enabled in states]
-    rows.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    rows.extend([BACK_PANEL])
     return text, kb(rows)
 
 
@@ -3441,12 +3447,15 @@ def page_stats(user_id: int) -> tuple[str, dict]:
         f"Доступ: <b>бесплатный для всех</b>\n\n"
         f"<b>Новые пользователи за 7 дней</b>\n<code>{chart}</code>"
     )
-    return text, kb([[btn("Обновить", "stats", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    return text, kb([
+        [btn("Обновить", "stats", emoji="refresh")],
+        BACK_PANEL,
+    ])
 
 def page_promos(user_id: int) -> tuple[str, dict]:
     return (
         f"{pe('check')} <b>HolyGram бесплатный</b>\n\nПромокоды на подписку больше не используются.",
-        kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME]),
+        kb([BACK_PANEL]),
     )
 
 def page_admin_log(user_id: int) -> tuple[str, dict]:
@@ -3455,7 +3464,7 @@ def page_admin_log(user_id: int) -> tuple[str, dict]:
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("SELECT admin_id, action, target_id, details, created_at FROM admin_actions ORDER BY id DESC LIMIT 30").fetchall()
     lines = [f"{format_display_time(ts, '%d.%m %H:%M')} · <code>{admin}</code> · <b>{html_text(action)}</b>{f' · {journal_user_ref(target)}' if target else ''}{f' · {html_text(details)}' if details else ''}" for admin, action, target, details, ts in rows]
-    return f"{pe('admin')} <b>Журнал администраторов</b>\n\n" + ("\n".join(lines) if lines else "Действий пока нет."), kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    return f"{pe('admin')} <b>Журнал администраторов</b>\n\n" + ("\n".join(lines) if lines else "Действий пока нет."), kb([BACK_PANEL])
 
 
 def page_gift_buy(payer_id: int, target_id: int) -> tuple[str, dict]:
@@ -3564,7 +3573,7 @@ def page_admins(user_id: int) -> tuple[str, dict]:
         rows.append([btn("Добавить администратора", "admin:add", emoji="add", style="success")])
         for uid, _, _ in delegated[:20]:
             rows.append([btn(f"Снять админку · {uid}", f"admin:remove:{uid}", emoji="warning", style="danger")])
-    rows.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    rows.extend([BACK_PANEL])
     return text, kb(rows)
 
 
@@ -3593,20 +3602,23 @@ def page_support_tickets(user_id: int) -> tuple[str, dict]:
         [btn(f"Ответить на #{ticket_id}", f"support:reply:{ticket_id}:{target_id}", emoji="support")]
         for ticket_id, target_id, _, _ in rows[:8]
     ]
-    buttons.extend([[btn("Обновить", "tickets", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
+    buttons.extend([
+        [btn("Обновить", "tickets", emoji="refresh")],
+        BACK_PANEL,
+    ])
     return text, kb(buttons)
 
 
 def page_expiring_subscriptions(user_id: int) -> tuple[str, dict]:
     return (
         f"{pe('check')} <b>HolyGram бесплатный</b>\n\nСроков подписки больше нет.",
-        kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME]),
+        kb([BACK_PANEL]),
     )
 
 def page_prices(user_id: int) -> tuple[str, dict]:
     return (
         f"{pe('check')} <b>HolyGram бесплатный</b>\n\nТарифы и цены отключены.",
-        kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME]),
+        kb([BACK_PANEL]),
     )
 
 
