@@ -4424,12 +4424,14 @@ def handle_callback_query(query: dict) -> None:
 
     if str(chat.get("type") or "private") != "private":
         if data == "required:check":
-            subscribed, _, _ = required_channel_membership(user_id, force=True)
-            answer_callback(
-                query_id,
-                text="Подписка подтверждена ✅ Повторите команду." if subscribed else "Подпишитесь на оба канала и попробуйте ещё раз",
-                show_alert=not subscribed,
-            )
+            subscribed, missing, errors = required_channel_membership(user_id, force=True)
+            if subscribed:
+                check_text = "Подписка подтверждена ✅ Повторите команду."
+            elif errors:
+                check_text = "Telegram не дал проверить канал. Добавь HolyGram администратором в оба канала."
+            else:
+                check_text = "Подпишитесь на оба канала и попробуйте ещё раз"
+            answer_callback(query_id, text=check_text, show_alert=not subscribed)
             return
         answer_callback(query_id, text="Меню работает в личных сообщениях со мной", show_alert=True)
         return
@@ -4441,14 +4443,16 @@ def handle_callback_query(query: dict) -> None:
         return
 
     if data == "required:check":
-        subscribed, _, _ = required_channel_membership(user_id, force=True)
+        subscribed, missing, errors = required_channel_membership(user_id, force=True)
         page_text, page_markup = page_home(user_id) if subscribed else page_required_channels(user_id)
         send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=subscribed)
-        answer_callback(
-            query_id,
-            text="Подписка подтверждена ✅" if subscribed else "Подпишитесь на оба канала и попробуйте ещё раз",
-            show_alert=not subscribed,
-        )
+        if subscribed:
+            check_text = "Подписка подтверждена ✅"
+        elif errors:
+            check_text = "Telegram не дал проверить канал. Добавь HolyGram администратором в оба канала."
+        else:
+            check_text = "Подпишитесь на оба канала и попробуйте ещё раз"
+        answer_callback(query_id, text=check_text, show_alert=not subscribed)
         return
 
     subscribed, _, _ = required_channel_membership(user_id)
