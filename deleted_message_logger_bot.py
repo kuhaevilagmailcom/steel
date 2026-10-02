@@ -2737,23 +2737,14 @@ def page_home(user_id: int) -> tuple[str, dict]:
     connections = list_business_connections(user_id)
     regular_chats = get_user_chats(user_id)
     enabled_count = sum(1 for row in connections if row.get("is_enabled")) + len(regular_chats)
-    has_connections = bool(connections or regular_chats)
 
     rows = [
-        [btn(
-            "Мои подключённые чаты" if has_connections else "Подключить чаты",
-            "conns",
-            emoji="view",
-            style="primary",
-        )],
+        [btn("Функции бота", "functions", emoji="view", style="primary")],
         [
-            btn("Стиль общения", "style", emoji="profile"),
-            btn("Пригласить друзей", "ref", emoji="invite"),
-        ],
-        [
-            btn("Настроить за минуту", "help", emoji="support"),
+            btn("Реферальная система", "ref", emoji="invite"),
             btn("Поддержка", "support", emoji="support"),
         ],
+        [btn("Как подключить", "help", emoji="add")],
     ]
     if is_admin_user(user_id):
         rows.append([btn("Админ-панель", "panel", emoji="admin", style="success")])
@@ -2769,7 +2760,7 @@ def page_home(user_id: int) -> tuple[str, dict]:
         f"{status}\n"
         f"{pe('check')} <b>Бесплатно для всех</b>\n"
         f"{pe('check')} <b>Telegram Premium для подключения не нужен</b>\n\n"
-        "Выбери нужный раздел:"
+        "Основное меню стало компактнее — всё дополнительное находится в «Функции бота»."
     )
     return text, kb(rows)
 
@@ -2781,6 +2772,119 @@ def page_buy(user_id: int) -> tuple[str, dict]:
         "Все доступные функции работают бесплатно."
     )
     return text, kb(bottom_navigation())
+
+
+def page_functions(user_id: int) -> tuple[str, dict]:
+    connections = list_business_connections(user_id)
+    regular_chats = get_user_chats(user_id)
+    enabled_count = sum(1 for row in connections if row.get("is_enabled")) + len(regular_chats)
+    replacements_count = len(list_auto_replacements(user_id))
+    commands_count = len(list_custom_commands(user_id))
+    current_style = STYLE_LABELS.get(get_communication_style(user_id), "Отключён")
+    rows = [
+        [
+            btn("Подключённые чаты", "conns", emoji="view"),
+            btn("Стили общения", "style", emoji="profile"),
+        ],
+        [
+            btn("Автозамена", "autoreplace", emoji="refresh"),
+            btn("Мои команды", "commands", emoji="history"),
+        ],
+        [btn("Назад", "home", emoji="back")],
+    ]
+    text = (
+        "⚙️ <b>Функции бота</b>\n\n"
+        f"Подключено чатов: <b>{enabled_count}</b>\n"
+        f"Стиль: <b>{html_text(current_style)}</b>\n"
+        f"Автозамен: <b>{replacements_count}</b>\n"
+        f"Команд: <b>{commands_count}</b>\n\n"
+        "Здесь собраны функции, которые меняют и автоматизируют исходящие сообщения."
+    )
+    return text, kb(rows)
+
+
+def page_auto_replacements(user_id: int) -> tuple[str, dict]:
+    rules = list_auto_replacements(user_id)
+    rows: list[list[dict]] = []
+    for rule_id, trigger, replacement in rules[:25]:
+        label = f"{trigger} → {replacement}"
+        if len(label) > 42:
+            label = label[:39] + "…"
+        rows.append([btn(label, f"ar:item:{rule_id}")])
+    rows.extend([
+        [btn("Добавить автозамену", "ar:add", emoji="add", style="success")],
+        [btn("Назад к функциям", "functions", emoji="back")],
+    ])
+    text = (
+        "🔁 <b>Автозамена</b>\n\n"
+        "Добавь слово или фразу и текст, на который HolyGram должен её менять. "
+        "Правила личные — у каждого пользователя свой список.\n\n"
+        f"Создано: <b>{len(rules)}/{MAX_USER_AUTOREPLACE_RULES}</b>"
+    )
+    return text, kb(rows)
+
+
+def page_auto_replacement_item(user_id: int, rule_id: int) -> tuple[str, dict]:
+    rule = get_auto_replacement(user_id, rule_id)
+    if not rule:
+        return page_auto_replacements(user_id)
+    _rule_id, trigger, replacement = rule
+    text = (
+        "🔁 <b>Автозамена</b>\n\n"
+        f"Что искать:\n<code>{html_text(trigger)}</code>\n\n"
+        f"На что менять:\n<blockquote>{html_text(replacement)}</blockquote>"
+    )
+    rows = [
+        [btn("Изменить", f"ar:edit:{rule_id}", emoji="refresh")],
+        [btn("Удалить", f"ar:delete:{rule_id}", emoji="warning", style="danger")],
+        [btn("Назад", "autoreplace", emoji="back")],
+    ]
+    return text, kb(rows)
+
+
+def page_custom_commands(user_id: int) -> tuple[str, dict]:
+    commands = list_custom_commands(user_id)
+    rows: list[list[dict]] = []
+    for command_id, trigger, messages in commands[:25]:
+        rows.append([btn(f"{trigger} · {len(messages)} сообщ.", f"cmd:item:{command_id}")])
+    rows.extend([
+        [btn("Создать команду", "cmd:add", emoji="add", style="success")],
+        [btn("Назад к функциям", "functions", emoji="back")],
+    ])
+    text = (
+        "⌨️ <b>Мои команды</b>\n\n"
+        "Команды работают в подключённых Telegram Business-чатах. "
+        "Например, создай <code>.привет</code>, а затем просто отправь <code>.привет</code> в нужном диалоге — "
+        "HolyGram отправит настроенную последовательность сообщений.\n\n"
+        f"Создано: <b>{len(commands)}/{MAX_USER_COMMANDS}</b>"
+    )
+    return text, kb(rows)
+
+
+def page_custom_command_item(user_id: int, command_id: int) -> tuple[str, dict]:
+    command = get_custom_command(user_id, command_id)
+    if not command:
+        return page_custom_commands(user_id)
+    _command_id, trigger, messages = command
+    preview = "\n".join(
+        f"{index}. {html_text(message[:180])}{'…' if len(message) > 180 else ''}"
+        for index, message in enumerate(messages, start=1)
+    )
+    text = (
+        "⌨️ <b>Пользовательская команда</b>\n\n"
+        f"Команда: <code>{html_text(trigger)}</code>\n"
+        f"Сообщений: <b>{len(messages)}</b>\n\n"
+        f"{preview or 'Сообщений нет.'}"
+    )
+    rows = [
+        [
+            btn("Изменить команду", f"cmd:name:{command_id}", emoji="refresh"),
+            btn("Изменить сообщения", f"cmd:messages:{command_id}", emoji="view"),
+        ],
+        [btn("Удалить", f"cmd:delete:{command_id}", emoji="warning", style="danger")],
+        [btn("Назад", "commands", emoji="back")],
+    ]
+    return text, kb(rows)
 
 
 def page_communication_style(user_id: int) -> tuple[str, dict]:
