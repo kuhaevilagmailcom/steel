@@ -2512,7 +2512,8 @@ def ensure_setup_guide_image() -> Path | None:
             encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
 
         raw = base64.b64decode(encoded, validate=True)
-        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):\n            raise ValueError("setup guide is not a PNG")
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("setup guide is not a PNG")
         SETUP_GUIDE_IMAGE_PATH.write_bytes(raw)
         return SETUP_GUIDE_IMAGE_PATH
     except Exception as exc:
