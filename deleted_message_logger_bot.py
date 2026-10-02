@@ -6767,9 +6767,17 @@ def apply_business_message_style(message: dict, owner_id: int | None) -> str | N
     if not field:
         return None
     original = str(message[field])
-    transformed = transform_message_style(owner_id, original, 4096 if field == "text" else 1024)
+    limit = 4096 if field == "text" else 1024
+
+    # User rules run before the selected communication style. URLs, usernames and
+    # phone numbers are protected inside apply_user_auto_replacements().
+    transformed = apply_user_auto_replacements(owner_id, original)
+    transformed = transform_message_style(owner_id, transformed, limit)
+    if not transformed or len(transformed) > limit:
+        transformed = original
     if transformed == original:
         return original
+
     payload = {
         "business_connection_id": message["business_connection_id"],
         "chat_id": int(message["chat"]["id"]),
@@ -6779,9 +6787,60 @@ def apply_business_message_style(message: dict, owner_id: int | None) -> str | N
     try:
         telegram_call("editMessageText" if field == "text" else "editMessageCaption", payload)
     except TelegramApiError as exc:
-        log(f"Business style edit failed for {owner_id}: {exc}")
+        log(f"Business message transform failed for {owner_id}: {exc}")
         return original
     return transformed
+
+
+def execute_user_custom_business_command(message: dict, owner_id: int | None) -> bool:
+    if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
+        return False
+    raw = str(message.get("text") or "").strip()
+    if not raw.startswith(".") or any(char.isspace() for char in raw):
+        return False
+
+    command = find_custom_command(owner_id, raw)
+    if not command:
+        return False
+    _command_id, trigger, messages = command
+    if not messages:
+        return False
+
+    connection_id = str(message.get("business_connection_id") or "")
+    chat_id = int((message.get("chat") or {}).get("id") or 0)
+    if not connection_id or not chat_id:
+        return False
+
+    sent = 0
+    for text in messages[:MAX_USER_COMMAND_MESSAGES]:
+        try:
+            telegram_call(
+                "sendMessage",
+                {
+                    "business_connection_id": connection_id,
+                    "chat_id": chat_id,
+                    "text": text[:4096],
+                },
+            )
+            sent += 1
+        except TelegramApiError as exc:
+            log(f"Custom command send failed for {owner_id}/{trigger}: {exc}")
+            break
+
+    # If Telegram granted deletion rights, remove the typed .command so only the
+    # configured output remains in the conversation. Without the right, leave it.
+    if sent:
+        try:
+            telegram_call(
+                "deleteBusinessMessages",
+                {
+                    "business_connection_id": connection_id,
+                    "message_ids": [int(message["message_id"])],
+                },
+            )
+        except TelegramApiError as exc:
+            log(f"Custom command trigger delete skipped for {owner_id}/{trigger}: {exc}")
+    return sent > 0
 
 
 def handle_business_message(message: dict) -> None:
@@ -6793,7 +6852,9 @@ def handle_business_message(message: dict) -> None:
     context = f"business:{connection_id}"
     notify_chat_id = get_business_notify_chat_id(connection_id)
     owner_id = get_business_owner_id(connection_id)
-    apply_business_message_style(message, owner_id)
+    command_executed = execute_user_custom_business_command(message, owner_id)
+    if not command_executed:
+        apply_business_message_style(message, owner_id)
     saved = save_message(context, message)
     if saved_message_is_from_user(saved, owner_id):
         return
