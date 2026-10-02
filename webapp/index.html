@@ -7,16 +7,15 @@
   <title>Чаты</title>
   <script src="https://telegram.org/js/telegram-web-app.js?66"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=8">
-  <script defer src="/holygram-ui.bundle?v=7"></script>
+  <link rel="stylesheet" href="/styles.css?v=9">
+  <script defer src="/holygram-ui.bundle?v=8"></script>
 </head>
 <body>
   <div id="app" class="app" data-view="chats">
     <aside id="chatsPanel" class="chats-panel">
       <header class="chats-topbar">
-        <button id="accountButton" class="account-button" type="button" aria-label="Переключить аккаунт">
-          <span id="accountAvatar" class="mini-avatar">?</span>
-          <span class="switch-glyph">⇄</span>
+        <button id="accountButton" class="account-button users-button" type="button" aria-label="Открыть пользователей">
+          <span>Пользователи</span>
         </button>
         <h1>Чаты</h1>
         <button id="refreshChatsButton" class="top-icon" type="button" aria-label="Обновить чаты">
@@ -48,13 +47,13 @@
   </div>
 
   <div id="accountScrim" class="account-scrim hidden"></div>
-  <aside id="accountDrawer" class="account-drawer hidden" aria-label="Аккаунты">
-    <header><button id="closeAccounts" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button><b>Аккаунты</b></header>
-    <label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="userSearch" type="search" placeholder="Поиск" autocomplete="off"></label>
+  <aside id="accountDrawer" class="account-drawer hidden" aria-label="Пользователи">
+    <header><button id="closeAccounts" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button><b>Пользователи</b></header>
+    <label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="userSearch" type="search" placeholder="Поиск пользователей" autocomplete="off"></label>
     <div id="usersList" class="list"></div>
   </aside>
 
-  <span id="usersCount" class="hidden">—</span><span id="ownerAvatar" class="hidden"></span><span id="selectedUserAvatar" class="hidden"></span>
+  <span id="usersCount" class="hidden">—</span><span id="ownerAvatar" class="hidden"></span><span id="selectedUserAvatar" class="hidden"></span><span id="accountAvatar" class="hidden"></span>
 
   <div id="editScrim" class="edit-scrim hidden"></div>
   <section id="editSheet" class="edit-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="editSheetTitle">
