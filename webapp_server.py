@@ -164,6 +164,11 @@ def set_user_pin(bot, admin_id: int, target_id: int, pinned: bool) -> dict:
                 "DELETE FROM admin_user_pins WHERE admin_id=? AND target_id=?",
                 (admin_id, target_id),
             )
+    bot.audit_admin(
+        admin_id,
+        "закрепление пользователя в Web App" if pinned else "открепление пользователя в Web App",
+        target_id,
+    )
     return {"ok": True, "user_id": target_id, "pinned": bool(pinned)}
 
 def list_chats(bot, admin_id: int, target_id: int, query: str = "", limit: int = 60) -> list[dict]:
@@ -399,6 +404,12 @@ def edit_business_message(
         chat_id,
         "Web App: редактирование сообщения",
         f"message_id={message_id}",
+    )
+    bot.audit_admin(
+        admin_id,
+        "редактирование сообщения в Web App",
+        target_id,
+        f"chat_id={chat_id}, message_id={message_id}",
     )
     return {"ok": True, "id": message_id, "text": text}
 
@@ -723,7 +734,16 @@ def make_handler(bot):
                     )
                 elif re.fullmatch(r"/api/users/\d+/chats", path):
                     target_id = _int(path.split("/")[3])
-                    self._send_json(HTTPStatus.OK, {"items": list_chats(bot, admin_id, target_id, str(query.get("q", [""])[0]))})
+                    search_query = str(query.get("q", [""])[0])
+                    items = list_chats(bot, admin_id, target_id, search_query)
+                    bot.log_admin_view(
+                        admin_id,
+                        target_id,
+                        None,
+                        "Web App: просмотр списка чатов",
+                        f"search={search_query[:80]}" if search_query else "",
+                    )
+                    self._send_json(HTTPStatus.OK, {"items": items})
                 elif re.fullmatch(r"/api/users/\d+/chats/-?\d+/messages", path):
                     parts = path.split("/")
                     target_id, chat_id = _int(parts[3]), _int(parts[5])
