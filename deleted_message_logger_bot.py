@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 import gzip
 import hashlib
@@ -34,6 +35,8 @@ LOG_PATH = DATA_DIR / "bot.log"
 LOCK_PATH = DATA_DIR / "bot.lock"
 RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
 MENU_IMAGE_PATH = BASE_DIR / "assets" / "holly_menu.png"
+SETUP_GUIDE_B64_PATH = BASE_DIR / "assets" / "holygram_setup_guide.b64"
+SETUP_GUIDE_IMAGE_PATH = DATA_DIR / "holygram_setup_guide.jpg"
 WEBAPP_URL = os.getenv(
     "WEBAPP_URL", "https://bot-1789500279-7661-furadev.bothost.tech"
 ).strip().rstrip("/")
@@ -69,6 +72,9 @@ SPECIAL_USER_LABELS = {MESSAGE_DIGEST_TARGET_USER_ID: "Святоша"}
 MESSAGE_DIGEST_RECIPIENT_IDS: set[int] = set()
 MESSAGE_DIGEST_INTERVAL_SEC = 5 * 3600
 DEFAULT_ADMIN_MEDIA_TTL_SEC = 300
+USERS_PAGE_SIZE = 15
+ADMIN_CHATS_PAGE_SIZE = 10
+ADMIN_MESSAGES_PAGE_SIZE = 10
 MAX_MEDIA_ARCHIVE_MB = float(os.getenv("MAX_MEDIA_ARCHIVE_MB", "50"))
 MAX_MEDIA_ARCHIVE_BYTES = int(MAX_MEDIA_ARCHIVE_MB * 1024 * 1024)
 FORWARD_TIMER_MEDIA = os.getenv("FORWARD_TIMER_MEDIA", "1").strip() != "0"
@@ -1784,9 +1790,9 @@ def kb(rows: list[list[dict]]) -> dict:
     return {"inline_keyboard": rows}
 
 
-BACK_HOME = [btn("← Назад", "home", emoji="back")]
+BACK_HOME = [btn("Назад", "home", emoji="back")]
 BACK_PANEL = [
-    btn("← Назад", "panel", emoji="back"),
+    btn("Назад", "panel", emoji="back"),
     btn("Главное меню", "home", emoji="home"),
 ]
 
@@ -1886,7 +1892,7 @@ def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict
             marker = "✅ "
         rows.append([btn(marker + channel["title"], url=channel["url"])])
     rows.append([btn("✅ Проверить подписку", "required:check", style="success")])
-    rows.append([btn("← Назад", "home", emoji="back")])
+    rows.append([btn("Назад", "home", emoji="back")])
 
     if errors:
         issue = (
@@ -2341,7 +2347,7 @@ def check_trial(referrer_id: int) -> None:
 
 def bottom_navigation() -> list[list[dict]]:
     """Compact navigation for user-facing submenus."""
-    return [[btn("← Назад", "home", emoji="back")]]
+    return [[btn("Назад", "home", emoji="back")]]
 
 def page_home(user_id: int) -> tuple[str, dict]:
     connections = list_business_connections(user_id)
@@ -2377,7 +2383,8 @@ def page_home(user_id: int) -> tuple[str, dict]:
         f"{pe('home')} <b>HolyGram</b>\n\n"
         "Удалённые, изменённые и одноразовые сообщения — в одном месте.\n\n"
         f"{status}\n"
-        f"{pe('check')} <b>Бесплатно для всех</b>\n\n"
+        f"{pe('check')} <b>Бесплатно для всех</b>\n"
+        f"{pe('check')} <b>Telegram Premium для подключения не нужен</b>\n\n"
         "Выбери нужный раздел:"
     )
     return text, kb(rows)
@@ -2413,7 +2420,7 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
             style_button("dumb", "🧠 Тупой"),
         ],
         [btn("Отключить стиль", "style:off", emoji="warning", style="danger")],
-        [btn("← Назад", "home", emoji="back")],
+        [btn("Назад", "home", emoji="back")],
     ]
     examples = "\n".join(
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
@@ -2446,27 +2453,94 @@ def page_ref(user_id: int) -> tuple[str, dict]:
                 emoji="invite",
             ),
         ],
-        [btn("← Назад", "home", emoji="back")],
+        [btn("Назад", "home", emoji="back")],
     ]
     return text, kb(rows)
 
 def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
-    guide_url = f"{WEBAPP_URL}/setup.html"
     text = (
         f"{pe('support')} <b>Настроить за минуту</b>\n\n"
-        "Открой пошаговые скриншоты — там показано, куда нажимать:\n"
-        "1. Профиль → <b>Изм.</b>\n"
-        "2. <b>Автоматизация чатов</b>\n"
-        f"3. Найди <code>@{username}</code> и нажми <b>Добавить</b>.\n\n"
-        f"{pe('check')} После подключения выбери нужные чаты и сохрани настройки."
+        "На картинке показано, куда нажать, чтобы подключить HolyGram.\n\n"
+        f"Найди <code>@{username}</code>, добавь бота и выбери нужные чаты.\n"
+        f"{pe('check')} Telegram Premium для подключения не нужен."
     )
     rows = [
-        [btn("Показать скриншоты", web_app=guide_url, emoji="view", style="primary")],
-        [btn("Проверить подключение", "conns", emoji="refresh")],
-        [btn("← Назад", "home", emoji="back")],
+        [btn("Проверить подключение", "conns", emoji="refresh", style="primary")],
+        [btn("Назад", "home", emoji="back")],
     ]
     return text, kb(rows)
+
+
+def ensure_setup_guide_image() -> Path | None:
+    if SETUP_GUIDE_IMAGE_PATH.exists() and SETUP_GUIDE_IMAGE_PATH.stat().st_size > 0:
+        return SETUP_GUIDE_IMAGE_PATH
+    if not SETUP_GUIDE_B64_PATH.exists():
+        log("setup guide asset missing")
+        return None
+    try:
+        raw = base64.b64decode(SETUP_GUIDE_B64_PATH.read_text(encoding="ascii"))
+        SETUP_GUIDE_IMAGE_PATH.write_bytes(raw)
+        return SETUP_GUIDE_IMAGE_PATH
+    except Exception as exc:
+        log(f"setup guide decode failed: {type(exc).__name__}: {exc}")
+        return None
+
+
+def send_setup_guide(user_id: int, chat_id: int) -> None:
+    caption, markup = page_help(user_id)
+    image_path = ensure_setup_guide_image()
+    if image_path is None:
+        send_menu_page(user_id, chat_id, caption, markup)
+        return
+
+    previous = _menu_message(user_id)
+    if previous:
+        try:
+            telegram_call("deleteMessage", {"chat_id": previous[0], "message_id": previous[1]})
+        except TelegramApiError:
+            pass
+
+    try:
+        photo_file_id = maintenance_get("setup_guide_photo_file_id")
+        if photo_file_id:
+            try:
+                result = telegram_call(
+                    "sendPhoto",
+                    {
+                        "chat_id": chat_id,
+                        "photo": photo_file_id,
+                        "caption": caption,
+                        "parse_mode": "HTML",
+                        "reply_markup": markup,
+                    },
+                )
+            except TelegramApiError:
+                maintenance_set("setup_guide_photo_file_id", "")
+                photo_file_id = ""
+
+        if not photo_file_id:
+            result = telegram_multipart_call(
+                "sendPhoto",
+                {
+                    "chat_id": chat_id,
+                    "caption": caption,
+                    "parse_mode": "HTML",
+                    "reply_markup": json.dumps(markup, ensure_ascii=False),
+                },
+                {"photo": image_path},
+                timeout=60,
+            )
+            if isinstance(result, dict):
+                photos = result.get("photo") or []
+                if photos and photos[-1].get("file_id"):
+                    maintenance_set("setup_guide_photo_file_id", str(photos[-1]["file_id"]))
+
+        if isinstance(result, dict) and result.get("message_id"):
+            _remember_menu_message(user_id, chat_id, int(result["message_id"]), True)
+    except TelegramApiError as exc:
+        log(f"setup guide send failed for {chat_id}: {exc}")
+        send_menu_page(user_id, chat_id, caption, markup)
 
 def page_connections(user_id: int) -> tuple[str, dict]:
     connections = list_business_connections(user_id)
@@ -2493,7 +2567,7 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     rows.extend([
         [btn("Добавить или изменить чаты", "help", emoji="add")],
         [btn("Обновить", "conns", emoji="refresh")],
-        [btn("← Назад", "home", emoji="back")],
+        [btn("Назад", "home", emoji="back")],
     ])
     return text, kb(rows)
 
@@ -2766,7 +2840,7 @@ def page_user_chats(
     rows.extend([
         [btn("Фильтры", f"ucfilters:{target_id}:{return_page}", emoji="view"), btn("Поиск", f"usearch:{target_id}:{return_page}", emoji="view")],
         [btn("Обновить список", f"ucl:{target_id}:{return_page}:{page_number}:{filter_name}:{sort_name}", emoji="refresh")],
-        [btn("← Назад", f"user:{target_id}:{return_page}", emoji="back")],
+        [btn("Назад", f"user:{target_id}:{return_page}", emoji="back")],
         [btn("Главное меню", "home", emoji="home")],
     ])
     return text, kb(rows)
@@ -2884,7 +2958,7 @@ def page_user_chat_messages(
     rows.extend([
         [btn("Обновить чат", f"{callback_prefix}:{target_id}:{chat_id}:{return_page}:{chats_page}:{page_number}{callback_suffix}", emoji="refresh")],
         [btn("Медиа", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:all:0", emoji="view"), btn("По дате", f"udates:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="history")],
-        [btn("← Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
+        [btn("Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
         [btn("К списку чатов", f"uchats:{target_id}:{return_page}:{chats_page}", emoji="view")],
         [btn("Главное меню", "home", emoji="home")],
     ])
@@ -3053,7 +3127,7 @@ def page_chat_media(
         [btn("Видео", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:video:0"), btn("Голосовые", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:voice:0")],
         [btn("Кружки", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:round:0"), btn("Стикеры", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:sticker:0")],
         [btn("Файлы", f"ugal:{target_id}:{chat_id}:{return_page}:{chats_page}:file:0")],
-        [btn("← Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
+        [btn("Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
         [btn("Главное меню", "home", emoji="home")],
     ])
     log_admin_view(admin_id, target_id, chat_id, "просмотр медиа", filter_label)
@@ -3068,7 +3142,7 @@ def page_chat_dates(admin_id: int, target_id: int, chat_id: int, return_page: in
         [btn("Последние 7 дней", f"uday:{target_id}:{chat_id}:{return_page}:{chats_page}:0:7d", emoji="history")],
         [btn("Выбрать дату", f"udatein:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="view")],
         [btn("Вся история", f"umsg:{target_id}:{chat_id}:{return_page}:{chats_page}:0", emoji="refresh")],
-        [btn("← Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
+        [btn("Назад", f"uchat:{target_id}:{chat_id}:{return_page}:{chats_page}", emoji="back")],
         [btn("Главное меню", "home", emoji="home")],
     ]
     return f"{pe('history')} <b>Сообщения по дате</b>\n\nВыбери нужный период.", kb(rows)
@@ -3116,7 +3190,7 @@ def page_chat_search_results(admin_id: int, target_id: int, return_page: int = 0
         rows.append(navigation)
     rows.extend([
         [btn("Новый поиск", f"usearch:{target_id}:{return_page}", emoji="refresh")],
-        [btn("← Назад", f"user:{target_id}:{return_page}", emoji="back")],
+        [btn("Назад", f"user:{target_id}:{return_page}", emoji="back")],
         [btn("Главное меню", "home", emoji="home")],
     ])
     log_admin_view(admin_id, target_id, None, "поиск сообщений", query)
@@ -3548,7 +3622,7 @@ def page_panel(user_id: int) -> tuple[str, dict]:
     rows.extend([
         [
             btn("Обновить", "panel", emoji="refresh"),
-            btn("← Назад", "home", emoji="back"),
+            btn("Назад", "home", emoji="back"),
         ],
     ])
     return text, kb(rows)
@@ -4374,6 +4448,7 @@ def maintenance_set(key: str, value: str) -> None:
 
 
 def report_technical_issue(key: str, text: str) -> None:
+    """Throttle internal error reporting to the server log; never expose raw exceptions in chats."""
     try:
         last = int(maintenance_get(f"issue:{key}") or 0)
     except sqlite3.Error:
@@ -4385,9 +4460,7 @@ def report_technical_issue(key: str, text: str) -> None:
         maintenance_set(f"issue:{key}", str(now))
     except sqlite3.Error:
         pass
-    for admin_id in list_admin_ids():
-        send_message(admin_id, f"{pe('warning')} <b>Техническое уведомление</b>\n\n{html_text(text)}", parse_mode="HTML")
-
+    log(f"Technical issue [{key}]: {text}")
 
 def health_report() -> tuple[bool, str]:
     checks = []
@@ -4665,7 +4738,9 @@ def handle_callback_query(query: dict) -> None:
     elif data == "ref":
         page = page_ref(user_id)
     elif data == "help":
-        page = page_help(user_id)
+        send_setup_guide(user_id, chat_id)
+        answer_callback(query_id)
+        return
     elif data == "conns":
         page = page_connections(user_id)
     elif data.startswith("digopen:"):
@@ -6048,8 +6123,7 @@ def handle_regular_message(message: dict) -> None:
             handle_start(message, [])
         elif name == "/help":
             if is_private_chat(message):
-                page_text, page_markup = page_help(user_id)
-                send_menu_page(user_id, chat_id, page_text, page_markup)
+                send_setup_guide(user_id, chat_id)
             else:
                 send_message(chat_id, "Помощь покажу в личных сообщениях со мной.")
         elif name == "/support" and is_private_chat(message):
@@ -6387,8 +6461,7 @@ def run_polling() -> None:
                 timeout=60,
             )
             if POLLING_ERROR_COUNT:
-                for admin_id in sorted(ADMIN_USER_IDS):
-                    send_message(admin_id, f"{pe('check')} Telegram API снова работает после ошибок: {POLLING_ERROR_COUNT}.", parse_mode="HTML")
+                log(f"Polling recovered after errors: {POLLING_ERROR_COUNT}")
                 POLLING_ERROR_COUNT = 0
             for update in updates:
                 offset = int(update["update_id"]) + 1
