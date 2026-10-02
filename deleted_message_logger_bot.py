@@ -2811,7 +2811,8 @@ def page_auto_replacements(user_id: int) -> tuple[str, dict]:
     rules = list_auto_replacements(user_id)
     rows: list[list[dict]] = []
     for rule_id, trigger, replacement in rules[:25]:
-        label = f"{trigger} → {replacement}"
+        compact_replacement = re.sub(r"\s+", " ", replacement)
+        label = f"{trigger} → {compact_replacement}"
         if len(label) > 42:
             label = label[:39] + "…"
         rows.append([btn(label, f"ar:item:{rule_id}")])
@@ -7109,10 +7110,11 @@ def apply_business_message_style(message: dict, owner_id: int | None) -> str | N
     original = str(message[field])
     limit = 4096 if field == "text" else 1024
 
-    # User rules run before the selected communication style. URLs, usernames and
-    # phone numbers are protected inside apply_user_auto_replacements().
+    # User-defined auto replacements have priority and must stay exactly as saved.
+    # If no rule matched, the selected communication style is applied normally.
     transformed = apply_user_auto_replacements(owner_id, original)
-    transformed = transform_message_style(owner_id, transformed, limit)
+    if transformed == original:
+        transformed = transform_message_style(owner_id, original, limit)
     if not transformed or len(transformed) > limit:
         transformed = original
     if transformed == original:
