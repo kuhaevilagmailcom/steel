@@ -90,14 +90,15 @@ def _display_user(row: sqlite3.Row) -> dict:
         "updated_at": int(row["updated_at"] or row["created_at"] or 0),
         "chat_count": int(row["chat_count"] or 0),
         "message_count": int(row["message_count"] or 0),
+        "pinned": bool(row["pinned"]) if "pinned" in row.keys() else False,
     }
 
 
-def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
+def list_users(bot, admin_id: int, query: str = "", limit: int = 50, offset: int = 0) -> dict:
     limit = min(MAX_PAGE_SIZE, max(1, limit))
     needle = f"%{query.strip().lower()}%"
     where = ""
-    params: list[object] = []
+    params: list[object] = [admin_id]
     if query.strip():
         where = "WHERE lower(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') || ' ' || COALESCE(u.username,'') || ' ' || CAST(a.user_id AS TEXT)) LIKE ?"
         params.append(needle)
@@ -118,12 +119,17 @@ def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
                   AND owner_id != 7732538826
             )
             SELECT a.user_id,u.first_name,u.last_name,u.username,u.created_at,u.updated_at,
-                   COUNT(DISTINCT owned.chat_id) AS chat_count,COUNT(owned.chat_id) AS message_count
+                   COUNT(DISTINCT owned.chat_id) AS chat_count,
+                   COUNT(owned.chat_id) AS message_count,
+                   CASE WHEN p.target_id IS NULL THEN 0 ELSE 1 END AS pinned,
+                   COALESCE(p.pinned_at,0) AS pinned_at
             FROM accounts a
             LEFT JOIN users u ON u.user_id=a.user_id
             LEFT JOIN owned ON owned.owner_id=a.user_id
+            LEFT JOIN admin_user_pins p ON p.admin_id=? AND p.target_id=a.user_id
             {where}
-            GROUP BY a.user_id ORDER BY COALESCE(u.updated_at,0) DESC,a.user_id DESC
+            GROUP BY a.user_id
+            ORDER BY pinned DESC,pinned_at DESC,COALESCE(u.updated_at,0) DESC,a.user_id DESC
             LIMIT ? OFFSET ?
             """,
             (*params, limit + 1, max(0, offset)),
@@ -131,6 +137,34 @@ def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
     visible = [_display_user(row) for row in rows if not bot.user_chats_are_hidden(int(row["user_id"]))]
     return {"items": visible[:limit], "has_more": len(visible) > limit, "offset": offset}
 
+
+def set_user_pin(bot, admin_id: int, target_id: int, pinned: bool) -> dict:
+    if not bot.can_view_user_chats(admin_id):
+        raise PermissionError("Нет доступа к пользователям")
+    if bot.user_chats_are_hidden(target_id):
+        raise PermissionError("Пользователь недоступен")
+    with sqlite3.connect(bot.DB_PATH) as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM business_connections WHERE owner_id=? AND is_enabled=1 AND owner_id != 7732538826 LIMIT 1",
+            (target_id,),
+        ).fetchone()
+        if not exists:
+            raise FileNotFoundError("Пользователь не найден")
+        if pinned:
+            conn.execute(
+                """
+                INSERT INTO admin_user_pins (admin_id,target_id,pinned_at)
+                VALUES (?,?,?)
+                ON CONFLICT(admin_id,target_id) DO UPDATE SET pinned_at=excluded.pinned_at
+                """,
+                (admin_id, target_id, int(time.time())),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM admin_user_pins WHERE admin_id=? AND target_id=?",
+                (admin_id, target_id),
+            )
+    return {"ok": True, "user_id": target_id, "pinned": bool(pinned)}
 
 def list_chats(bot, admin_id: int, target_id: int, query: str = "", limit: int = 60) -> list[dict]:
     if bot.user_chats_are_hidden(target_id):
@@ -591,12 +625,12 @@ def make_handler(bot):
             try:
                 user = self._auth()
                 admin_id = _int(user.get("id"))
-                match = re.fullmatch(r"/api/users/(\d+)/chats/(-?\d+)/messages/(\d+)/edit", path)
-                if not match:
+                pin_match = re.fullmatch(r"/api/users/(\d+)/pin", path)
+                edit_match = re.fullmatch(r"/api/users/(\d+)/chats/(-?\d+)/messages/(\d+)/edit", path)
+                if not pin_match and not edit_match:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "Маршрут не найден"})
                     return
 
-                target_id, chat_id, message_id = map(_int, match.groups())
                 length = _int(self.headers.get("Content-Length"), 0)
                 if length <= 0 or length > 16384:
                     raise ValueError("Некорректный размер запроса")
@@ -607,14 +641,19 @@ def make_handler(bot):
                 if not isinstance(body, dict):
                     raise ValueError("Некорректный запрос")
 
-                result = edit_business_message(
-                    bot,
-                    admin_id,
-                    target_id,
-                    chat_id,
-                    message_id,
-                    str(body.get("text") or ""),
-                )
+                if pin_match:
+                    target_id = _int(pin_match.group(1))
+                    result = set_user_pin(bot, admin_id, target_id, bool(body.get("pinned")))
+                else:
+                    target_id, chat_id, message_id = map(_int, edit_match.groups())
+                    result = edit_business_message(
+                        bot,
+                        admin_id,
+                        target_id,
+                        chat_id,
+                        message_id,
+                        str(body.get("text") or ""),
+                    )
                 self._send_json(HTTPStatus.OK, result)
             except PermissionError as exc:
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": str(exc)})
@@ -661,7 +700,16 @@ def make_handler(bot):
                     cookie = "" if (os.getenv("WEBAPP_DEV_MODE", "0") == "1" and self.client_address[0] in {"127.0.0.1", "::1"}) else self._session_cookie(admin_id, int(time.time()) + 86400)
                     self._send_json(HTTPStatus.OK, {"ok": True, "owner": {"id": admin_id, "name": str(user.get("first_name") or "Владелец"), "username": str(user.get("username") or "")}, "timezone": "Europe/Moscow"}, cookie)
                 elif path == "/api/users":
-                    self._send_json(HTTPStatus.OK, list_users(bot, str(query.get("q", [""])[0]), _int(query.get("limit", [50])[0], 50), _int(query.get("offset", [0])[0])))
+                    self._send_json(
+                        HTTPStatus.OK,
+                        list_users(
+                            bot,
+                            admin_id,
+                            str(query.get("q", [""])[0]),
+                            _int(query.get("limit", [50])[0], 50),
+                            _int(query.get("offset", [0])[0]),
+                        ),
+                    )
                 elif re.fullmatch(r"/api/users/\d+/chats", path):
                     target_id = _int(path.split("/")[3])
                     self._send_json(HTTPStatus.OK, {"items": list_chats(bot, admin_id, target_id, str(query.get("q", [""])[0]))})
