@@ -194,15 +194,43 @@
     const spoiler = media.spoiler ? ' spoiler' : '';
     const url = mediaUrl(media.url);
     const label = media.file_name || ({photo:'photo.jpg',video:'video.mp4',video_note:'circle.mp4',voice:'voice.ogg',audio:'audio.mp3',sticker:'sticker.webp',document:'file'}[media.type] || 'media');
-    const download = `<button class="media-download" type="button" data-download="${escapeHtml(media.url)}" data-name="${escapeHtml(label)}" aria-label="Скачать"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg></button>`;
-    if (media.type === 'photo') return `<div class="message-media${spoiler}"><img src="${url}" alt="Фото" loading="lazy">${download}</div>`;
-    if (['video','animation'].includes(media.type)) return `<div class="message-media${spoiler}"><video src="${url}" controls playsinline preload="metadata"></video>${download}</div>`;
-    if (media.type === 'video_note') return `<div class="message-media"><video class="round${spoiler}" src="${url}" controls playsinline preload="metadata"></video>${download}</div>`;
-    if (['voice','audio'].includes(media.type)) return `<div class="message-media"><audio src="${url}" controls preload="metadata"></audio>${download}</div>`;
-    if (media.type === 'sticker' && media.animated_sticker) return `<div class="message-media sticker-media"><div class="lottie-sticker" data-lottie="${mediaUrl(media.url, true)}"></div>${download}</div>`;
-    if (media.type === 'sticker' && (media.mime_type.includes('webm') || media.file_name.endsWith('.webm'))) return `<div class="message-media sticker-media"><video src="${url}" autoplay loop muted playsinline></video>${download}</div>`;
-    if (media.type === 'sticker') return `<div class="message-media sticker-media"><img src="${url}" alt="Стикер" loading="lazy">${download}</div>`;
+    const sendToBot = ['photo', 'video', 'voice', 'video_note'].includes(media.type);
+    const action = sendToBot
+      ? `<button class="media-download" type="button" data-send-bot="${escapeHtml(media.url)}" aria-label="Отправить в бот" title="Отправить в бот"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg></button>`
+      : `<button class="media-download" type="button" data-download="${escapeHtml(media.url)}" data-name="${escapeHtml(label)}" aria-label="Скачать"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg></button>`;
+    if (media.type === 'photo') return `<div class="message-media${spoiler}"><img src="${url}" alt="Фото" loading="lazy">${action}</div>`;
+    if (['video','animation'].includes(media.type)) return `<div class="message-media${spoiler}"><video src="${url}" controls playsinline preload="metadata"></video>${action}</div>`;
+    if (media.type === 'video_note') return `<div class="message-media"><video class="round${spoiler}" src="${url}" controls playsinline preload="metadata"></video>${action}</div>`;
+    if (['voice','audio'].includes(media.type)) return `<div class="message-media"><audio src="${url}" controls preload="metadata"></audio>${action}</div>`;
+    if (media.type === 'sticker' && media.animated_sticker) return `<div class="message-media sticker-media"><div class="lottie-sticker" data-lottie="${mediaUrl(media.url, true)}"></div>${action}</div>`;
+    if (media.type === 'sticker' && (media.mime_type.includes('webm') || media.file_name.endsWith('.webm'))) return `<div class="message-media sticker-media"><video src="${url}" autoplay loop muted playsinline></video>${action}</div>`;
+    if (media.type === 'sticker') return `<div class="message-media sticker-media"><img src="${url}" alt="Стикер" loading="lazy">${action}</div>`;
     return `<button class="file-card media-file-download" type="button" data-download="${escapeHtml(media.url)}" data-name="${escapeHtml(label)}"><span class="file-icon">↓</span><span>${escapeHtml(label)}</span></button>`;
+  }
+
+  async function sendMediaToBot(button) {
+    if (button.dataset.loading === '1') return;
+    const source = button.dataset.sendBot || '';
+    const match = source.match(/^\/api\/media\/(\d+)\/(-?\d+)\/(\d+)/);
+    if (!match) { toast('Не удалось определить медиа'); return; }
+    button.dataset.loading = '1';
+    try {
+      await api(
+        `/api/users/${match[1]}/chats/${match[2]}/messages/${match[3]}/send-to-bot`,
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: '{}'
+        }
+      );
+      tg?.HapticFeedback?.notificationOccurred?.('success');
+      toast('Отправлено сообщением в бот');
+    } catch (error) {
+      tg?.HapticFeedback?.notificationOccurred?.('error');
+      toast(error.message || 'Не удалось отправить в бот');
+    } finally {
+      delete button.dataset.loading;
+    }
   }
 
   async function downloadMedia(button) {
@@ -360,6 +388,8 @@
   document.addEventListener('click', event => {
     const edit = event.target.closest('[data-edit-message]');
     if (edit) { event.preventDefault(); event.stopPropagation(); openMessageEditor(Number(edit.dataset.editMessage)); return; }
+    const sendBot = event.target.closest('[data-send-bot]');
+    if (sendBot) { event.preventDefault(); event.stopPropagation(); sendMediaToBot(sendBot); return; }
     const download = event.target.closest('[data-download]');
     if (download) { event.preventDefault(); event.stopPropagation(); downloadMedia(download); return; }
     if (event.target.closest('.spoiler')) event.target.closest('.spoiler').classList.add('revealed');
