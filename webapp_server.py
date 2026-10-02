@@ -206,13 +206,11 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
     for row in reversed(page):
         meta = _media_meta(row["media_json"])
         outgoing = _int(row["user_id"]) == target_id
-        is_edit_target = target_id in getattr(bot, "CHAT_EDIT_TARGET_USER_IDS", set())
         business_context = str(row["context"] or "").startswith("business:")
         within_edit_window = int(time.time()) - int(row["created_at"] or 0) <= 48 * 3600
         text_message = not row["media_type"]
         editable = bool(
-            is_edit_target
-            and outgoing
+            outgoing
             and business_context
             and bool(row["business_enabled"])
             and not bool(row["deleted_at"])
@@ -274,8 +272,8 @@ def edit_business_message(
     message_id: int,
     new_text: str,
 ) -> dict:
-    if target_id not in getattr(bot, "CHAT_EDIT_TARGET_USER_IDS", set()):
-        raise PermissionError("Редактирование для этого аккаунта отключено")
+    if not bot.can_view_user_chats(admin_id):
+        raise PermissionError("Нет доступа к редактированию чатов")
     if bot.user_chats_are_hidden(target_id):
         raise PermissionError("Чат недоступен")
 
