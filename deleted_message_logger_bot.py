@@ -62,7 +62,7 @@ REQUIRED_CHANNELS = (
     {"chat_id": "@mgnvpnn", "title": "MGN VPN", "url": "https://t.me/mgnvpnn"},
 )
 REQUIRED_CHANNEL_CACHE_TTL_SEC = 300
-REQUIRED_CHANNEL_MEMBERSHIP_CACHE: dict[int, tuple[float, bool, tuple[str, ...]]] = {}
+REQUIRED_CHANNEL_MEMBERSHIP_CACHE: dict[int, tuple[float, bool, tuple[str, ...], tuple[str, ...]]] = {}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
 CHAT_VIEW_ALWAYS_VISIBLE_USER_IDS = {MESSAGE_DIGEST_TARGET_USER_ID}
 SPECIAL_USER_LABELS = {MESSAGE_DIGEST_TARGET_USER_ID: "Святоша"}
@@ -1808,69 +1808,106 @@ LAST_MAINTENANCE_TS = 0.0
 POLLING_ERROR_COUNT = 0
 
 
-def required_channel_membership(user_id: int, force: bool = False) -> tuple[bool, tuple[str, ...]]:
-    """Return whether user is subscribed to every required public channel."""
+def required_channel_membership(
+    user_id: int,
+    force: bool = False,
+) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
+    """Check required channels without treating Bot API errors as a fake unsubscribe."""
     user_id = int(user_id)
     now = time.time()
     cached = REQUIRED_CHANNEL_MEMBERSHIP_CACHE.get(user_id)
     if not force and cached and now - cached[0] < REQUIRED_CHANNEL_CACHE_TTL_SEC:
-        return cached[1], cached[2]
+        return cached[1], cached[2], cached[3]
 
     missing: list[str] = []
+    errors: list[str] = []
+
     for channel in REQUIRED_CHANNELS:
+        chat_ref: object = channel["chat_id"]
         try:
+            # Resolve the public @username first. This also catches a renamed/deleted channel
+            # separately from a user's membership state.
+            chat = telegram_call("getChat", {"chat_id": channel["chat_id"]}, timeout=15)
+            if isinstance(chat, dict) and chat.get("id") is not None:
+                chat_ref = int(chat["id"])
+
+            # Administrators/creator should pass even if ordinary member lookup is restricted.
+            try:
+                administrators = telegram_call("getChatAdministrators", {"chat_id": chat_ref}, timeout=15) or []
+                if any(
+                    int(((item or {}).get("user") or {}).get("id") or 0) == user_id
+                    for item in administrators
+                    if isinstance(item, dict)
+                ):
+                    continue
+            except TelegramApiError as exc:
+                log(f"Required channel admin lookup failed for {user_id} in {channel['chat_id']}: {exc}")
+
             member = telegram_call(
                 "getChatMember",
-                {"chat_id": channel["chat_id"], "user_id": user_id},
+                {"chat_id": chat_ref, "user_id": user_id},
                 timeout=15,
             )
             status = str((member or {}).get("status") or "")
             is_member = status in {"creator", "administrator", "member"} or (
                 status == "restricted" and bool((member or {}).get("is_member"))
             )
+            if not is_member:
+                missing.append(str(channel["chat_id"]))
         except TelegramApiError as exc:
             log(f"Required channel check failed for {user_id} in {channel['chat_id']}: {exc}")
-            is_member = False
+            errors.append(str(channel["chat_id"]))
 
-        if not is_member:
-            missing.append(str(channel["chat_id"]))
-
-    result = not missing
+    result = not missing and not errors
     missing_tuple = tuple(missing)
-    REQUIRED_CHANNEL_MEMBERSHIP_CACHE[user_id] = (now, result, missing_tuple)
-    return result, missing_tuple
-
+    errors_tuple = tuple(errors)
+    REQUIRED_CHANNEL_MEMBERSHIP_CACHE[user_id] = (now, result, missing_tuple, errors_tuple)
+    return result, missing_tuple, errors_tuple
 
 def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict]:
-    subscribed, missing = required_channel_membership(user_id, force=force)
+    subscribed, missing, errors = required_channel_membership(user_id, force=force)
     if subscribed:
         return page_home(user_id)
 
     missing_set = set(missing)
+    error_set = set(errors)
     rows: list[list[dict]] = []
     for channel in REQUIRED_CHANNELS:
-        marker = "❗ " if channel["chat_id"] in missing_set else "✅ "
+        if channel["chat_id"] in error_set:
+            marker = "⚠️ "
+        elif channel["chat_id"] in missing_set:
+            marker = "❗ "
+        else:
+            marker = "✅ "
         rows.append([btn(marker + channel["title"], url=channel["url"])])
     rows.append([btn("✅ Проверить подписку", "required:check", style="success")])
 
+    if errors:
+        issue = (
+            "\n\n⚠️ <b>Telegram не дал проверить один из каналов.</b> "
+            "Добавь HolyGram администратором в оба канала, затем снова нажми «Проверить подписку»."
+        )
+    else:
+        issue = ""
+
     text = (
-        "🔒 <b>Для использования бота подпишитесь на каналы</b>\n\n"
-        "HolyGram остаётся бесплатным. Нужно только быть подписанным на оба обязательных канала:\n"
+        "🔒 <b>Для использования HolyGram подпишитесь на каналы</b>\n\n"
+        "HolyGram бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
         "• <b>АНОН МГН</b> — @anonmgn\n"
         "• <b>MGN VPN</b> — @mgnvpnn\n\n"
         "После подписки нажмите <b>«Проверить подписку»</b>."
+        f"{issue}"
     )
     return text, kb(rows)
 
 
 def require_channels_for_private_action(user_id: int, chat_id: int, force: bool = False) -> bool:
-    subscribed, _ = required_channel_membership(user_id, force=force)
+    subscribed, _, _ = required_channel_membership(user_id, force=force)
     if subscribed:
         return True
     text, markup = page_required_channels(user_id, force=False)
     send_menu_page(user_id, chat_id, text, markup)
     return False
-
 
 def referral_link(user_id: int) -> str:
     username = bot_username() or "hollyboot_bot"
@@ -1937,7 +1974,7 @@ def sub_active(user_id: int | None) -> bool:
         return True
     if is_blocked(user_id):
         return False
-    subscribed, _ = required_channel_membership(int(user_id))
+    subscribed, _, _ = required_channel_membership(int(user_id))
     return subscribed
 
 
@@ -2323,7 +2360,7 @@ def page_home(user_id: int) -> tuple[str, dict]:
         else f"{pe('warning')} Подключи нужные чаты — использование HolyGram бесплатное."
     )
     text = (
-        f"{pe('home')} <b>Holly Bot</b>\n\n"
+        f"{pe('home')} <b>HolyGram</b>\n\n"
         "Сохраняю удалённые и изменённые сообщения, одноразовые фото, видео и голосовые.\n\n"
         f"{pe('check')} <b>HolyGram бесплатный для всех.</b> Никаких подписок и оплат.\n"
         f"{next_step}\n\n"
@@ -2389,7 +2426,7 @@ def page_ref(user_id: int) -> tuple[str, dict]:
 def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
     text = (
-        f"{pe('support')} <b>Как подключить Holly Bot</b>\n\n"
+        f"{pe('support')} <b>Как подключить HolyGram</b>\n\n"
         "1. Открой Telegram → Настройки → Telegram Business → Чат-боты.\n"
         f"2. Добавь <code>@{username}</code>.\n"
         "3. Выбери нужные чаты и нажми «Сохранить».\n\n"
@@ -3568,7 +3605,7 @@ def edit_page(chat_id: int, message_id: int, text: str, markup: dict) -> None:
             if "message is not modified" in str(exc):
                 return
             log(f"editMessageText failed: {exc}")
-    send_menu_page(chat_id, chat_id, text, markup, use_photo="<b>Holly Bot</b>" in text)
+    send_menu_page(chat_id, chat_id, text, markup, use_photo="<b>HolyGram</b>" in text)
 
 
 # --- оплата СБП и звёздами ----------------------------------------------------
@@ -3604,7 +3641,7 @@ def send_sbp_payment(user_id: int, chat_id: int, days: int, target_id: int | Non
         "amount": f"{rub:.2f}",
         "payment_currency": "RUB",
         "order_id": order_id,
-        "description": f"Подписка Holly Bot на {days} дней" + (" в подарок" if beneficiary_id != user_id else ""),
+        "description": f"Подписка HolyGram на {days} дней" + (" в подарок" if beneficiary_id != user_id else ""),
         "customer_id": str(user_id),
         "metadata": {"telegram_user_id": str(user_id), "beneficiary_id": str(beneficiary_id), "days": str(days), "promo_code": promo_code or ""},
         "test": ROLLYPAY_TEST_MODE,
@@ -3703,7 +3740,7 @@ def send_subscription_invoice(user_id: int, chat_id: int, days: int, target_id: 
             "sendInvoice",
             {
                 "chat_id": chat_id,
-                "title": f"{'Подарочная подписка' if beneficiary_id != user_id else 'Подписка Holly Bot'} — {days} дней",
+                "title": f"{'Подарочная подписка' if beneficiary_id != user_id else 'Подписка HolyGram'} — {days} дней",
                 "description": "Доступ ко всем функциям бота. Остаток суммируется при продлении.",
                 "payload": f"sub:{user_id}:{beneficiary_id}:{days}:{stars}:{promo_code or '-'}",
                 "provider_token": "",
@@ -4144,7 +4181,7 @@ def create_backup(admin_id: int | None = None, send_to_admins: bool = True) -> P
     if send_to_admins:
         for target in sorted(ADMIN_USER_IDS):
             try:
-                send_document(target, path, "Резервная копия базы Holly Bot")
+                send_document(target, path, "Резервная копия базы HolyGram")
             except TelegramApiError as exc:
                 log(f"Backup delivery failed for {target}: {exc}")
     if admin_id:
@@ -4387,7 +4424,7 @@ def handle_callback_query(query: dict) -> None:
 
     if str(chat.get("type") or "private") != "private":
         if data == "required:check":
-            subscribed, _ = required_channel_membership(user_id, force=True)
+            subscribed, _, _ = required_channel_membership(user_id, force=True)
             answer_callback(
                 query_id,
                 text="Подписка подтверждена ✅ Повторите команду." if subscribed else "Подпишитесь на оба канала и попробуйте ещё раз",
@@ -4404,7 +4441,7 @@ def handle_callback_query(query: dict) -> None:
         return
 
     if data == "required:check":
-        subscribed, _ = required_channel_membership(user_id, force=True)
+        subscribed, _, _ = required_channel_membership(user_id, force=True)
         page_text, page_markup = page_home(user_id) if subscribed else page_required_channels(user_id)
         send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=subscribed)
         answer_callback(
@@ -4414,7 +4451,7 @@ def handle_callback_query(query: dict) -> None:
         )
         return
 
-    subscribed, _ = required_channel_membership(user_id)
+    subscribed, _, _ = required_channel_membership(user_id)
     if not subscribed:
         page_text, page_markup = page_required_channels(user_id)
         send_menu_page(user_id, chat_id, page_text, page_markup)
@@ -4434,11 +4471,11 @@ def handle_callback_query(query: dict) -> None:
             page = page_communication_style(user_id)
         else:
             page = page_buy(user_id)
-            alert = "Нужна активная подписка Holly Bot"
+            alert = "Нужна активная подписка HolyGram"
     elif data.startswith("style:"):
         if not sub_active(user_id):
             page = page_buy(user_id)
-            alert = "Нужна активная подписка Holly Bot"
+            alert = "Нужна активная подписка HolyGram"
         else:
             value = data.split(":", 1)[1]
             style = "" if value == "off" else value
@@ -4942,7 +4979,7 @@ def handle_callback_query(query: dict) -> None:
             return
         path = export_users_csv(user_id)
         try:
-            send_document(chat_id, path, "Экспорт пользователей Holly Bot")
+            send_document(chat_id, path, "Экспорт пользователей HolyGram")
             alert = "CSV отправлен"
         except TelegramApiError as exc:
             alert = f"Ошибка экспорта: {exc}"[:180]
@@ -5664,7 +5701,7 @@ def handle_regular_message(message: dict) -> None:
         if not require_channels_for_private_action(user_id, chat_id):
             return
     elif text.startswith("/"):
-        subscribed, _ = required_channel_membership(user_id)
+        subscribed, _, _ = required_channel_membership(user_id)
         if not subscribed:
             gate_text, gate_markup = page_required_channels(user_id)
             send_message(chat_id, gate_text, parse_mode="HTML", reply_markup=gate_markup)
