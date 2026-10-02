@@ -214,7 +214,9 @@ def list_chats(bot, admin_id: int, target_id: int, query: str = "", limit: int =
     ]
 
 
-def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int = 50) -> dict:
+def list_messages(bot, admin_id: int, target_id: int, chat_id: int, before: int = 0, limit: int = 50) -> dict:
+    if not bot.can_view_user_chats(admin_id):
+        raise PermissionError("Нет доступа к чатам")
     if bot.user_chats_are_hidden(target_id):
         raise PermissionError("Чат недоступен")
     limit = min(MAX_PAGE_SIZE, max(1, limit))
@@ -725,7 +727,12 @@ def make_handler(bot):
                 elif re.fullmatch(r"/api/users/\d+/chats/-?\d+/messages", path):
                     parts = path.split("/")
                     target_id, chat_id = _int(parts[3]), _int(parts[5])
-                    result = list_messages(bot, target_id, chat_id, _int(query.get("before", [0])[0]), _int(query.get("limit", [50])[0], 50))
+                    try:
+                        result = list_messages(bot, admin_id, target_id, chat_id, _int(query.get("before", [0])[0]), _int(query.get("limit", [50])[0], 50))
+                    except sqlite3.OperationalError as exc:
+                        bot.log(f"WebApp messages SQL retry for {target_id}/{chat_id}: {exc}")
+                        bot.init_db()
+                        result = list_messages(bot, admin_id, target_id, chat_id, _int(query.get("before", [0])[0]), _int(query.get("limit", [50])[0], 50))
                     bot.set_chat_seen(admin_id, target_id, chat_id)
                     bot.log_admin_view(admin_id, target_id, chat_id, "Web App: просмотр сообщений")
                     self._send_json(HTTPStatus.OK, result)
