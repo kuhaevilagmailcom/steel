@@ -37,8 +37,8 @@ RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
 MENU_IMAGE_PATH = BASE_DIR / "assets" / "holly_menu.png"
 SETUP_GUIDE_B64_PATH = BASE_DIR / "assets" / "holygram_setup_guide.b64"
 SETUP_GUIDE_B64_PART_GLOB = "holygram_setup_guide_v3.b64.*"
-SETUP_GUIDE_IMAGE_PATH = DATA_DIR / "holygram_setup_guide_v3.jpg"
-SETUP_GUIDE_FILE_ID_KEY = "setup_guide_photo_file_id_v3"
+SETUP_GUIDE_IMAGE_PATH = DATA_DIR / "holygram_setup_guide_v4.png"
+SETUP_GUIDE_FILE_ID_KEY = "setup_guide_photo_file_id_v4"
 WEBAPP_URL = os.getenv(
     "WEBAPP_URL", "https://bot-1789500279-7661-furadev.bothost.tech"
 ).strip().rstrip("/")
@@ -2512,8 +2512,7 @@ def ensure_setup_guide_image() -> Path | None:
             encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
 
         raw = base64.b64decode(encoded, validate=True)
-        if not raw.startswith(b"\\xff\\xd8"):
-            raise ValueError("setup guide is not a JPEG")
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):\n            raise ValueError("setup guide is not a PNG")
         SETUP_GUIDE_IMAGE_PATH.write_bytes(raw)
         return SETUP_GUIDE_IMAGE_PATH
     except Exception as exc:
