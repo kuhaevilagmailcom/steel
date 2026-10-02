@@ -5505,8 +5505,29 @@ def handle_callback_query(query: dict) -> None:
                 answer_callback(query_id, text="Неизвестный стиль", show_alert=True)
                 return
             set_communication_style(user_id, style)
-            page = page_communication_style(user_id)
-            alert = "Стиль отключён" if not style else f"Выбран: {STYLE_LABELS[style]}"
+            if style == "rooster":
+                page = page_rooster_settings(user_id)
+                alert = f"Петух включён · мат {get_rooster_profanity_percent(user_id)}%"
+            else:
+                page = page_communication_style(user_id)
+                alert = "Стиль отключён" if not style else f"Выбран: {STYLE_LABELS[style]}"
+    elif data == "rooster:settings":
+        if get_communication_style(user_id) != "rooster":
+            set_communication_style(user_id, "rooster")
+        page = page_rooster_settings(user_id)
+    elif data.startswith("rooster:level:"):
+        try:
+            percent = int(data.rsplit(":", 1)[1])
+        except ValueError:
+            answer_callback(query_id, text="Некорректный процент", show_alert=True)
+            return
+        if percent not in ROOSTER_PROFANITY_LEVELS:
+            answer_callback(query_id, text="Доступно: 10, 20, 40, 60 или 100%", show_alert=True)
+            return
+        set_communication_style(user_id, "rooster")
+        set_rooster_profanity_percent(user_id, percent)
+        page = page_rooster_settings(user_id)
+        alert = f"Количество мата: {percent}%"
     elif data == "autoreplace":
         page = page_auto_replacements(user_id)
     elif data == "ar:add":
