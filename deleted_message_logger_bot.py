@@ -4743,7 +4743,13 @@ def handle_callback_query(query: dict) -> None:
     alert: str | None = None
 
     if data == "home":
-        page = page_home(user_id)
+        # The setup flow uses its own guide image. Returning home must always
+        # restore the normal HolyGram main-menu photo instead of only editing
+        # the caption on the setup-guide photo.
+        page_text, page_markup = page_home(user_id)
+        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=True)
+        answer_callback(query_id)
+        return
     elif data == "buy" or data in {"grant", "prices", "promos", "expiring"} or data.startswith(("buy:", "gift:", "promo:", "sbp:check:", "price:", "useradd:")):
         page = page_buy(user_id)
         alert = "HolyGram бесплатный — подписки и оплаты отключены"
