@@ -222,8 +222,7 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
     before_params: tuple[object, ...] = (before,) if before else ()
     with sqlite3.connect(bot.DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
+        query = """
             SELECT m.context,m.chat_id,m.message_id,m.user_id,m.author,m.content,m.media_type,
                    m.media_json,m.local_media_path,m.has_media_spoiler,m.ttl_seconds,
                    m.reply_to_message_id,m.reply_to_author,m.reply_to_content,
@@ -238,9 +237,12 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
               ON m.context='business:' || bc.connection_id
             WHERE (co.owner_id=? OR bc.owner_id=?)
               AND m.chat_id=?
-            """ + before_sql + """
-            ORDER BY m.updated_at DESC,m.message_id DESC LIMIT ?
-            """,
+        """ + before_sql + """
+            ORDER BY m.updated_at DESC,m.message_id DESC
+            LIMIT ?
+        """
+        rows = conn.execute(
+            query,
             (target_id, target_id, chat_id, *before_params, limit + 1),
         ).fetchall()
     page = rows[:limit]
