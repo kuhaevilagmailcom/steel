@@ -82,20 +82,62 @@
     if (show) setTimeout(() => $('userSearch').focus(), 30);
   }
 
+  async function toggleUserPin(id, pinned, button) {
+    if (button) button.disabled = true;
+    try {
+      await api(`/api/users/${id}/pin`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({pinned})
+      });
+      const item = state.users.find(user => user.id === id);
+      if (item) item.pinned = pinned;
+      toast(pinned ? 'Пользователь закреплён' : 'Пользователь откреплён');
+      await loadUsers($('userSearch')?.value || '');
+    } catch (error) {
+      toast(error.message || 'Не удалось изменить закрепление');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   async function loadUsers(query = '') {
     $('usersList').className = 'list'; $('usersList').innerHTML = skeleton();
     try {
       const data = await api(`/api/users?q=${encodeURIComponent(query)}&limit=80`);
       state.users = data.items;
       $('usersCount').textContent = data.items.length;
-      if (!data.items.length) { $('usersList').className = 'list empty-state'; $('usersList').innerHTML = empty('⌕', 'Ничего не найдено', 'Попробуйте другое имя'); return; }
+      if (!data.items.length) {
+        $('usersList').className = 'list empty-state';
+        $('usersList').innerHTML = empty('⌕', 'Ничего не найдено', 'Попробуйте другое имя');
+        return;
+      }
       $('usersList').innerHTML = data.items.map(user => `
-        <button class="list-item ${state.user?.id === user.id ? 'active' : ''}" data-user="${user.id}" type="button">
+        <div class="list-item user-list-item ${state.user?.id === user.id ? 'active' : ''}" data-user="${user.id}" role="button" tabindex="0">
           ${avatarHtml(user)}
           <span class="list-body"><span class="list-line"><span class="list-title">${escapeHtml(user.name)}</span><span class="list-time">${formatTime(user.updated_at)}</span></span>
           <span class="list-preview"><span>${user.username ? '@' + escapeHtml(user.username) + ' · ' : ''}${user.chat_count} чат.</span><span>${user.message_count} сообщ.</span></span></span>
-        </button>`).join('');
-      document.querySelectorAll('[data-user]').forEach(button => button.addEventListener('click', async () => { await selectUser(Number(button.dataset.user)); toggleAccounts(false); }));
+          <button class="user-pin ${user.pinned ? 'active' : ''}" data-pin-user="${user.id}" data-pinned="${user.pinned ? '1' : '0'}" type="button" aria-label="${user.pinned ? 'Открепить пользователя' : 'Закрепить пользователя'}" title="${user.pinned ? 'Открепить' : 'Закрепить'}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l-1 5 3 3v2h-4v7l-1 1-1-1v-7H7v-2l3-3-1-5z"/></svg>
+          </button>
+        </div>`).join('');
+
+      document.querySelectorAll('[data-user]').forEach(row => {
+        const open = async () => { await selectUser(Number(row.dataset.user)); toggleAccounts(false); };
+        row.addEventListener('click', event => {
+          if (event.target.closest('[data-pin-user]')) return;
+          open();
+        });
+        row.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+        });
+      });
+      document.querySelectorAll('[data-pin-user]').forEach(button => button.addEventListener('click', event => {
+        event.stopPropagation();
+        const id = Number(button.dataset.pinUser);
+        const pinned = button.dataset.pinned !== '1';
+        toggleUserPin(id, pinned, button);
+      }));
     } catch (error) { showFatal(error.message); }
   }
 
