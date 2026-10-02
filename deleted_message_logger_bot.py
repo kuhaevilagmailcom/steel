@@ -2150,6 +2150,7 @@ def sub_active(user_id: int | None) -> bool:
 
 
 STYLE_LABELS = {
+    "cute": "🎀 Няшный",
     "dumb": "🧠 Тупой",
     "vasya": "🧢 Вася",
     "brother": "🤝 Брат",
@@ -2157,19 +2158,36 @@ STYLE_LABELS = {
 }
 
 STYLE_EXAMPLES = {
+    "cute": "приветикк, ты гдеее? я уже соскучилась 🥺♡",
     "dumb": "кароч я щас хз чо делать, типо потом разберёмся",
     "vasya": "вась, ты щас где? го потом, а то ваще дел много",
     "brother": "брат, салам. от души, давай потом спокойно решим",
-    "rooster": "ну приветик, красавчик, ты где там? 🐓",
+    "rooster": "бля, ну ты где нахуй? я уже заебался ждать",
 }
 
-# The cute style is intentionally inspired by the attached CuteMessages client plugin:
-# soft lowercase, occasional stretched vowels, small suffixes/kaomoji and cute punctuation.
-# Keep the probability low so normal messages stay readable instead of becoming emoji spam.
-CUTE_STYLE_EMOJIS = ("🥺", "💕", "💗", "🌸", "✨", "🎀", "🫶", "🫧")
-CUTE_STYLE_KAOMOJI = ("(◕‿◕)", "(≧◡≦)", "(っ•ᴗ•)っ", "૮₍˶ᵔ ᵕ ᵔ˶₎ა", "(◕ᴗ◕✿)")
-CUTE_STYLE_SUFFIXES = ("~", " :3", " ♡", " hehe~", " nya~")
-CUTE_STYLE_VOWELS = "аеёиоуыэюя"
+# CuteMessages-inspired building blocks from the supplied plugin.
+CUTE_STYLE_EMOJIS = ("🥰", "😊", "💕", "💖", "💗", "🌸", "✨", "🎀", "🥺", "🫶", "🫧", "🦋", "🐰", "🌷")
+CUTE_STYLE_KAOMOJI = (
+    "(◕‿◕)", "♡(˘▽˘)♡", "(つ≧▽≦)つ", "(≧◡≦)", "(っ˘ω˘ς)",
+    "(´｡• ω •｡)", "ʕ•ᴥ•ʔ", "(っ•ᴗ•)っ", "૮₍˶ᵔ ᵕ ᵔ˶₎ა", "(◕ᴗ◕✿)"
+)
+CUTE_STYLE_SUFFIXES = ("~", " nya~", " uwu", " owo", " :3", " hehe~", " nyaa", " ♡")
+CUTE_STYLE_ACTIONS = ("*обнимает*", "*хихикает*", "*улыбается*", "*машет лапкой*", "*краснеет*")
+CUTE_STYLE_VOWELS = "аеёиоуыэюяaeiouy"
+CUTE_STYLE_CONSONANTS_RU = "бвгджзйклмнпрстфхцчшщ"
+CUTE_STYLE_PUNCT_QUESTION = ("?🥺", "?♡", "?✨", "?~")
+CUTE_STYLE_PUNCT_EXCLAMATION = ("!✨", "!💖", "!♡", "~!")
+CUTE_STYLE_PUNCT_PERIOD = (".~", ".♡", ".✨")
+
+ROOSTER_PROFANITY_LEVELS = (10, 20, 40, 60, 100)
+ROOSTER_PROFANITY_WORDS = (
+    "бля", "блядь", "сука", "нахуй", "пиздец", "хуйня", "ебать", "ёбаный",
+    "ебучий", "заебал", "заебись", "охуеть", "охуенно", "нихуя", "похуй",
+    "хуёво", "пиздато", "до хуя", "хуй знает", "ёб твою мать", "ебануться",
+    "какого хуя", "в пизду", "нахуя"
+)
+ROOSTER_PROFANITY_PREFIXES = ("бля", "сука", "ебать", "пиздец", "охуеть", "какого хуя")
+ROOSTER_PROFANITY_SUFFIXES = ("нахуй", "блядь", "сука", "пиздец", "в пизду", "и похуй")
 
 STYLE_PROTECTED_RE = re.compile(
     r"(?i)(?:https?://\S+|tg://\S+|www\.\S+|(?:t\.me|telegram\.me)/\S+|"
