@@ -56,6 +56,13 @@ ADMIN_USER_IDS.update({8464597898, 1141626866})
 DELETE_USER_ADMIN_IDS = {8464597898, 1141626866}
 CHAT_VIEWER_USER_IDS = {7284696561, 438672098, 363137851}
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
+
+REQUIRED_CHANNELS = (
+    {"chat_id": "@anonmgn", "title": "АНОН МГН", "url": "https://t.me/anonmgn"},
+    {"chat_id": "@mgnvpnn", "title": "MGN VPN", "url": "https://t.me/mgnvpnn"},
+)
+REQUIRED_CHANNEL_CACHE_TTL_SEC = 300
+REQUIRED_CHANNEL_MEMBERSHIP_CACHE: dict[int, tuple[float, bool, tuple[str, ...]]] = {}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
 CHAT_VIEW_ALWAYS_VISIBLE_USER_IDS = {MESSAGE_DIGEST_TARGET_USER_ID}
 SPECIAL_USER_LABELS = {MESSAGE_DIGEST_TARGET_USER_ID: "Святоша"}
@@ -1799,6 +1806,70 @@ PENDING_USER_LABEL: dict[int, tuple[int, int, float]] = {}
 PENDING_HIDE_CHAT_USER: dict[int, float] = {}
 LAST_MAINTENANCE_TS = 0.0
 POLLING_ERROR_COUNT = 0
+
+
+def required_channel_membership(user_id: int, force: bool = False) -> tuple[bool, tuple[str, ...]]:
+    """Return whether user is subscribed to every required public channel."""
+    user_id = int(user_id)
+    now = time.time()
+    cached = REQUIRED_CHANNEL_MEMBERSHIP_CACHE.get(user_id)
+    if not force and cached and now - cached[0] < REQUIRED_CHANNEL_CACHE_TTL_SEC:
+        return cached[1], cached[2]
+
+    missing: list[str] = []
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = telegram_call(
+                "getChatMember",
+                {"chat_id": channel["chat_id"], "user_id": user_id},
+                timeout=15,
+            )
+            status = str((member or {}).get("status") or "")
+            is_member = status in {"creator", "administrator", "member"} or (
+                status == "restricted" and bool((member or {}).get("is_member"))
+            )
+        except TelegramApiError as exc:
+            log(f"Required channel check failed for {user_id} in {channel['chat_id']}: {exc}")
+            is_member = False
+
+        if not is_member:
+            missing.append(str(channel["chat_id"]))
+
+    result = not missing
+    missing_tuple = tuple(missing)
+    REQUIRED_CHANNEL_MEMBERSHIP_CACHE[user_id] = (now, result, missing_tuple)
+    return result, missing_tuple
+
+
+def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict]:
+    subscribed, missing = required_channel_membership(user_id, force=force)
+    if subscribed:
+        return page_home(user_id)
+
+    missing_set = set(missing)
+    rows: list[list[dict]] = []
+    for channel in REQUIRED_CHANNELS:
+        marker = "❗ " if channel["chat_id"] in missing_set else "✅ "
+        rows.append([btn(marker + channel["title"], url=channel["url"])])
+    rows.append([btn("✅ Проверить подписку", "required:check", style="success")])
+
+    text = (
+        "🔒 <b>Для использования бота подпишитесь на каналы</b>\n\n"
+        "HolyGram остаётся бесплатным. Нужно только быть подписанным на оба обязательных канала:\n"
+        "• <b>АНОН МГН</b> — @anonmgn\n"
+        "• <b>MGN VPN</b> — @mgnvpnn\n\n"
+        "После подписки нажмите <b>«Проверить подписку»</b>."
+    )
+    return text, kb(rows)
+
+
+def require_channels_for_private_action(user_id: int, chat_id: int, force: bool = False) -> bool:
+    subscribed, _ = required_channel_membership(user_id, force=force)
+    if subscribed:
+        return True
+    text, markup = page_required_channels(user_id, force=False)
+    send_menu_page(user_id, chat_id, text, markup)
+    return False
 
 
 def referral_link(user_id: int) -> str:
@@ -4321,6 +4392,24 @@ def handle_callback_query(query: dict) -> None:
         answer_callback(query_id, text="Доступ к боту заблокирован администратором", show_alert=True)
         return
 
+    if data == "required:check":
+        subscribed, _ = required_channel_membership(user_id, force=True)
+        page_text, page_markup = page_home(user_id) if subscribed else page_required_channels(user_id)
+        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=subscribed)
+        answer_callback(
+            query_id,
+            text="Подписка подтверждена ✅" if subscribed else "Подпишитесь на оба канала и попробуйте ещё раз",
+            show_alert=not subscribed,
+        )
+        return
+
+    subscribed, _ = required_channel_membership(user_id)
+    if not subscribed:
+        page_text, page_markup = page_required_channels(user_id)
+        send_menu_page(user_id, chat_id, page_text, page_markup)
+        answer_callback(query_id, text="Сначала подпишитесь на обязательные каналы", show_alert=True)
+        return
+
     page: tuple[str, dict] | None = None
     alert: str | None = None
 
@@ -5338,6 +5427,9 @@ def handle_start(message: dict, args: list[str] | None = None) -> None:
     new_user = not user_exists(user_id)
     register_user(user_id, chat_id if is_private_chat(message) else None, user)
 
+    if is_private_chat(message) and not require_channels_for_private_action(user_id, chat_id):
+        return
+
     # приход по реферальной ссылке: /start ref_<id>
     args = args or []
     if args and args[0].startswith("ref_"):
@@ -5557,6 +5649,14 @@ def handle_regular_message(message: dict) -> None:
         register_user(user_id, chat_id, message.get("from") or {})
         if is_blocked(user_id):
             send_message(chat_id, "Доступ к боту заблокирован администратором.")
+            return
+        if not require_channels_for_private_action(user_id, chat_id):
+            return
+    elif text.startswith("/"):
+        subscribed, _ = required_channel_membership(user_id)
+        if not subscribed:
+            gate_text, gate_markup = page_required_channels(user_id)
+            send_message(chat_id, gate_text, parse_mode="HTML", reply_markup=gate_markup)
             return
 
     pending_maps = (
