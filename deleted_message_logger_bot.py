@@ -1932,10 +1932,13 @@ def add_days(user_id: int, days: int) -> int:
 
 
 def sub_active(user_id: int | None) -> bool:
-    """HolyGram is free: access no longer depends on subscription dates."""
-    if user_id is None or is_admin_user(user_id):
+    """Free access is enabled after the required channel subscriptions are verified."""
+    if user_id is None:
         return True
-    return not is_blocked(user_id)
+    if is_blocked(user_id):
+        return False
+    subscribed, _ = required_channel_membership(int(user_id))
+    return subscribed
 
 
 STYLE_LABELS = {
@@ -2265,8 +2268,8 @@ def consume_promo(user_id: int, code: str | None) -> None:
 
 
 def owner_can_log(owner_id: int | None) -> bool:
-    """Free mode: every non-blocked owner can use logging without payment."""
-    return owner_id is None or not is_blocked(owner_id)
+    """Logging is free, but the owner must stay subscribed to required channels."""
+    return owner_id is None or sub_active(owner_id)
 
 
 # --- рефералы -----------------------------------------------------------------
@@ -4383,6 +4386,14 @@ def handle_callback_query(query: dict) -> None:
         return
 
     if str(chat.get("type") or "private") != "private":
+        if data == "required:check":
+            subscribed, _ = required_channel_membership(user_id, force=True)
+            answer_callback(
+                query_id,
+                text="Подписка подтверждена ✅ Повторите команду." if subscribed else "Подпишитесь на оба канала и попробуйте ещё раз",
+                show_alert=not subscribed,
+            )
+            return
         answer_callback(query_id, text="Меню работает в личных сообщениях со мной", show_alert=True)
         return
 
@@ -5893,6 +5904,10 @@ def handle_business_connection(connection: dict) -> None:
         return
 
     if connection.get("is_enabled", True):
+        if owner_id and not sub_active(int(owner_id)):
+            gate_text, gate_markup = page_required_channels(int(owner_id))
+            send_message(int(notify_chat_id), gate_text, parse_mode="HTML", reply_markup=gate_markup)
+            return
         send_message(
             int(notify_chat_id),
             f"{pe('check')} <b>Telegram Business подключен.</b>\n\n"
