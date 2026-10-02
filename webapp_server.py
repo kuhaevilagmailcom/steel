@@ -231,7 +231,15 @@ def list_messages(bot, target_id: int, chat_id: int, before: int = 0, limit: int
                    bc.connection_id AS business_connection_id,
                    bc.is_enabled AS business_enabled,
                    bc.can_reply AS business_can_reply
-            """ + bot.OWNER_MESSAGES_FROM + " AND m.chat_id=?" + before_sql + """
+            """
+            FROM messages AS m
+            LEFT JOIN chat_owners AS co
+              ON m.context='regular' AND co.chat_id=m.chat_id
+            LEFT JOIN business_connections AS bc
+              ON m.context='business:' || bc.connection_id
+            WHERE (co.owner_id=? OR bc.owner_id=?)
+              AND m.chat_id=?
+            """ + before_sql + """
             ORDER BY m.updated_at DESC,m.message_id DESC LIMIT ?
             """,
             (target_id, target_id, chat_id, *before_params, limit + 1),
