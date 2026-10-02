@@ -1861,11 +1861,10 @@ def add_days(user_id: int, days: int) -> int:
 
 
 def sub_active(user_id: int | None) -> bool:
+    """HolyGram is free: access no longer depends on subscription dates."""
     if user_id is None or is_admin_user(user_id):
         return True
-    if is_blocked(user_id):
-        return False
-    return get_sub(user_id)[0] > int(time.time())
+    return not is_blocked(user_id)
 
 
 STYLE_LABELS = {
@@ -2114,12 +2113,7 @@ def format_until(until_ts: int) -> str:
 
 
 def status_line(user_id: int) -> str:
-    if is_admin_user(user_id):
-        return f"{pe('check')} <b>бессрочная</b> (админ)"
-    until, _ = get_sub(user_id)
-    if until > int(time.time()):
-        return f"{pe('check')} активна до <b>{format_until(until)}</b> ({sub_days_left(user_id)} дн.)"
-    return f"{pe('warning')} <b>не активна</b>"
+    return f"{pe('check')} <b>бесплатно для всех</b>"
 
 
 def user_exists(user_id: int) -> bool:
@@ -2200,26 +2194,8 @@ def consume_promo(user_id: int, code: str | None) -> None:
 
 
 def owner_can_log(owner_id: int | None) -> bool:
-    """Есть подписка — логируем. Нет — молчим и раз в cooldown шлём напоминание."""
-    if owner_id is None or sub_active(owner_id):
-        return True
-    now = int(time.time())
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("SELECT last_prompt_ts FROM subs WHERE user_id = ?", (owner_id,)).fetchone()
-    last_prompt = int(row[0]) if row and row[0] else 0
-    if now - last_prompt >= PROMPT_COOLDOWN_SEC:
-        set_until(owner_id, get_sub(owner_id)[0], None)
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("UPDATE subs SET last_prompt_ts = ? WHERE user_id = ?", (now, owner_id))
-        text, markup = page_buy(owner_id)
-        send_message(
-            owner_id,
-            f"{pe('warning')} <b>Подписка закончилась</b> — бот ничего не теряет "
-            f"и сразу продолжит слать уведомления, как только оплатишь.\n\n{text}",
-            parse_mode="HTML",
-            reply_markup=markup,
-        )
-    return False
+    """Free mode: every non-blocked owner can use logging without payment."""
+    return owner_id is None or not is_blocked(owner_id)
 
 
 # --- рефералы -----------------------------------------------------------------
@@ -2240,19 +2216,8 @@ def add_referral(referrer_id: int, invitee_id: int) -> bool:
 
 
 def check_trial(referrer_id: int) -> None:
-    """Пригласил REF_REQUIRED друзей — одноразово даём REF_DAYS дней."""
-    until, trial_used = get_sub(referrer_id)
-    if trial_used or ref_count(referrer_id) < REF_REQUIRED:
-        return
-    new_until = max(int(time.time()), until) + REF_DAYS * 86400
-    set_until(referrer_id, new_until, 1)
-    send_message(
-        get_private_chat_id(referrer_id),
-        f"{pe('gift')} Ты пригласил(а) {REF_REQUIRED} друзей — лови пробную подписку "
-        f"на <b>{REF_DAYS} дня</b> (до {format_until(new_until)}).\n"
-        f"Закончится — продли в меню: {pe('stars')} «Купить подписку».",
-        parse_mode="HTML",
-    )
+    """Legacy no-op: HolyGram no longer has trials or paid subscriptions."""
+    return
 
 
 # --- страницы меню ------------------------------------------------------------
@@ -2260,7 +2225,7 @@ def check_trial(referrer_id: int) -> None:
 def bottom_navigation() -> list[list[dict]]:
     """One stable navigation strip shown under every personal menu screen."""
     return [
-        [btn("🏠 Главное меню", "home"), btn("⭐ Моя подписка", "buy")],
+        [btn("🏠 Главное меню", "home")],
         [btn("🎭 Стиль общения", "style"), btn("💬 Поддержка", "support")],
         [btn("👥 Пригласить друзей", "ref")],
     ]
@@ -2270,76 +2235,36 @@ def page_home(user_id: int) -> tuple[str, dict]:
     regular_chats = get_user_chats(user_id)
     enabled_count = sum(1 for row in connections if row.get("is_enabled")) + len(regular_chats)
     has_connections = bool(connections or regular_chats)
-    active = sub_active(user_id)
-    rows = []
-    if not active:
-        rows.append([btn("⭐ Подключить подписку", "buy", style="success")])
-    rows.extend([
+    rows = [
         [btn("🔗 Мои подключённые чаты" if has_connections else "🔗 Подключить чаты", "conns")],
         [btn("❓ Настроить за минуту", "help")],
-    ])
+    ]
     rows.extend(bottom_navigation())
     if is_admin_user(user_id):
         rows.append([btn("Админ-панель", "panel", emoji="admin")])
 
-    if active and enabled_count:
-        next_step = f"{pe('check')} Всё работает. Подключено чатов: <b>{enabled_count}</b>."
-    elif active:
-        next_step = f"{pe('warning')} Подписка активна. Осталось подключить нужные чаты."
-    else:
-        next_step = f"{pe('warning')} Сначала подключи подписку, затем выбери чаты."
+    next_step = (
+        f"{pe('check')} Всё работает. Подключено чатов: <b>{enabled_count}</b>."
+        if enabled_count
+        else f"{pe('warning')} Подключи нужные чаты — использование HolyGram бесплатное."
+    )
     text = (
         f"{pe('home')} <b>Holly Bot</b>\n\n"
         "Сохраняю удалённые и изменённые сообщения, одноразовые фото, видео и голосовые.\n\n"
-        f"{pe('stars')} <b>Подписка:</b> {status_line(user_id)}\n"
+        f"{pe('check')} <b>HolyGram бесплатный для всех.</b> Никаких подписок и оплат.\n"
         f"{next_step}\n\n"
         "Все нужные действия — на кнопках ниже."
     )
     return text, kb(rows)
 
 def page_buy(user_id: int) -> tuple[str, dict]:
-    plans = get_plans()
-    p15, p30 = plans[15], plans[30]
-    p15_rub, _ = discounted_price(user_id, p15["rub"])
-    p15_stars, _ = discounted_price(user_id, p15["stars"])
-    p30_rub, _ = discounted_price(user_id, p30["rub"])
-    p30_stars, _ = discounted_price(user_id, p30["stars"])
-    promo = active_promo(user_id)
-    gift_link = f"https://t.me/{bot_username() or 'hollyboot_bot'}?start=gift_{user_id}"
-    promo_text = f"\nПромокод: <b>{html_text(promo[0])}</b> (скидка {promo[1]}%)\n" if promo else ""
-    active = sub_active(user_id)
-    action = "Продлить" if active else "Купить"
-    heading = "Моя подписка" if active else "Подписка Holly Bot"
     text = (
-        f"{pe('stars')} <b>{heading}</b>\n\n"
-        f"{status_line(user_id)}\n\n"
-        "В подписку входит:\n"
-        f"{pe('check')} сохранение удалённых и изменённых сообщений\n"
-        f"{pe('check')} архив фото, видео и голосовых\n"
-        f"{pe('check')} 🎭 стиль общения для исходящих сообщений\n\n"
-        f"{promo_text}"
-        f"<b>{action} на 15 дней</b> — {p15_rub} ₽ или {p15_stars} ⭐\n"
-        f"<b>{action} на 30 дней</b> — {p30_rub} ₽ или {p30_stars} ⭐\n\n"
-        f"Выбери способ оплаты — подписка {('продлится' if active else 'активируется')} сразу после подтверждения.\n"
-        f"Можно получить {REF_DAYS} дня бесплатно: пригласи {REF_REQUIRED} друзей."
+        f"{pe('check')} <b>HolyGram бесплатный</b>\n\n"
+        "Подписка больше не нужна. Покупки, продления, подарочные подписки, "
+        "промокоды на оплату и платные тарифы отключены.\n\n"
+        "Все доступные функции работают бесплатно."
     )
-    rows = [
-        [
-            btn(f"{action} · 15 дней · {p15_rub} ₽", "buy:sbp:15", style="success"),
-            btn(f"{action} · 15 дней · {p15_stars} ⭐", "buy:stars:15", style="success"),
-        ],
-        [
-            btn(f"{action} · 30 дней · {p30_rub} ₽", "buy:sbp:30", style="success"),
-            btn(f"{action} · 30 дней · {p30_stars} ⭐", "buy:stars:30", style="success"),
-        ],
-        [
-            btn("🎟 Ввести промокод", "promo:activate"),
-            btn("🎁 Подарить подписку", "gift:start"),
-        ],
-        [btn("🔗 Моя ссылка для подарка", copy=gift_link)],
-    ]
-    rows.extend(bottom_navigation())
-    return text, kb(rows)
+    return text, kb(bottom_navigation())
 
 
 def page_communication_style(user_id: int) -> tuple[str, dict]:
@@ -2373,24 +2298,15 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
 def page_ref(user_id: int) -> tuple[str, dict]:
     link = referral_link(user_id)
     count = ref_count(user_id)
-    _, trial_used = get_sub(user_id)
-    progress = "·".join("●" if i < min(count, REF_REQUIRED) else "○" for i in range(REF_REQUIRED))
-    trial_note = (
-        f"{pe('check')} пробная уже активирована"
-        if trial_used
-        else f"{pe('gift')} за {REF_REQUIRED} приглашённых — {REF_DAYS} дня бесплатно"
-    )
     text = (
         f"{pe('invite')} <b>Пригласи друзей</b>\n\n"
         f"Твоя ссылка:\n<code>{link}</code>\n\n"
-        f"Приглашено: <b>{count}</b>\n"
-        f"Прогресс: {progress} ({min(count, REF_REQUIRED)}/{REF_REQUIRED})\n"
-        f"{trial_note}\n\n"
-        f"Друг открывает ссылку и нажимает /start — приглашение засчитается."
+        f"Приглашено: <b>{count}</b>\n\n"
+        "HolyGram бесплатный для всех, поэтому приглашения больше не дают пробные дни."
     )
     rows = [
         [btn("📋 Скопировать ссылку", copy=link, style="primary")],
-        [btn("↗️ Поделиться", url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Хочу%20попробовать%20Holly%20Bot")],
+        [btn("↗️ Поделиться", url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Попробуй%20HolyGram%20—%20он%20бесплатный")],
     ]
     rows.extend(bottom_navigation())
     return text, kb(rows)
@@ -2408,7 +2324,6 @@ def page_help(user_id: int) -> tuple[str, dict]:
     )
     rows = [
         [btn("🔗 Проверить подключение", "conns")],
-        [btn("⭐ Открыть подписку", "buy", style="success")],
     ]
     rows.extend(bottom_navigation())
     return text, kb(rows)
@@ -3845,24 +3760,14 @@ def valid_subscription_amount(payer_id: int, days: int, amount: int, promo_code:
 
 def handle_pre_checkout_query(query: dict) -> None:
     qid = str(query.get("id") or "")
-    parsed = parse_subscription_payload(str(query.get("invoice_payload") or ""))
-    valid = False
-    if parsed and query.get("currency") == "XTR":
-        payer, _, days, stars, promo_code = parsed
-        payer_id = (query.get("from") or {}).get("id")
-        valid = (
-            payer
-            and payer == payer_id
-            and valid_subscription_amount(payer, days, stars, promo_code)
-            and int(query.get("total_amount") or 0) == stars
-        )
-    if valid:
-        telegram_call("answerPreCheckoutQuery", {"pre_checkout_query_id": qid, "ok": True})
-    else:
-        telegram_call(
-            "answerPreCheckoutQuery",
-            {"pre_checkout_query_id": qid, "ok": False, "error_message": "Тариф устарел — открой меню заново"},
-        )
+    telegram_call(
+        "answerPreCheckoutQuery",
+        {
+            "pre_checkout_query_id": qid,
+            "ok": False,
+            "error_message": "HolyGram теперь бесплатный — оплата больше не требуется.",
+        },
+    )
 
 
 def notify_admins_payment(user_id: int, days: int, stars: int, payer_id: int | None = None) -> None:
