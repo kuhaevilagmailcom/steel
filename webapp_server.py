@@ -99,7 +99,7 @@ def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
     where = ""
     params: list[object] = []
     if query.strip():
-        where = "WHERE lower(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') || ' ' || COALESCE(u.username,'') || ' ' || CAST(u.user_id AS TEXT)) LIKE ?"
+        where = "WHERE lower(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') || ' ' || COALESCE(u.username,'') || ' ' || CAST(a.user_id AS TEXT) || CASE WHEN a.user_id=7732538826 THEN ' святоша' ELSE '' END) LIKE ?"
         params.append(needle)
     with sqlite3.connect(bot.DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
