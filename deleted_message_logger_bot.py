@@ -6713,7 +6713,7 @@ def handle_regular_message(message: dict) -> None:
         PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_BROADCAST_BUTTON, PENDING_PROMO_CREATE,
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
         PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_VIEW_ACCESS, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
-        PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER,
+        PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER, PENDING_AUTOREPLACE, PENDING_CUSTOM_COMMAND,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
         for pending in pending_maps:
@@ -6722,6 +6722,125 @@ def handle_regular_message(message: dict) -> None:
         PENDING_BROADCAST_BUTTON.pop(chat_id, None)
         send_message(chat_id, "Отменено.")
         return
+
+    if text and not text.startswith("/") and chat_id in PENDING_AUTOREPLACE:
+        stage, rule_id, temp_value, deadline = PENDING_AUTOREPLACE[chat_id]
+        if deadline < time.time():
+            PENDING_AUTOREPLACE.pop(chat_id, None)
+            send_message(chat_id, "Время настройки автозамены истекло.")
+            return
+
+        if stage in {"add_trigger", "edit_trigger"}:
+            trigger = re.sub(r"\s+", " ", text.strip())
+            if not 1 <= len(trigger) <= 64:
+                send_message(chat_id, "Слово или фраза должны быть длиной от 1 до 64 символов. Попробуй ещё раз или /cancel.")
+                return
+            next_stage = "add_replacement" if stage == "add_trigger" else "edit_replacement"
+            PENDING_AUTOREPLACE[chat_id] = (next_stage, rule_id, trigger, time.time() + 600)
+            send_message(
+                chat_id,
+                f"Теперь отправь текст, на который нужно заменять <code>{html_text(trigger)}</code>.\n\nОтмена — /cancel",
+                parse_mode="HTML",
+            )
+            return
+
+        if stage in {"add_replacement", "edit_replacement"}:
+            trigger = str(temp_value or "").strip()
+            if not trigger:
+                PENDING_AUTOREPLACE.pop(chat_id, None)
+                send_message(chat_id, "Не удалось сохранить правило. Создай его заново.")
+                return
+            ok, result = save_auto_replacement(
+                user_id,
+                trigger,
+                text,
+                rule_id if stage == "edit_replacement" else None,
+            )
+            if not ok:
+                send_message(chat_id, result + " Попробуй ещё раз или /cancel.")
+                return
+            PENDING_AUTOREPLACE.pop(chat_id, None)
+            send_message(chat_id, result)
+            page_text, page_markup = page_auto_replacements(user_id)
+            send_menu_page(user_id, chat_id, page_text, page_markup)
+            return
+
+    if text and not text.startswith("/") and chat_id in PENDING_CUSTOM_COMMAND:
+        stage, command_id, temp_value, deadline = PENDING_CUSTOM_COMMAND[chat_id]
+        if deadline < time.time():
+            PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+            send_message(chat_id, "Время настройки команды истекло.")
+            return
+
+        if stage == "add_name":
+            trigger = normalize_custom_command_trigger(text)
+            if not re.fullmatch(r"\.[\wа-яё-]{1,31}", trigger, flags=re.IGNORECASE):
+                send_message(chat_id, "Команда может содержать только буквы, цифры, _ и -. Например: <code>.привет</code>", parse_mode="HTML")
+                return
+            if find_custom_command(user_id, trigger):
+                send_message(chat_id, "Такая команда уже есть. Введи другое название или /cancel.")
+                return
+            PENDING_CUSTOM_COMMAND[chat_id] = ("add_messages", None, trigger, time.time() + 600)
+            send_message(
+                chat_id,
+                "Теперь отправь сообщения одним сообщением. <b>Каждая строка = отдельное сообщение</b>.\n\n"
+                "Например:\n<code>Привет\nКак дела?\nЯ позже отвечу</code>\n\nОтмена — /cancel",
+                parse_mode="HTML",
+            )
+            return
+
+        if stage == "add_messages":
+            trigger = str(temp_value or "")
+            messages = [line.strip() for line in text.splitlines() if line.strip()]
+            ok, result = save_custom_command(user_id, trigger, messages)
+            if not ok:
+                send_message(chat_id, result + " Попробуй ещё раз или /cancel.")
+                return
+            PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+            send_message(chat_id, result)
+            page_text, page_markup = page_custom_commands(user_id)
+            send_menu_page(user_id, chat_id, page_text, page_markup)
+            return
+
+        if stage == "edit_name":
+            if command_id is None:
+                PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+                return
+            command = get_custom_command(user_id, command_id)
+            if not command:
+                PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+                send_message(chat_id, "Команда уже удалена.")
+                return
+            trigger = normalize_custom_command_trigger(text)
+            ok, result = save_custom_command(user_id, trigger, command[2], command_id)
+            if not ok:
+                send_message(chat_id, result + " Попробуй ещё раз или /cancel.")
+                return
+            PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+            send_message(chat_id, result)
+            page_text, page_markup = page_custom_command_item(user_id, command_id)
+            send_menu_page(user_id, chat_id, page_text, page_markup)
+            return
+
+        if stage == "edit_messages":
+            if command_id is None:
+                PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+                return
+            command = get_custom_command(user_id, command_id)
+            if not command:
+                PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+                send_message(chat_id, "Команда уже удалена.")
+                return
+            messages = [line.strip() for line in text.splitlines() if line.strip()]
+            ok, result = save_custom_command(user_id, command[1], messages, command_id)
+            if not ok:
+                send_message(chat_id, result + " Попробуй ещё раз или /cancel.")
+                return
+            PENDING_CUSTOM_COMMAND.pop(chat_id, None)
+            send_message(chat_id, result)
+            page_text, page_markup = page_custom_command_item(user_id, command_id)
+            send_menu_page(user_id, chat_id, page_text, page_markup)
+            return
 
     # ответ админа на выдачу подписки («ID дней») — до разбора команд
     if text and not text.startswith("/") and chat_id in PENDING_HIDE_CHAT_USER and is_owner_admin(user_id):
