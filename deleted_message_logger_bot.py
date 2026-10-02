@@ -3076,16 +3076,21 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
 
     rows = [
         [
+            style_button("cute", "🎀 Няшный"),
             style_button("dumb", "🧠 Тупой"),
-            style_button("vasya", "🧢 Вася"),
         ],
         [
+            style_button("vasya", "🧢 Вася"),
             style_button("brother", "🤝 Брат"),
-            style_button("rooster", "🐓 Петух"),
         ],
+        [style_button("rooster", "🐓 Петух")],
+    ]
+    if current == "rooster":
+        rows.append([btn("Настройки мата", "rooster:settings", emoji="refresh", style="primary")])
+    rows.extend([
         [btn("Отключить стиль", "style:off", emoji="warning", style="danger")],
         [btn("Назад к функциям", "functions", emoji="back")],
-    ]
+    ])
     examples = "\n".join(
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
         for key, label in STYLE_LABELS.items()
@@ -3094,12 +3099,37 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
         "🎭 <b>Стиль общения</b>\n"
         f"Сейчас: <b>{current_label}</b>\n\n"
         "Выбери стиль — он будет применяться автоматически к исходящим Business-сообщениям.\n"
-        "Все четыре стиля собраны по той же схеме преобразований: словарь фраз, регистр, "
-        "редкие растяжения/суффиксы и контекстные вставки, но у каждого свой характер.\n"
+        "🎀 Няшный повторяет механику CuteMessages: строчные буквы, растягивание гласных, "
+        "заикание, эмодзи, каомодзи, суффиксы, мягкие окончания и милая пунктуация.\n"
+        "🐓 У «Петуха» отдельно настраивается количество мата: 10 / 20 / 40 / 60 / 100%.\n"
         "Ссылки, @username, номера телефонов и команды с точки не меняются.\n\n"
         f"<b>Примеры:</b>\n{examples}"
     )
     return text, kb(rows)
+
+def page_rooster_settings(user_id: int) -> tuple[str, dict]:
+    current = get_rooster_profanity_percent(user_id)
+
+    def level_button(percent: int) -> dict:
+        return btn(
+            ("✓ " if current == percent else "") + f"{percent}%",
+            f"rooster:level:{percent}",
+            style="success" if current == percent else None,
+        )
+
+    rows = [
+        [level_button(10), level_button(20), level_button(40)],
+        [level_button(60), level_button(100)],
+        [btn("Назад к стилям", "style", emoji="back")],
+    ]
+    text = (
+        "🐓 <b>Настройки стиля «Петух»</b>\n\n"
+        f"Количество мата: <b>{current}%</b>\n\n"
+        "Чем выше процент, тем чаще HolyGram заменяет обычные слова обсценными вариантами "
+        "и добавляет матерные вставки. На 100% стиль специально становится максимально насыщенным."
+    )
+    return text, kb(rows)
+
 
 def page_ref(user_id: int) -> tuple[str, dict]:
     link = referral_link(user_id)
