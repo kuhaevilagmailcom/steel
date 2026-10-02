@@ -3298,38 +3298,36 @@ def page_stats(user_id: int) -> tuple[str, dict]:
     day_start = now - (now % 86400)
     with sqlite3.connect(DB_PATH) as conn:
         total_users = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
-        active = int(conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > ?", (now,)).fetchone()[0])
-        expired = int(conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > 0 AND until_ts <= ?", (now,)).fetchone()[0])
-        buyers = int(conn.execute("SELECT COUNT(DISTINCT user_id) FROM (SELECT user_id FROM payments UNION ALL SELECT user_id FROM sbp_payments WHERE status='paid')").fetchone()[0])
-        stars = conn.execute("SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments").fetchone()
-        rub = conn.execute("SELECT COUNT(*), COALESCE(SUM(rub),0) FROM sbp_payments WHERE status='paid'").fetchone()
-        daily = []
-        for ago in range(6, -1, -1):
-            start = day_start - ago * 86400
-            users_count = int(conn.execute("SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?", (start, start + 86400)).fetchone()[0])
-            pay_count = int(conn.execute("SELECT COUNT(*) FROM (SELECT created_at FROM payments UNION ALL SELECT paid_at FROM sbp_payments WHERE status='paid') WHERE created_at >= ? AND created_at < ?", (start, start + 86400)).fetchone()[0])
-            daily.append((start, users_count, pay_count))
+        business_users = int(conn.execute("SELECT COUNT(DISTINCT owner_id) FROM business_connections WHERE owner_id IS NOT NULL AND is_enabled=1").fetchone()[0])
+        stored_chats = int(conn.execute("SELECT COUNT(DISTINCT chat_id) FROM messages").fetchone()[0])
+        stored_messages = int(conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
         periods = []
         for label, seconds in (("24 часа", 86400), ("7 дней", 7 * 86400), ("30 дней", 30 * 86400)):
             count = int(conn.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (now - seconds,)).fetchone()[0])
             periods.append(f"Новые за {label}: <b>{count}</b>")
-    peak = max([max(u, p) for _, u, p in daily] + [1])
+        daily = []
+        for ago in range(6, -1, -1):
+            start = day_start - ago * 86400
+            users_count = int(conn.execute(
+                "SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?",
+                (start, start + 86400),
+            ).fetchone()[0])
+            daily.append((start, users_count))
+    peak = max([count for _, count in daily] + [1])
     chart = "\n".join(
-        f"{time.strftime('%d.%m', time.localtime(ts))}  {'█' * max(1, round(u / peak * 8)) if u else '·'} {u} новых | {'▓' * max(1, round(p / peak * 8)) if p else '·'} {p} оплат"
-        for ts, u, p in daily
+        f"{time.strftime('%d.%m', time.localtime(ts))}  {'█' * max(1, round(count / peak * 10)) if count else '·'} {count}"
+        for ts, count in daily
     )
-    conversion = round(buyers * 100 / total_users, 1) if total_users else 0
     text = (
         f"{pe('admin')} <b>Статистика</b>\n\n" + "\n".join(periods) +
-        f"\nВсего пользователей: <b>{total_users}</b>\nАктивных подписок: <b>{active}</b>\n"
-        f"Истёкших подписок: <b>{expired}</b>\nПокупателей: <b>{buyers}</b>\n"
-        f"Конверсия в покупку: <b>{conversion}%</b>\n\n"
-        f"Stars: <b>{stars[0]}</b> оплат на <b>{stars[1]} ⭐</b>\n"
-        f"СБП: <b>{rub[0]}</b> оплат на <b>{rub[1]} ₽</b>\n\n"
-        f"<b>График за 7 дней</b>\n<code>{chart}</code>"
+        f"\nВсего пользователей: <b>{total_users}</b>\n"
+        f"Активных Business-подключений: <b>{business_users}</b>\n"
+        f"Сохранённых чатов: <b>{stored_chats}</b>\n"
+        f"Сохранённых сообщений: <b>{stored_messages}</b>\n"
+        f"Доступ: <b>бесплатный для всех</b>\n\n"
+        f"<b>Новые пользователи за 7 дней</b>\n<code>{chart}</code>"
     )
     return text, kb([[btn("Обновить", "stats", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
-
 
 def page_promos(user_id: int) -> tuple[str, dict]:
     return (
@@ -3890,26 +3888,14 @@ def execute_broadcast(admin_id: int, chat_id: int) -> tuple[int, int]:
     if not preview or preview[2] < time.time():
         return 0, 0
     scope, text, _ = preview
-    now = int(time.time())
     with sqlite3.connect(DB_PATH) as conn:
-        if scope == "active":
-            rows = conn.execute(
-                """
-                SELECT DISTINCT u.private_chat_id FROM users AS u
-                JOIN subs AS s ON s.user_id = u.user_id
-                LEFT JOIN blocked_users AS b ON b.user_id = u.user_id
-                WHERE u.private_chat_id IS NOT NULL AND s.until_ts > ? AND b.user_id IS NULL
-                """,
-                (now,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT u.private_chat_id FROM users AS u
-                LEFT JOIN blocked_users AS b ON b.user_id = u.user_id
-                WHERE u.private_chat_id IS NOT NULL AND b.user_id IS NULL
-                """
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT u.private_chat_id FROM users AS u
+            LEFT JOIN blocked_users AS b ON b.user_id = u.user_id
+            WHERE u.private_chat_id IS NOT NULL AND b.user_id IS NULL
+            """
+        ).fetchall()
     sent = failed = 0
     for (target_chat,) in rows:
         try:
@@ -3918,9 +3904,8 @@ def execute_broadcast(admin_id: int, chat_id: int) -> tuple[int, int]:
         except TelegramApiError:
             failed += 1
         time.sleep(0.04)
-    audit_admin(admin_id, "рассылка", None, f"scope={scope}, sent={sent}, failed={failed}")
+    audit_admin(admin_id, "рассылка", None, f"scope=all, sent={sent}, failed={failed}")
     return sent, failed
-
 
 def handle_promo_create_input(admin_id: int, chat_id: int, text: str) -> bool:
     deadline = PENDING_PROMO_CREATE.pop(chat_id, None)
@@ -4061,21 +4046,19 @@ def export_users_csv(admin_id: int) -> Path:
         rows = conn.execute(
             """
             SELECT u.user_id, u.username, u.first_name, u.last_name, u.created_at,
-                   COALESCE(s.until_ts,0),
-                   COALESCE((SELECT SUM(stars) FROM payments p WHERE p.user_id=u.user_id),0),
-                   COALESCE((SELECT SUM(rub) FROM sbp_payments sp WHERE sp.user_id=u.user_id AND sp.status='paid'),0),
-                   CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END
-            FROM users u LEFT JOIN subs s ON s.user_id=u.user_id
-            LEFT JOIN blocked_users b ON b.user_id=u.user_id ORDER BY u.created_at
+                   CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END,
+                   COALESCE((SELECT COUNT(*) FROM business_connections bc WHERE bc.owner_id=u.user_id AND bc.is_enabled=1),0)
+            FROM users u
+            LEFT JOIN blocked_users b ON b.user_id=u.user_id
+            ORDER BY u.created_at
             """
         ).fetchall()
         writer = csv.writer(file, delimiter=";")
-        writer.writerow(["user_id", "username", "first_name", "last_name", "registered", "subscription_until", "stars_total", "rub_total", "blocked"])
+        writer.writerow(["user_id", "username", "first_name", "last_name", "registered", "blocked", "active_business_connections"])
         for row in rows:
-            writer.writerow([*row[:4], format_until(int(row[4])), format_until(int(row[5])), *row[6:]])
+            writer.writerow([*row[:4], format_until(int(row[4])), *row[5:]])
     audit_admin(admin_id, "экспорт пользователей", None, path.name)
     return path
-
 
 def create_backup(admin_id: int | None = None, send_to_admins: bool = True) -> Path:
     path = BACKUP_DIR / f"holly-{time.strftime('%Y%m%d-%H%M%S')}.sqlite3"
@@ -4343,8 +4326,9 @@ def handle_callback_query(query: dict) -> None:
 
     if data == "home":
         page = page_home(user_id)
-    elif data == "buy":
+    elif data == "buy" or data in {"grant", "prices", "promos", "expiring"} or data.startswith(("buy:", "gift:", "promo:", "sbp:check:", "price:", "useradd:")):
         page = page_buy(user_id)
+        alert = "HolyGram бесплатный — подписки и оплаты отключены"
     elif data == "style":
         if sub_active(user_id):
             page = page_communication_style(user_id)
@@ -4364,56 +4348,9 @@ def handle_callback_query(query: dict) -> None:
             set_communication_style(user_id, style)
             page = page_communication_style(user_id)
             alert = "Стиль отключён" if not style else f"Выбран: {STYLE_LABELS[style]}"
-    elif data == "promo:activate":
-        PENDING_PROMO_ACTIVATE[chat_id] = time.time() + 300
-        send_message(chat_id, "Отправь промокод одним сообщением. Отмена — /cancel")
-        alert = "Жду промокод"
-    elif data == "gift:start":
-        PENDING_GIFT[chat_id] = time.time() + 300
-        send_message(chat_id, "Отправь Telegram ID или @username получателя. Он должен хотя бы раз открыть бота. Отмена — /cancel")
-        alert = "Жду получателя"
-    elif data.startswith("gift:"):
-        parts = data.split(":")
-        if len(parts) != 4 or parts[1] not in {"sbp", "stars"} or not parts[2].isdigit() or not parts[3].isdigit():
-            answer_callback(query_id, text="Некорректный подарок", show_alert=True)
-            return
-        provider, target_id, days = parts[1], int(parts[2]), int(parts[3])
-        if not user_exists(target_id) or not get_plan(days):
-            answer_callback(query_id, text="Получатель или тариф не найден", show_alert=True)
-            return
-        if provider == "stars":
-            send_subscription_invoice(user_id, chat_id, days, target_id)
-            alert = "Открываю оплату подарка ⭐"
-        else:
-            send_sbp_payment(user_id, chat_id, days, target_id)
-            alert = "Счёт на подарок создан"
-    elif data.startswith("buy:"):
-        parts = data.split(":")
-        provider = "stars" if len(parts) == 2 else parts[1]
-        try:
-            days = int(parts[-1])
-        except ValueError:
-            days = 0
-        if not get_plan(days):
-            answer_callback(query_id, text="Тариф закончился — обнови меню", show_alert=True)
-            return
-        if provider == "stars":
-            send_subscription_invoice(user_id, chat_id, days)
-            alert = "Открываю оплату ⭐"
-        elif provider == "sbp":
-            send_sbp_payment(user_id, chat_id, days)
-            alert = "Счёт СБП создан"
-        else:
-            answer_callback(query_id, text="Способ оплаты не найден", show_alert=True)
-            return
-    elif data.startswith("sbp:check:"):
-        paid, text = check_sbp_payment(user_id, data.split(":", 2)[2])
-        if paid:
-            page = page_home(user_id)
-            alert = text
-        else:
-            answer_callback(query_id, text=text, show_alert=True)
-            return
+    elif data == "promo:activate" or data == "gift:start" or data.startswith(("gift:", "buy:", "sbp:check:")):
+        page = page_buy(user_id)
+        alert = "HolyGram бесплатный — подписки и оплаты отключены"
     elif data == "ref":
         page = page_ref(user_id)
     elif data == "help":
@@ -4853,7 +4790,7 @@ def handle_callback_query(query: dict) -> None:
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
-        page = (f"{pe('support')} <b>Рассылка</b>\n\nВыбери получателей.", kb([[btn("Всем", "broadcast:all", emoji="view")], [btn("С активной подпиской", "broadcast:active", emoji="check")], [btn("Админ-панель", "panel", emoji="home")]]))
+        page = (f"{pe('support')} <b>Рассылка</b>\n\nРассылка отправляется всем незаблокированным пользователям.", kb([[btn("Начать рассылку", "broadcast:all", emoji="view")], [btn("Админ-панель", "panel", emoji="home")]]))
     elif data in {"broadcast:all", "broadcast:active"}:
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
@@ -5751,18 +5688,8 @@ def handle_regular_message(message: dict) -> None:
         elif name == "/support" and is_private_chat(message):
             PENDING_SUPPORT[chat_id] = time.time() + 600
             send_message(chat_id, "Напиши вопрос одним сообщением. Отмена — /cancel")
-        elif name == "/gift" and is_private_chat(message):
-            PENDING_GIFT[chat_id] = time.time() + 300
-            send_message(chat_id, "Отправь Telegram ID или @username получателя. Отмена — /cancel")
-        elif name == "/promo" and is_private_chat(message):
-            if args:
-                _, result = activate_promo(user_id, args[0])
-                send_message(chat_id, result)
-            else:
-                PENDING_PROMO_ACTIVATE[chat_id] = time.time() + 300
-                send_message(chat_id, "Отправь промокод одним сообщением. Отмена — /cancel")
-        elif name == "/sub":
-            handle_sub_command(message, args)
+        elif name in {"/gift", "/promo", "/sub"}:
+            send_message(chat_id, "HolyGram теперь бесплатный для всех. Подписки, промокоды и оплаты отключены.")
         elif name == "/admins" and is_private_chat(message):
             page_text, page_markup = page_admins(user_id)
             send_menu_page(user_id, chat_id, page_text, page_markup)
