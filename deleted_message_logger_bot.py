@@ -36,7 +36,9 @@ LOCK_PATH = DATA_DIR / "bot.lock"
 RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
 MENU_IMAGE_PATH = BASE_DIR / "assets" / "holly_menu.png"
 SETUP_GUIDE_B64_PATH = BASE_DIR / "assets" / "holygram_setup_guide.b64"
-SETUP_GUIDE_IMAGE_PATH = DATA_DIR / "holygram_setup_guide.jpg"
+SETUP_GUIDE_B64_PART_GLOB = "holygram_setup_guide.b64.*"
+SETUP_GUIDE_IMAGE_PATH = DATA_DIR / "holygram_setup_guide_v2.jpg"
+SETUP_GUIDE_FILE_ID_KEY = "setup_guide_photo_file_id_v2"
 WEBAPP_URL = os.getenv(
     "WEBAPP_URL", "https://bot-1789500279-7661-furadev.bothost.tech"
 ).strip().rstrip("/")
@@ -145,6 +147,18 @@ MEDIA_LABELS = {
 }
 
 IMMEDIATE_REPLY_MEDIA_TYPES = {"photo", "video", "video_note", "animation"}
+
+# Shared SQL fragment used by both the bot admin viewer and the Web App.
+# It scopes regular chats through chat_owners and Telegram Business chats
+# through business_connections while keeping the same two owner parameters.
+OWNER_MESSAGES_FROM = """
+    FROM messages AS m
+    LEFT JOIN chat_owners AS co
+      ON m.context='regular' AND co.chat_id=m.chat_id
+    LEFT JOIN business_connections AS bc
+      ON m.context='business:' || bc.connection_id
+    WHERE (co.owner_id=? OR bc.owner_id=?)
+"""
 
 
 class TelegramApiError(RuntimeError):
@@ -2486,11 +2500,20 @@ def page_help(user_id: int) -> tuple[str, dict]:
 def ensure_setup_guide_image() -> Path | None:
     if SETUP_GUIDE_IMAGE_PATH.exists() and SETUP_GUIDE_IMAGE_PATH.stat().st_size > 0:
         return SETUP_GUIDE_IMAGE_PATH
-    if not SETUP_GUIDE_B64_PATH.exists():
-        log("setup guide asset missing")
-        return None
+
     try:
-        raw = base64.b64decode(SETUP_GUIDE_B64_PATH.read_text(encoding="ascii"))
+        if SETUP_GUIDE_B64_PATH.exists():
+            encoded = SETUP_GUIDE_B64_PATH.read_text(encoding="ascii")
+        else:
+            parts = sorted((BASE_DIR / "assets").glob(SETUP_GUIDE_B64_PART_GLOB))
+            if not parts:
+                log("setup guide asset missing")
+                return None
+            encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
+
+        raw = base64.b64decode(encoded, validate=True)
+        if not raw.startswith(b"\\xff\\xd8"):
+            raise ValueError("setup guide is not a JPEG")
         SETUP_GUIDE_IMAGE_PATH.write_bytes(raw)
         return SETUP_GUIDE_IMAGE_PATH
     except Exception as exc:
@@ -2513,7 +2536,7 @@ def send_setup_guide(user_id: int, chat_id: int) -> None:
             pass
 
     try:
-        photo_file_id = maintenance_get("setup_guide_photo_file_id")
+        photo_file_id = maintenance_get(SETUP_GUIDE_FILE_ID_KEY)
         if photo_file_id:
             try:
                 result = telegram_call(
@@ -2527,7 +2550,7 @@ def send_setup_guide(user_id: int, chat_id: int) -> None:
                     },
                 )
             except TelegramApiError:
-                maintenance_set("setup_guide_photo_file_id", "")
+                maintenance_set(SETUP_GUIDE_FILE_ID_KEY, "")
                 photo_file_id = ""
 
         if not photo_file_id:
@@ -2545,7 +2568,7 @@ def send_setup_guide(user_id: int, chat_id: int) -> None:
             if isinstance(result, dict):
                 photos = result.get("photo") or []
                 if photos and photos[-1].get("file_id"):
-                    maintenance_set("setup_guide_photo_file_id", str(photos[-1]["file_id"]))
+                    maintenance_set(SETUP_GUIDE_FILE_ID_KEY, str(photos[-1]["file_id"]))
 
         if isinstance(result, dict) and result.get("message_id"):
             _remember_menu_message(user_id, chat_id, int(result["message_id"]), True)
