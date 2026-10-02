@@ -1784,7 +1784,11 @@ def kb(rows: list[list[dict]]) -> dict:
     return {"inline_keyboard": rows}
 
 
-BACK_HOME = [btn("Назад в меню", "home", emoji="home")]
+BACK_HOME = [btn("← Назад", "home", emoji="back")]
+BACK_PANEL = [
+    btn("← Назад", "panel", emoji="back"),
+    btn("Главное меню", "home", emoji="home"),
+]
 
 # chat_id -> до этого момента ждём «ID дней» от админа
 PENDING_GRANT: dict[int, float] = {}
@@ -2334,37 +2338,45 @@ def check_trial(referrer_id: int) -> None:
 # --- страницы меню ------------------------------------------------------------
 
 def bottom_navigation() -> list[list[dict]]:
-    """One stable navigation strip shown under every personal menu screen."""
-    return [
-        [btn("🏠 Главное меню", "home")],
-        [btn("🎭 Стиль общения", "style"), btn("💬 Поддержка", "support")],
-        [btn("👥 Пригласить друзей", "ref")],
-    ]
+    """Compact navigation for user-facing submenus."""
+    return [[btn("← Назад", "home", emoji="back")]]
 
 def page_home(user_id: int) -> tuple[str, dict]:
     connections = list_business_connections(user_id)
     regular_chats = get_user_chats(user_id)
     enabled_count = sum(1 for row in connections if row.get("is_enabled")) + len(regular_chats)
     has_connections = bool(connections or regular_chats)
-    rows = [
-        [btn("🔗 Мои подключённые чаты" if has_connections else "🔗 Подключить чаты", "conns")],
-        [btn("❓ Настроить за минуту", "help")],
-    ]
-    rows.extend(bottom_navigation())
-    if is_admin_user(user_id):
-        rows.append([btn("Админ-панель", "panel", emoji="admin")])
 
-    next_step = (
-        f"{pe('check')} Всё работает. Подключено чатов: <b>{enabled_count}</b>."
+    rows = [
+        [btn(
+            "Мои подключённые чаты" if has_connections else "Подключить чаты",
+            "conns",
+            emoji="view",
+            style="primary",
+        )],
+        [
+            btn("Стиль общения", "style", emoji="profile"),
+            btn("Пригласить друзей", "ref", emoji="invite"),
+        ],
+        [
+            btn("Помощь", "help", emoji="support"),
+            btn("Поддержка", "support", emoji="support"),
+        ],
+    ]
+    if is_admin_user(user_id):
+        rows.append([btn("Админ-панель", "panel", emoji="admin", style="success")])
+
+    status = (
+        f"{pe('check')} Подключено чатов: <b>{enabled_count}</b>"
         if enabled_count
-        else f"{pe('warning')} Подключи нужные чаты — использование HolyGram бесплатное."
+        else f"{pe('warning')} Чаты пока не подключены"
     )
     text = (
         f"{pe('home')} <b>HolyGram</b>\n\n"
-        "Сохраняю удалённые и изменённые сообщения, одноразовые фото, видео и голосовые.\n\n"
-        f"{pe('check')} <b>HolyGram бесплатный для всех.</b> Никаких подписок и оплат.\n"
-        f"{next_step}\n\n"
-        "Все нужные действия — на кнопках ниже."
+        "Удалённые, изменённые и одноразовые сообщения — в одном месте.\n\n"
+        f"{status}\n"
+        f"{pe('check')} <b>Бесплатно для всех</b>\n\n"
+        "Выбери нужный раздел:"
     )
     return text, kb(rows)
 
@@ -2381,27 +2393,35 @@ def page_buy(user_id: int) -> tuple[str, dict]:
 def page_communication_style(user_id: int) -> tuple[str, dict]:
     current = get_communication_style(user_id)
     current_label = STYLE_LABELS.get(current, "🚫 Отключён")
+
+    def style_button(key: str, label: str) -> dict:
+        return btn(
+            ("✓ " if current == key else "") + label,
+            f"style:{key}",
+            style="success" if current == key else None,
+        )
+
     rows = [
         [
-            btn(("✓ " if current == "cute" else "") + "🎀 Няшный", "style:cute"),
-            btn(("✓ " if current == "vasya" else "") + "🧢 Вася", "style:vasya"),
+            style_button("cute", "🎀 Няшный"),
+            style_button("vasya", "🧢 Вася"),
         ],
         [
-            btn(("✓ " if current == "brother" else "") + "🤝 Брат", "style:brother"),
-            btn(("✓ " if current == "dumb" else "") + "🧠 Тупой", "style:dumb"),
+            style_button("brother", "🤝 Брат"),
+            style_button("dumb", "🧠 Тупой"),
         ],
-        [btn("🚫 Отключить стиль", "style:off", style="danger")],
+        [btn("Отключить стиль", "style:off", emoji="warning", style="danger")],
+        [btn("← Назад", "home", emoji="back")],
     ]
-    rows.extend(bottom_navigation())
     examples = "\n".join(
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
         for key, label in STYLE_LABELS.items()
     )
     text = (
-        "🎭 <b>Стиль общения</b>\n\n"
+        "🎭 <b>Стиль общения</b>\n"
         f"Сейчас: <b>{current_label}</b>\n\n"
-        "Выбери стиль один раз — дальше он применяется автоматически. "
-        "Ссылки, @username и номера телефонов бот не меняет.\n\n"
+        "Выбери стиль — он будет применяться автоматически.\n"
+        "Ссылки, @username и номера телефонов не меняются.\n\n"
         f"<b>Примеры:</b>\n{examples}"
     )
     return text, kb(rows)
@@ -2410,85 +2430,68 @@ def page_ref(user_id: int) -> tuple[str, dict]:
     link = referral_link(user_id)
     count = ref_count(user_id)
     text = (
-        f"{pe('invite')} <b>Пригласи друзей</b>\n\n"
-        f"Твоя ссылка:\n<code>{link}</code>\n\n"
+        f"{pe('invite')} <b>Пригласить друзей</b>\n\n"
         f"Приглашено: <b>{count}</b>\n\n"
-        "HolyGram бесплатный для всех, поэтому приглашения больше не дают пробные дни."
+        f"Твоя ссылка:\n<code>{link}</code>\n\n"
+        "HolyGram бесплатный — просто отправь ссылку другу."
     )
     rows = [
-        [btn("📋 Скопировать ссылку", copy=link, style="primary")],
-        [btn("↗️ Поделиться", url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Попробуй%20HolyGram%20—%20он%20бесплатный")],
+        [
+            btn("Скопировать", copy=link, emoji="view", style="primary"),
+            btn(
+                "Поделиться",
+                url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Попробуй%20HolyGram%20—%20он%20бесплатный",
+                emoji="invite",
+            ),
+        ],
+        [btn("← Назад", "home", emoji="back")],
     ]
-    rows.extend(bottom_navigation())
     return text, kb(rows)
-
 
 def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
     text = (
-        f"{pe('support')} <b>Как подключить HolyGram</b>\n\n"
-        "1. Открой Telegram → Настройки → Telegram Business → Чат-боты.\n"
+        f"{pe('support')} <b>Подключение HolyGram</b>\n\n"
+        "1. Telegram → <b>Настройки</b> → <b>Telegram Business</b> → <b>Чат-боты</b>.\n"
         f"2. Добавь <code>@{username}</code>.\n"
-        "3. Выбери нужные чаты и нажми «Сохранить».\n\n"
-        "Готово: новые сообщения начнут сохраняться автоматически. Для группы добавь бота "
-        "администратором и отправь <code>/watch</code>."
+        "3. Выбери нужные чаты и сохрани настройки.\n\n"
+        f"{pe('check')} После этого новые сообщения сохраняются автоматически."
     )
     rows = [
-        [btn("🔗 Проверить подключение", "conns")],
+        [btn("Проверить подключение", "conns", emoji="refresh", style="primary")],
+        [btn("← Назад", "home", emoji="back")],
     ]
-    rows.extend(bottom_navigation())
     return text, kb(rows)
 
 def page_connections(user_id: int) -> tuple[str, dict]:
-    rows = list_business_connections(user_id)
+    connections = list_business_connections(user_id)
     regular_chats = get_user_chats(user_id)
-    if rows or regular_chats:
-        business_enabled = sum(1 for row in rows if row.get("is_enabled"))
+    if connections or regular_chats:
+        business_enabled = sum(1 for row in connections if row.get("is_enabled"))
         enabled = business_enabled + len(regular_chats)
-        disabled = len(rows) - business_enabled
+        disabled = len(connections) - business_enabled
         text = (
-            f"{pe('view')} <b>Мои подключённые чаты</b>\n\n"
-            f"Работают: <b>{enabled}</b>\n"
-            f"Приостановлены: <b>{disabled}</b>\n\n"
-            "Ничего дополнительно нажимать не нужно — новые сообщения сохраняются автоматически."
+            f"{pe('view')} <b>Подключённые чаты</b>\n\n"
+            f"{pe('check')} Работают: <b>{enabled}</b>\n"
+            f"{pe('warning')} Приостановлены: <b>{disabled}</b>\n\n"
+            "Новые сообщения сохраняются автоматически."
         )
     else:
         text = (
-            f"{pe('view')} <b>Чаты пока не подключены</b>\n\n"
-            "Подключи нужные чаты в Telegram Business — после этого бот будет "
-            "сохранять удалённые, изменённые и одноразовые сообщения."
+            f"{pe('view')} <b>Подключённые чаты</b>\n\n"
+            "Пока ничего не подключено. Добавь HolyGram в Telegram Business."
         )
-    action_rows = []
-    if rows and any(not row.get("is_enabled") for row in rows):
-        action_rows.append([btn("✅ Включить приостановленные", "restore", emoji="check")])
-    action_rows.extend([
-        [btn("➕ Добавить или изменить чаты", "help")],
-        [btn("🔄 Обновить", "conns")],
+
+    rows: list[list[dict]] = []
+    if connections and any(not row.get("is_enabled") for row in connections):
+        rows.append([btn("Включить приостановленные", "restore", emoji="check", style="success")])
+    rows.extend([
+        [btn("Добавить или изменить чаты", "help", emoji="add")],
+        [btn("Обновить", "conns", emoji="refresh")],
+        [btn("← Назад", "home", emoji="back")],
     ])
-    action_rows.extend(bottom_navigation())
-    markup = kb(action_rows)
-    return text, markup
+    return text, kb(rows)
 
-USERS_PAGE_SIZE = 15
-ADMIN_CHATS_PAGE_SIZE = 10
-ADMIN_MESSAGES_PAGE_SIZE = 10
-
-OWNER_MESSAGES_FROM = """
-    FROM messages AS m
-    LEFT JOIN chat_owners AS co
-      ON m.context = 'regular' AND co.chat_id = m.chat_id
-    LEFT JOIN business_connections AS bc
-      ON m.context = 'business:' || bc.connection_id
-    WHERE (co.owner_id = ? OR bc.owner_id = ?)
-"""
-
-ADMIN_MEDIA_LABELS = {
-    "photo": "🖼 Фото",
-    "video": "🎬 Видео",
-    "voice": "🎤 ГС",
-    "video_note": "⭕ Кружок",
-    "sticker": "🏷 Стикер",
-}
 def stored_user_label(
     user_id: int,
     first_name: str | None,
@@ -3473,38 +3476,68 @@ def page_panel(user_id: int) -> tuple[str, dict]:
         open_tickets = int(conn.execute("SELECT COUNT(*) FROM support_tickets WHERE status='open'").fetchone()[0])
 
     role = (
-        "владелец" if is_owner_admin(user_id)
-        else "администратор чатов" if can_view_user_chats(user_id)
-        else "администратор"
+        "Владелец" if is_owner_admin(user_id)
+        else "Администратор чатов" if can_view_user_chats(user_id)
+        else "Администратор"
     )
+    viewing = "включён" if chat_viewing_enabled() else "выключен"
+
     text = (
-        f"{pe('admin')} <b>Админ-панель</b> · {role}\n\n"
+        f"{pe('admin')} <b>HolyGram · Админ-панель</b>\n\n"
+        f"Роль: <b>{role}</b>\n"
         f"Пользователей: <b>{users}</b>\n"
         f"Открытых обращений: <b>{open_tickets}</b>\n"
-        f"Доступ: <b>бесплатный для всех</b>"
+        f"Просмотр чатов: <b>{viewing}</b>\n\n"
+        "Выбери раздел:"
     )
 
     rows = [
-        [btn("Пользователи", "users:0", emoji="view"), btn("Статистика", "stats", emoji="admin")],
-        [btn("Обращения", "tickets", emoji="support"), btn("Рассылка", "broadcast", emoji="support")],
-        [btn("Экспорт CSV", "export", emoji="view"), btn("Проверка работы", "health", emoji="check")],
-        [btn("Журнал действий", "audit", emoji="history")],
+        [
+            btn("Пользователи", "users:0", emoji="view"),
+            btn("Обращения", "tickets", emoji="support"),
+        ],
+        [
+            btn("Статистика", "stats", emoji="history"),
+            btn("Рассылка", "broadcast", emoji="support"),
+        ],
     ]
+
     if can_view_user_chats(user_id):
-        rows.append([btn("Открыть чаты", web_app=WEBAPP_URL, emoji="view", style="success")])
+        rows.append([btn("Открыть чаты", web_app=WEBAPP_URL, emoji="view", style="primary")])
+
+    rows.extend([
+        [
+            btn("Экспорт CSV", "export", emoji="view"),
+            btn("Диагностика", "health", emoji="check"),
+        ],
+        [btn("Журнал действий", "audit", emoji="history")],
+    ])
+
     if is_owner_admin(user_id):
         rows.extend([
+            [
+                btn("Администраторы", "admins", emoji="admin"),
+                btn("Приватность", "privacy", emoji="warning"),
+            ],
             [btn(
                 "Выключить просмотр чатов" if chat_viewing_enabled() else "Включить просмотр чатов",
                 "chats:toggle",
                 emoji="warning" if chat_viewing_enabled() else "check",
                 style="danger" if chat_viewing_enabled() else "success",
             )],
-            [btn("Администраторы", "admins", emoji="admin"), btn("Приватность чатов", "privacy", emoji="warning")],
-            [btn("История просмотров", "viewaudit", emoji="history")],
-            [btn("Хранение", "storage", emoji="admin"), btn("Резервная копия", "backup", emoji="refresh")],
+            [
+                btn("История просмотров", "viewaudit", emoji="history"),
+                btn("Хранение", "storage", emoji="admin"),
+            ],
+            [btn("Резервная копия", "backup", emoji="refresh")],
         ])
-    rows.extend([[btn("Обновить", "panel", emoji="refresh")], BACK_HOME])
+
+    rows.extend([
+        [
+            btn("Обновить", "panel", emoji="refresh"),
+            btn("← Назад", "home", emoji="back"),
+        ],
+    ])
     return text, kb(rows)
 
 def page_admins(user_id: int) -> tuple[str, dict]:
