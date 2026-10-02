@@ -2438,27 +2438,42 @@ def _style_plain_segment(style: str, segment: str) -> str:
     if not segment or not segment.strip():
         return segment
 
-    if style == "rooster":
+    if style == "cute":
         replacements = {
-            "ты где": "ты где там",
-            "доброе утро": "утречко доброе",
+            "ты где": "ты гдеее",
+            "доброе утро": "доброе утречко",
             "спокойной ночи": "сладких снов",
-            "пожалуйста": "ну пожалуйста",
+            "пожалуйста": "пожалуйстаа",
             "спасибо": "спасибочки",
+            "большое спасибо": "спасибочки большое",
             "привет": "приветик",
             "здравствуй": "приветик",
-            "пока": "покеда",
-            "хорошо": "шикарно",
-            "отлично": "роскошно",
+            "пока": "поки",
+            "хорошо": "хорошоо",
+            "отлично": "супер",
+            "скучаю": "скучаюю",
+            "люблю": "люблюю",
             "да": "ага",
             "нет": "неа",
         }
-        result = _replace_style_phrases(segment, replacements)
-        # CuteMessages-like softness: casual outgoing text is lowercase unless the
-        # sender clearly typed an acronym/all-caps word.
-        if result and not re.search(r"\b[A-ZА-ЯЁ]{2,}\b", result):
-            result = result.lower()
-        return result
+        return _replace_style_phrases(segment, replacements)
+
+    if style == "rooster":
+        replacements = {
+            "пожалуйста": "давай",
+            "спасибо": "спасибо",
+            "привет": "здоров",
+            "здравствуй": "здоров",
+            "пока": "давай",
+            "хорошо": "нормально",
+            "отлично": "нормально",
+            "сейчас": "щас",
+            "вообще": "ваще",
+            "ничего": "ничё",
+            "что-то": "чё-то",
+            "что-нибудь": "чё-нибудь",
+        }
+        return _replace_style_phrases(segment, replacements)
 
     if style == "vasya":
         replacements = {
@@ -2475,7 +2490,6 @@ def _style_plain_segment(style: str, segment: str) -> str:
             "здесь": "тут",
             "теперь": "терь",
             "что": "чё",
-            "давай": "давай",
         }
         result = _replace_style_phrases(segment, replacements)
         return re.sub(r"(?iu)\bне знаю\b", "хз", result)
@@ -2505,8 +2519,6 @@ def _style_plain_segment(style: str, segment: str) -> str:
         "сейчас": "щас",
         "вообще": "ваще",
         "конечно": "ну да, наверное",
-        "короче": "короче",
-        "типа": "типа",
         "что": "чо",
         "зачем": "зачем это",
         "почему": "почему это",
@@ -2531,62 +2543,179 @@ def _style_intent(text: str) -> str:
 
 
 def _cute_seed(source: str) -> int:
-    # Stable pseudo-randomness: the same Telegram edit won't mutate again and again.
     return sum((index + 1) * ord(char) for index, char in enumerate(source.lower()))
 
 
-def _cute_stretch_one_word(text: str, seed: int) -> str:
-    words = list(re.finditer(r"(?iu)\b[а-яё]{3,}\b", text))
-    if not words or seed % 4:
+def _stable_roll(seed: int, salt: int, modulo: int = 100) -> int:
+    return (seed * 131 + salt * 977 + salt * salt * 17) % modulo
+
+
+def _cute_stretch_word(word: str, seed: int, salt: int) -> str:
+    vowel_positions = [i for i, char in enumerate(word.lower()) if char in CUTE_STYLE_VOWELS]
+    if not vowel_positions:
+        return word
+    position = vowel_positions[_stable_roll(seed, salt, len(vowel_positions))]
+    char = word[position]
+    extra = 1 + (_stable_roll(seed, salt + 7, 2))
+    return word[: position + 1] + char * extra + word[position + 1 :]
+
+
+def _cute_transform_segment(text: str, source: str) -> str:
+    if not text.strip():
         return text
-    match = words[seed % len(words)]
-    word = match.group(0)
-    vowels = [index for index, char in enumerate(word.lower()) if char in CUTE_STYLE_VOWELS]
-    if not vowels:
+    seed = _cute_seed(source)
+    leading = text[: len(text) - len(text.lstrip())]
+    trailing = text[len(text.rstrip()):] if text.rstrip() != text else ""
+    body = text.strip()
+
+    # Lowercase is one of the plugin's optional transformations. Preserve obvious acronyms.
+    if not re.search(r"\b[A-ZА-ЯЁ]{2,}\b", body):
+        body = body.lower()
+
+    token_matches = list(re.finditer(r"(?iu)\b[а-яёa-z]{2,}\b", body))
+    offset = 0
+    stretched = False
+    stuttered = False
+    for index, match in enumerate(token_matches):
+        start = match.start() + offset
+        end = match.end() + offset
+        word = body[start:end]
+        changed = word
+
+        if not stuttered and len(word) >= 4 and _stable_roll(seed, index + 11) < 16:
+            changed = word[0] + "-" + word
+            stuttered = True
+
+        if not stretched and len(word) >= 3 and _stable_roll(seed, index + 23) < 38:
+            changed = _cute_stretch_word(changed, seed, index + 31)
+            stretched = True
+
+        if (
+            len(changed) >= 3
+            and re.fullmatch(r"(?iu)[а-яё-]+", changed)
+            and changed[-1].lower() in CUTE_STYLE_CONSONANTS_RU
+            and _stable_roll(seed, index + 47) < 9
+        ):
+            changed += "ь"
+
+        if changed != word:
+            body = body[:start] + changed + body[end:]
+            offset += len(changed) - len(word)
+
+    # Classic-effects feel: decorate some words, but cap it to keep messages readable.
+    words = body.split()
+    max_emojis = min(4, max(1, len(words) // 3)) if words else 0
+    used = 0
+    decorated: list[str] = []
+    for index, word in enumerate(words):
+        decorated.append(word)
+        if used < max_emojis and _stable_roll(seed, index + 101) < 34:
+            decorated.append(CUTE_STYLE_EMOJIS[_stable_roll(seed, index + 113, len(CUTE_STYLE_EMOJIS))])
+            used += 1
+    body = " ".join(decorated)
+
+    if body.endswith("?"):
+        if _stable_roll(seed, 201) < 55:
+            body = body[:-1] + CUTE_STYLE_PUNCT_QUESTION[_stable_roll(seed, 202, len(CUTE_STYLE_PUNCT_QUESTION))]
+    elif body.endswith("!"):
+        if _stable_roll(seed, 203) < 45:
+            body = body[:-1] + CUTE_STYLE_PUNCT_EXCLAMATION[_stable_roll(seed, 204, len(CUTE_STYLE_PUNCT_EXCLAMATION))]
+    elif body.endswith(".") and not body.endswith("..."):
+        if _stable_roll(seed, 205) < 35:
+            body = body[:-1] + CUTE_STYLE_PUNCT_PERIOD[_stable_roll(seed, 206, len(CUTE_STYLE_PUNCT_PERIOD))]
+
+    if _stable_roll(seed, 221) < 42:
+        body = body.rstrip() + CUTE_STYLE_SUFFIXES[_stable_roll(seed, 222, len(CUTE_STYLE_SUFFIXES))]
+    elif _stable_roll(seed, 223) < 32:
+        body = body.rstrip() + " " + CUTE_STYLE_KAOMOJI[_stable_roll(seed, 224, len(CUTE_STYLE_KAOMOJI))]
+
+    if len(body) > 24 and _stable_roll(seed, 241) < 12:
+        body += "\n" + CUTE_STYLE_ACTIONS[_stable_roll(seed, 242, len(CUTE_STYLE_ACTIONS))]
+
+    return leading + body + trailing
+
+
+def _apply_rooster_phrase_replacements(text: str, percent: int, seed: int) -> str:
+    result = text
+    replacements = [
+        ("не знаю", "хуй знает", 20),
+        ("зачем", "нахуя", 20),
+        ("плохо", "хуёво", 40),
+        ("очень", "пиздец как", 40),
+        ("круто", "охуенно", 40),
+        ("отлично", "охуенно", 60),
+        ("надоело", "заебало", 60),
+        ("достало", "заебало", 60),
+        ("ерунда", "хуйня", 60),
+        ("фигня", "хуйня", 60),
+        ("без разницы", "похуй", 60),
+    ]
+    for index, (source, replacement, minimum) in enumerate(replacements):
+        if percent < minimum:
+            continue
+        chance = min(100, percent + 15)
+        if _stable_roll(seed, 300 + index) >= chance:
+            continue
+        pattern = re.compile(r"(?iu)(?<!\w)" + re.escape(source) + r"(?!\w)")
+        result = pattern.sub(replacement, result)
+    return result
+
+
+def _apply_rooster_profanity(text: str, percent: int, source: str) -> str:
+    if not text.strip() or percent <= 0:
         return text
-    index = vowels[seed % len(vowels)]
-    char = word[index]
-    stretched = word[: index + 1] + char * (1 + (seed % 2)) + word[index + 1 :]
-    return text[:match.start()] + stretched + text[match.end():]
+    seed = _cute_seed(source)
+    leading = text[: len(text) - len(text.lstrip())]
+    trailing = text[len(text.rstrip()):] if text.rstrip() != text else ""
+    body = text.strip()
+    body = _apply_rooster_phrase_replacements(body, percent, seed)
 
-
-def _cute_punctuation(text: str, seed: int) -> str:
-    if not text:
+    words = body.split()
+    if not words:
         return text
-    if text.endswith("?") and seed % 3 == 0:
-        return text[:-1] + ("?🥺" if seed % 2 else "?♡")
-    if text.endswith("!") and seed % 4 == 0:
-        return text[:-1] + ("!✨" if seed % 2 else "!♡")
-    if text.endswith(".") and not text.endswith("...") and seed % 5 == 0:
-        return text[:-1] + ".~"
-    return text
+
+    # The percentage controls how many available insertion slots are filled.
+    slots = min(10, max(1, len(words) // 2 + 1))
+    target = int(round(slots * percent / 100))
+    if target == 0 and _stable_roll(seed, 351) < percent:
+        target = 1
+
+    candidate_positions = list(range(len(words)))
+    candidate_positions.sort(key=lambda pos: _stable_roll(seed, 400 + pos, 1000))
+    chosen = set(candidate_positions[:target])
+    output: list[str] = []
+    for index, word in enumerate(words):
+        if index in chosen and _stable_roll(seed, 500 + index) < 45:
+            output.append(ROOSTER_PROFANITY_PREFIXES[_stable_roll(seed, 520 + index, len(ROOSTER_PROFANITY_PREFIXES))])
+        output.append(word)
+        if index in chosen and _stable_roll(seed, 540 + index) >= 45:
+            output.append(ROOSTER_PROFANITY_WORDS[_stable_roll(seed, 560 + index, len(ROOSTER_PROFANITY_WORDS))])
+
+    body = " ".join(output)
+
+    if percent >= 40 and _stable_roll(seed, 601) < percent:
+        body = ROOSTER_PROFANITY_PREFIXES[_stable_roll(seed, 602, len(ROOSTER_PROFANITY_PREFIXES))] + ", " + body
+    if percent >= 60 and _stable_roll(seed, 603) < percent:
+        body = body.rstrip(" .,!?:;") + ", " + ROOSTER_PROFANITY_SUFFIXES[_stable_roll(seed, 604, len(ROOSTER_PROFANITY_SUFFIXES))]
+
+    return leading + body + trailing
 
 
-def _add_style_flavour(style: str, text: str, source: str) -> str:
-    """Adds a restrained contextual touch; deterministic and idempotent."""
+def _add_style_flavour(style: str, text: str, source: str, user_id: int | None = None) -> str:
     stripped = text.strip()
     if not stripped:
         return text
     intent = _style_intent(source)
-    score = _cute_seed(source) if style == "rooster" else sum(ord(char) for char in source.lower())
+    score = _cute_seed(source)
     leading = text[: len(text) - len(text.lstrip())]
     body = text.strip()
 
+    if style == "cute":
+        return _cute_transform_segment(text, source)
+
     if style == "rooster":
-        # Same transformation pipeline idea as CuteMessages: lowercase, occasional
-        # stretching, suffixes and punctuation, but with a deliberately comic profile.
-        body = body.lower()
-        body = _cute_stretch_one_word(body, score)
-        if body.endswith("?") and score % 3 == 0:
-            body = body[:-1] + "? 🐓"
-        elif body.endswith("!") and score % 4 == 0:
-            body = body[:-1] + "! 🐓"
-        elif len(body) > 12 and score % 5 == 0 and "🐓" not in body:
-            body += " 🐓"
-        if intent == "greeting" and not re.search(r"(?iu)\b(красавчик|родной)\b", body):
-            body = body.rstrip(" .!") + (", красавчик" if score % 2 else ", родной")
-        elif intent == "question" and len(body) > 16 and score % 2 == 0:
-            body = "ну " + body
+        percent = get_rooster_profanity_percent(user_id) if user_id is not None else 40
+        body = _apply_rooster_profanity(body.lower(), percent, source)
     elif style == "vasya":
         if intent == "question" and len(body) > 15 and not re.match(r"(?iu)^(вась|слушай)\b", body):
             body = ("вась, " if score % 2 else "слушай, ") + body[:1].lower() + body[1:]
@@ -2622,7 +2751,8 @@ def _add_style_flavour(style: str, text: str, source: str) -> str:
             body = "ну это... " + body[:1].lower() + body[1:]
     return leading + body
 
-def stylize_message_text(style: str, text: str) -> str:
+
+def stylize_message_text(style: str, text: str, user_id: int | None = None) -> str:
     if style not in STYLE_LABELS or not text or not text.strip() or text.lstrip().startswith(("/", ".")):
         return text
     if not STYLE_PROTECTED_RE.sub("", text).strip():
@@ -2631,17 +2761,19 @@ def stylize_message_text(style: str, text: str) -> str:
     parts: list[str] = []
     last = 0
     for match in STYLE_PROTECTED_RE.finditer(text):
-        parts.append(_style_plain_segment(style, text[last:match.start()]))
+        plain = _style_plain_segment(style, text[last:match.start()])
+        parts.append(_add_style_flavour(style, plain, text[last:match.start()], user_id))
         parts.append(match.group(0))
         last = match.end()
-    parts.append(_style_plain_segment(style, text[last:]))
-    result = "".join(parts)
 
-    result = _add_style_flavour(style, result, text)
+    plain = _style_plain_segment(style, text[last:])
+    parts.append(_add_style_flavour(style, plain, text[last:], user_id))
+    result = "".join(parts)
 
     result = re.sub(r"(?:\s+:3){2,}\s*$", " :3", result)
     result = re.sub(r"(?:\s+♡){2,}\s*$", " ♡", result)
     return result
+
 
 def transform_message_style(user_id: int, text: str, max_length: int = 4096) -> str:
     if not sub_active(user_id):
@@ -2649,8 +2781,9 @@ def transform_message_style(user_id: int, text: str, max_length: int = 4096) -> 
     style = get_communication_style(user_id)
     if not style:
         return text
-    result = stylize_message_text(style, text)
+    result = stylize_message_text(style, text, user_id)
     return text if not result or len(result) > max_length else result
+
 
 def sub_days_left(user_id: int) -> int:
     left = get_sub(user_id)[0] - int(time.time())
