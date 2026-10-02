@@ -688,6 +688,7 @@ def init_db() -> None:
         ensure_column(conn, "users", "last_name", "TEXT")
         ensure_column(conn, "users", "username", "TEXT")
         ensure_column(conn, "users", "communication_style", "TEXT NOT NULL DEFAULT ''")
+        conn.execute("UPDATE users SET communication_style='rooster' WHERE communication_style='cute'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS subscription_plans (
@@ -1970,6 +1971,9 @@ PENDING_CHAT_SEARCH: dict[int, tuple[int, int, float]] = {}
 PENDING_CHAT_DATE: dict[int, tuple[int, int, int, int, float]] = {}
 PENDING_USER_LABEL: dict[int, tuple[int, int, float]] = {}
 PENDING_HIDE_CHAT_USER: dict[int, float] = {}
+# chat_id -> (stage, item_id, temporary_value, deadline)
+PENDING_AUTOREPLACE: dict[int, tuple[str, int | None, str | None, float]] = {}
+PENDING_CUSTOM_COMMAND: dict[int, tuple[str, int | None, str | None, float]] = {}
 LAST_MAINTENANCE_TS = 0.0
 POLLING_ERROR_COUNT = 0
 
@@ -2900,15 +2904,15 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
 
     rows = [
         [
-            style_button("cute", "🎀 Няшный"),
+            style_button("dumb", "🧠 Тупой"),
             style_button("vasya", "🧢 Вася"),
         ],
         [
             style_button("brother", "🤝 Брат"),
-            style_button("dumb", "🧠 Тупой"),
+            style_button("rooster", "🐓 Петух"),
         ],
         [btn("Отключить стиль", "style:off", emoji="warning", style="danger")],
-        [btn("Назад", "home", emoji="back")],
+        [btn("Назад к функциям", "functions", emoji="back")],
     ]
     examples = "\n".join(
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
@@ -2918,9 +2922,9 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
         "🎭 <b>Стиль общения</b>\n"
         f"Сейчас: <b>{current_label}</b>\n\n"
         "Выбери стиль — он будет применяться автоматически к исходящим Business-сообщениям.\n"
-        "🎀 Няшный переработан по логике CuteMessages: мягкий регистр, растяжение гласных, "
-        "редкие суффиксы/каомодзи и милая пунктуация — без спама в каждом слове.\n"
-        "Ссылки, @username и номера телефонов не меняются.\n\n"
+        "Все четыре стиля собраны по той же схеме преобразований: словарь фраз, регистр, "
+        "редкие растяжения/суффиксы и контекстные вставки, но у каждого свой характер.\n"
+        "Ссылки, @username, номера телефонов и команды с точки не меняются.\n\n"
         f"<b>Примеры:</b>\n{examples}"
     )
     return text, kb(rows)
@@ -3066,7 +3070,7 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     rows.extend([
         [btn("Добавить или изменить чаты", "help", emoji="add")],
         [btn("Обновить", "conns", emoji="refresh")],
-        [btn("Назад", "home", emoji="back")],
+        [btn("Назад к функциям", "functions", emoji="back")],
     ])
     return text, kb(rows)
 
