@@ -688,7 +688,7 @@ def init_db() -> None:
         ensure_column(conn, "users", "last_name", "TEXT")
         ensure_column(conn, "users", "username", "TEXT")
         ensure_column(conn, "users", "communication_style", "TEXT NOT NULL DEFAULT ''")
-        conn.execute("UPDATE users SET communication_style='rooster' WHERE communication_style='cute'")
+        ensure_column(conn, "users", "rooster_profanity_percent", "INTEGER NOT NULL DEFAULT 40")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS subscription_plans (
