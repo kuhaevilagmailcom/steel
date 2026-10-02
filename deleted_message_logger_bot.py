@@ -2565,14 +2565,14 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
     )
     navigation: list[dict] = []
     if page_number > 0:
-        navigation.append(btn("Назад", f"users:{page_number - 1}", emoji="home"))
+        navigation.append(btn("← Пред.", f"users:{page_number - 1}", emoji="back"))
     if page_number + 1 < page_count:
-        navigation.append(btn("Дальше", f"users:{page_number + 1}", emoji="view"))
+        navigation.append(btn("След. →", f"users:{page_number + 1}", emoji="view"))
     buttons: list[list[dict]] = []
     for row in rows:
         uid, first_name, last_name, username, *_ = row
         short_name = f"@{username}" if username else (first_name or str(uid))
-        buttons.append([btn(f"{short_name} · {uid}", f"user:{uid}:{page_number}", emoji="view")])
+        buttons.append([btn(f"{short_name} · {uid}", f"user:{uid}:{page_number}", emoji="profile")])
     if navigation:
         buttons.append(navigation)
     buttons.extend([
@@ -2754,9 +2754,9 @@ def page_user_chats(
     ]
     navigation = []
     if page_number > 0:
-        navigation.append(btn("Назад", f"ucl:{target_id}:{return_page}:{page_number - 1}:{filter_name}:{sort_name}", emoji="home"))
+        navigation.append(btn("← Пред.", f"ucl:{target_id}:{return_page}:{page_number - 1}:{filter_name}:{sort_name}", emoji="back"))
     if page_number + 1 < page_count:
-        navigation.append(btn("Дальше", f"ucl:{target_id}:{return_page}:{page_number + 1}:{filter_name}:{sort_name}", emoji="view"))
+        navigation.append(btn("След. →", f"ucl:{target_id}:{return_page}:{page_number + 1}:{filter_name}:{sort_name}", emoji="view"))
     if navigation:
         rows.append(navigation)
     rows.extend([
@@ -3105,9 +3105,9 @@ def page_chat_search_results(admin_id: int, target_id: int, return_page: int = 0
             for chat_id, _message_id, author, _content, _updated_at in found]
     navigation = []
     if page_number > 0:
-        navigation.append(btn("Назад", f"usres:{target_id}:{return_page}:{page_number - 1}", emoji="home"))
+        navigation.append(btn("← Пред.", f"usres:{target_id}:{return_page}:{page_number - 1}", emoji="back"))
     if page_number + 1 < page_count:
-        navigation.append(btn("Дальше", f"usres:{target_id}:{return_page}:{page_number + 1}", emoji="view"))
+        navigation.append(btn("След. →", f"usres:{target_id}:{return_page}:{page_number + 1}", emoji="view"))
     if navigation:
         rows.append(navigation)
     rows.extend([
@@ -3564,15 +3564,15 @@ def page_admins(user_id: int) -> tuple[str, dict]:
     body = "\n".join(owner_lines + viewer_lines + admin_lines) or "Администраторов пока нет."
     text = (
         f"{pe('admin')} <b>Администраторы</b>\n\n{body}\n\n"
-        "Администраторы получают доступ к пользователям, поддержке, статистике, "
-        "рассылкам, промокодам и подпискам. Выдавать и снимать админку может только владелец."
+        "Администраторы получают доступ к пользователям, поддержке, статистике и служебным разделам. "
+        "Выдавать и снимать админку может только владелец."
     )
 
     rows: list[list[dict]] = []
     if is_owner_admin(user_id):
-        rows.append([btn("Добавить администратора", "admin:add", emoji="add", style="success")])
+        rows.append([btn("Добавить админа", "admin:add", emoji="add", style="success")])
         for uid, _, _ in delegated[:20]:
-            rows.append([btn(f"Снять админку · {uid}", f"admin:remove:{uid}", emoji="warning", style="danger")])
+            rows.append([btn(f"Удалить админа · {uid}", f"admin:remove:{uid}", emoji="warning", style="danger")])
     rows.extend([BACK_PANEL])
     return text, kb(rows)
 
