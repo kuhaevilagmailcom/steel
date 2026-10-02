@@ -2394,6 +2394,26 @@ def set_communication_style(user_id: int, style: str) -> None:
         )
 
 
+def get_rooster_profanity_percent(user_id: int) -> int:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT rooster_profanity_percent FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    value = int(row[0] or 40) if row else 40
+    return value if value in ROOSTER_PROFANITY_LEVELS else 40
+
+
+def set_rooster_profanity_percent(user_id: int, percent: int) -> None:
+    if percent not in ROOSTER_PROFANITY_LEVELS:
+        raise ValueError("Недопустимый уровень мата")
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE users SET rooster_profanity_percent = ?, updated_at = ? WHERE user_id = ?",
+            (percent, int(time.time()), user_id),
+        )
+
+
 def _match_case(source: str, replacement: str) -> str:
     if not source:
         return replacement
