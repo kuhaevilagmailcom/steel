@@ -810,6 +810,17 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS admin_user_pins (
+                admin_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                pinned_at INTEGER NOT NULL,
+                PRIMARY KEY (admin_id, target_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_user_pins_admin ON admin_user_pins(admin_id, pinned_at DESC)")
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS hidden_chat_users (
                 target_id INTEGER PRIMARY KEY,
                 hidden_by INTEGER NOT NULL,
