@@ -315,6 +315,47 @@ def list_messages(bot, admin_id: int, target_id: int, chat_id: int, before: int 
     }
 
 
+def send_media_to_admin_chat(
+    bot,
+    admin_id: int,
+    target_id: int,
+    chat_id: int,
+    message_id: int,
+) -> dict:
+    if not bot.can_view_user_chats(admin_id):
+        raise PermissionError("Нет доступа к чатам")
+    if bot.user_chats_are_hidden(target_id):
+        raise PermissionError("Чат недоступен")
+
+    saved = bot.get_user_owned_saved_message(target_id, chat_id, message_id)
+    if not saved:
+        raise FileNotFoundError("Медиа не найдено")
+
+    media_type = str(saved.get("media_type") or "")
+    allowed = {"photo", "video", "voice", "video_note"}
+    if media_type not in allowed:
+        raise ValueError("Это медиа нельзя отправить в бот этой кнопкой")
+
+    destination_chat_id = bot.get_private_chat_id(admin_id)
+    if not bot.send_saved_media(destination_chat_id, saved, 0):
+        raise FileNotFoundError("Файл больше недоступен")
+
+    bot.log_admin_view(
+        admin_id,
+        target_id,
+        chat_id,
+        "Web App: медиа отправлено в бот",
+        f"message_id={message_id}, type={media_type}",
+    )
+    bot.audit_admin(
+        admin_id,
+        "отправка медиа из Web App в бот",
+        target_id,
+        f"chat_id={chat_id}, message_id={message_id}, type={media_type}",
+    )
+    return {"ok": True, "sent": True, "media_type": media_type}
+
+
 def edit_business_message(
     bot,
     admin_id: int,
@@ -649,7 +690,8 @@ def make_handler(bot):
                 admin_id = _int(user.get("id"))
                 pin_match = re.fullmatch(r"/api/users/(\d+)/pin", path)
                 edit_match = re.fullmatch(r"/api/users/(\d+)/chats/(-?\d+)/messages/(\d+)/edit", path)
-                if not pin_match and not edit_match:
+                send_to_bot_match = re.fullmatch(r"/api/users/(\d+)/chats/(-?\d+)/messages/(\d+)/send-to-bot", path)
+                if not pin_match and not edit_match and not send_to_bot_match:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "Маршрут не найден"})
                     return
 
@@ -666,6 +708,15 @@ def make_handler(bot):
                 if pin_match:
                     target_id = _int(pin_match.group(1))
                     result = set_user_pin(bot, admin_id, target_id, bool(body.get("pinned")))
+                elif send_to_bot_match:
+                    target_id, chat_id, message_id = map(_int, send_to_bot_match.groups())
+                    result = send_media_to_admin_chat(
+                        bot,
+                        admin_id,
+                        target_id,
+                        chat_id,
+                        message_id,
+                    )
                 else:
                     target_id, chat_id, message_id = map(_int, edit_match.groups())
                     result = edit_business_message(
@@ -690,7 +741,7 @@ def make_handler(bot):
                 self._send_json(HTTPStatus.CONFLICT, {"error": message})
             except Exception as exc:
                 bot.log(f"WebApp POST failed: {type(exc).__name__}: {exc}")
-                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Не удалось изменить сообщение"})
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Не удалось выполнить действие"})
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
