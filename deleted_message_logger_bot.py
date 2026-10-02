@@ -5284,6 +5284,8 @@ def handle_callback_query(query: dict) -> None:
     elif data == "buy" or data in {"grant", "prices", "promos", "expiring"} or data.startswith(("buy:", "gift:", "promo:", "sbp:check:", "price:", "useradd:")):
         page = page_buy(user_id)
         alert = "HolyGram бесплатный — подписки и оплаты отключены"
+    elif data == "functions":
+        page = page_functions(user_id)
     elif data == "style":
         if sub_active(user_id):
             page = page_communication_style(user_id)
@@ -5303,6 +5305,117 @@ def handle_callback_query(query: dict) -> None:
             set_communication_style(user_id, style)
             page = page_communication_style(user_id)
             alert = "Стиль отключён" if not style else f"Выбран: {STYLE_LABELS[style]}"
+    elif data == "autoreplace":
+        page = page_auto_replacements(user_id)
+    elif data == "ar:add":
+        PENDING_AUTOREPLACE[chat_id] = ("add_trigger", None, None, time.time() + 600)
+        send_message(
+            chat_id,
+            "Отправь слово или фразу, которую нужно автоматически заменять.\n\n"
+            "Например: <code>дд</code>\nОтмена — /cancel",
+            parse_mode="HTML",
+        )
+        page = page_auto_replacements(user_id)
+        alert = "Жду слово или фразу"
+    elif data.startswith("ar:item:"):
+        try:
+            rule_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Автозамена не найдена", show_alert=True)
+            return
+        page = page_auto_replacement_item(user_id, rule_id)
+    elif data.startswith("ar:edit:"):
+        try:
+            rule_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Автозамена не найдена", show_alert=True)
+            return
+        rule = get_auto_replacement(user_id, rule_id)
+        if not rule:
+            answer_callback(query_id, text="Автозамена не найдена", show_alert=True)
+            return
+        PENDING_AUTOREPLACE[chat_id] = ("edit_trigger", rule_id, None, time.time() + 600)
+        send_message(
+            chat_id,
+            f"Отправь новое слово или фразу.\nСейчас: <code>{html_text(rule[1])}</code>\n\nОтмена — /cancel",
+            parse_mode="HTML",
+        )
+        page = page_auto_replacement_item(user_id, rule_id)
+        alert = "Жду новое слово"
+    elif data.startswith("ar:delete:"):
+        try:
+            rule_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Автозамена не найдена", show_alert=True)
+            return
+        deleted = delete_auto_replacement(user_id, rule_id)
+        page = page_auto_replacements(user_id)
+        alert = "Автозамена удалена" if deleted else "Автозамена уже удалена"
+    elif data == "commands":
+        page = page_custom_commands(user_id)
+    elif data == "cmd:add":
+        PENDING_CUSTOM_COMMAND[chat_id] = ("add_name", None, None, time.time() + 600)
+        send_message(
+            chat_id,
+            "Придумай команду. Можно написать с точкой или без неё.\n\n"
+            "Например: <code>.привет</code>\nОтмена — /cancel",
+            parse_mode="HTML",
+        )
+        page = page_custom_commands(user_id)
+        alert = "Жду название команды"
+    elif data.startswith("cmd:item:"):
+        try:
+            command_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Команда не найдена", show_alert=True)
+            return
+        page = page_custom_command_item(user_id, command_id)
+    elif data.startswith("cmd:name:"):
+        try:
+            command_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Команда не найдена", show_alert=True)
+            return
+        command = get_custom_command(user_id, command_id)
+        if not command:
+            answer_callback(query_id, text="Команда не найдена", show_alert=True)
+            return
+        PENDING_CUSTOM_COMMAND[chat_id] = ("edit_name", command_id, None, time.time() + 600)
+        send_message(
+            chat_id,
+            f"Отправь новое название команды.\nСейчас: <code>{html_text(command[1])}</code>\n\nОтмена — /cancel",
+            parse_mode="HTML",
+        )
+        page = page_custom_command_item(user_id, command_id)
+        alert = "Жду новое название"
+    elif data.startswith("cmd:messages:"):
+        try:
+            command_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Команда не найдена", show_alert=True)
+            return
+        command = get_custom_command(user_id, command_id)
+        if not command:
+            answer_callback(query_id, text="Команда не найдена", show_alert=True)
+            return
+        PENDING_CUSTOM_COMMAND[chat_id] = ("edit_messages", command_id, command[1], time.time() + 600)
+        send_message(
+            chat_id,
+            "Отправь новые сообщения одним сообщением. <b>Каждая строка = отдельное сообщение</b>.\n\n"
+            "Пример:\n<code>Привет\nКак дела?\nЯ позже отвечу</code>\n\nОтмена — /cancel",
+            parse_mode="HTML",
+        )
+        page = page_custom_command_item(user_id, command_id)
+        alert = "Жду сообщения"
+    elif data.startswith("cmd:delete:"):
+        try:
+            command_id = int(data.split(":", 2)[2])
+        except ValueError:
+            answer_callback(query_id, text="Команда не найдена", show_alert=True)
+            return
+        deleted = delete_custom_command(user_id, command_id)
+        page = page_custom_commands(user_id)
+        alert = "Команда удалена" if deleted else "Команда уже удалена"
     elif data == "promo:activate" or data == "gift:start" or data.startswith(("gift:", "buy:", "sbp:check:")):
         page = page_buy(user_id)
         alert = "HolyGram бесплатный — подписки и оплаты отключены"
