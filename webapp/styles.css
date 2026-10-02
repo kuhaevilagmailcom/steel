@@ -144,3 +144,21 @@ html,body,button,input,textarea,select{
   }
   .edit-sheet textarea{min-height:104px;max-height:34vh}
 }
+
+
+/* Personal user pins */
+.user-list-item{position:relative;padding-right:52px}
+.user-list-item[role="button"]:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.user-pin{
+  position:absolute;right:10px;top:50%;transform:translateY(-50%);
+  width:34px;height:34px;display:grid;place-items:center;
+  border:0;border-radius:11px;background:transparent;color:#6f7782;
+  cursor:pointer;transition:background .15s ease,color .15s ease,transform .15s ease;
+}
+.user-pin:hover{background:#ffffff10;color:#c8ced6}
+.user-pin:active{transform:translateY(-50%) scale(.92)}
+.user-pin:disabled{opacity:.4;cursor:default}
+.user-pin svg{width:18px;height:18px;fill:currentColor}
+.user-pin.active{color:#ff3aa7;background:#ff3aa712}
+.list-item.active .user-pin{color:#dcefff}
+.list-item.active .user-pin.active{color:#fff;background:#ffffff20}
