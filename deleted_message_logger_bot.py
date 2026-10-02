@@ -2424,9 +2424,8 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
         rows = conn.execute(
             """
             SELECT u.user_id, u.first_name, u.last_name, u.username,
-                   u.created_at, u.updated_at, COALESCE(s.until_ts, 0), COALESCE(l.label,'')
+                   u.created_at, u.updated_at, COALESCE(l.label,'')
             FROM users AS u
-            LEFT JOIN subs AS s ON s.user_id = u.user_id
             LEFT JOIN admin_user_labels AS l ON l.admin_id=? AND l.target_id=u.user_id
             ORDER BY u.updated_at DESC, u.user_id DESC
             LIMIT ? OFFSET ?
@@ -2436,16 +2435,10 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
 
     lines = []
     for index, row in enumerate(rows, start=page_number * USERS_PAGE_SIZE + 1):
-        uid, first_name, last_name, username, created_at, updated_at, until_ts, label = row
-        if is_admin_user(int(uid)):
-            subscription = "бессрочная (админ)"
-        elif int(until_ts or 0) > int(time.time()):
-            subscription = f"до {format_until(int(until_ts))}"
-        else:
-            subscription = "нет"
+        uid, first_name, last_name, username, created_at, updated_at, label = row
         lines.append(
             f"<b>{index}.</b> {stored_user_label(int(uid), first_name, last_name, username)}\n"
-            f"ID: <code>{uid}</code> · подписка: <b>{subscription}</b> · "
+            f"ID: <code>{uid}</code> · "
             f"заходил: {time.strftime('%d.%m.%Y', time.localtime(int(updated_at or created_at)))}"
             f"{f' · метка: <b>{html_text(label)}</b>' if label else ''}"
         )
@@ -2470,7 +2463,6 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
     buttons.extend([[btn("Обновить", f"users:{page_number}", emoji="refresh")], [btn("Админ-панель", "panel", emoji="admin")], BACK_HOME])
     return text, kb(buttons)
 
-
 def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
     if not is_admin_user(admin_id):
         return "Эта страница доступна только администраторам.", kb([BACK_HOME])
@@ -2480,27 +2472,9 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
             "SELECT first_name, last_name, username, created_at, updated_at FROM users WHERE user_id = ?",
             (target_id,),
         ).fetchone()
-        stars = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(stars), 0) FROM payments WHERE user_id = ?", (target_id,)
-        ).fetchone()
-        rub = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(rub), 0) FROM sbp_payments WHERE user_id = ? AND status = 'paid'",
-            (target_id,),
-        ).fetchone()
         regular_chats = conn.execute("SELECT COUNT(*) FROM chat_owners WHERE owner_id = ?", (target_id,)).fetchone()[0]
         business_chats = conn.execute("SELECT COUNT(*) FROM business_connections WHERE owner_id = ?", (target_id,)).fetchone()[0]
         blocked = conn.execute("SELECT reason FROM blocked_users WHERE user_id = ?", (target_id,)).fetchone()
-        history = conn.execute(
-            """
-            SELECT method, days, amount, created_at FROM (
-                SELECT 'Stars' AS method, days, stars AS amount, created_at FROM payments WHERE user_id = ?
-                UNION ALL
-                SELECT 'СБП', days, rub, COALESCE(paid_at, created_at) FROM sbp_payments
-                WHERE user_id = ? AND status = 'paid'
-            ) ORDER BY created_at DESC LIMIT 5
-            """,
-            (target_id, target_id),
-        ).fetchall()
         chat_stats = (0, 0, 0, 0, 0, 0)
         if not chats_hidden:
             chat_stats = conn.execute(
@@ -2515,11 +2489,7 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
             ).fetchone()
     if not user:
         return "Пользователь не найден.", kb([[btn("Назад", f"users:{return_page}", emoji="home")]])
-    until, _ = get_sub(target_id)
-    history_text = "\n".join(
-        f"• {method}: {days} дн., {amount} {'⭐' if method == 'Stars' else '₽'} — {time.strftime('%d.%m.%Y', time.localtime(created))}"
-        for method, days, amount, created in history
-    ) or "покупок нет"
+
     label = get_user_label(admin_id, target_id)
     if chats_hidden:
         chats_line = "История чатов: <b>скрыта</b>\n"
@@ -2535,20 +2505,17 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
         f"{pe('view')} <b>Карточка пользователя</b>\n\n"
         f"{stored_user_label(target_id, user[0], user[1], user[2])}\n"
         f"ID: <code>{target_id}</code>\n"
-        f"Подписка: <b>{'до ' + format_until(until) if until > int(time.time()) else 'нет'}</b>\n"
+        f"Доступ: <b>бесплатный</b>\n"
         f"Статус: <b>{'заблокирован' if blocked else 'активен'}</b>"
         f"{f' ({html_text(blocked[0])})' if blocked and blocked[0] else ''}\n"
         f"Подключений: <b>{int(regular_chats) + int(business_chats)}</b> "
         f"(обычных {regular_chats}, Business {business_chats})\n"
         f"{chats_line}"
         f"Метка: <b>{html_text(label) if label else 'нет'}</b>\n"
-        f"Рефералов: <b>{ref_count(target_id)}</b>\n"
-        f"Покупок: <b>{stars[0]}</b> на {stars[1]} ⭐, <b>{rub[0]}</b> на {rub[1]} ₽\n\n"
-        f"<b>Последние покупки:</b>\n{history_text}"
+        f"Рефералов: <b>{ref_count(target_id)}</b>"
     )
     block_button = btn("Разблокировать", f"unblock:{target_id}:{return_page}", emoji="check", style="success") if blocked else btn("Заблокировать", f"block:{target_id}:{return_page}", emoji="warning", style="danger")
     rows = [
-        [btn("+15 дней", f"useradd:{target_id}:15:{return_page}", emoji="add"), btn("+30 дней", f"useradd:{target_id}:30:{return_page}", emoji="add")],
         [btn("Изменить метку", f"ulabel:{target_id}:{return_page}", emoji="profile")],
         [block_button],
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
@@ -3365,16 +3332,10 @@ def page_stats(user_id: int) -> tuple[str, dict]:
 
 
 def page_promos(user_id: int) -> tuple[str, dict]:
-    if not is_admin_user(user_id):
-        return "Только для админов.", kb([BACK_HOME])
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("SELECT code, discount_percent, expires_at, max_uses, uses, active FROM promo_codes ORDER BY created_at DESC LIMIT 20").fetchall()
-    lines = [f"<b>{html_text(code)}</b> — {discount}% · {uses}/{limit} · до {format_until(expires)} · {'включён' if active else 'выключен'}" for code, discount, expires, limit, uses, active in rows]
-    buttons = [[btn("Создать промокод", "promo:create", emoji="add", style="success")]]
-    buttons.extend([[btn(f"{'Выключить' if active else 'Включить'} {code}", f"promo:toggle:{code}", emoji="promo")] for code, _, _, _, _, active in rows[:10]])
-    buttons.extend([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
-    return f"{pe('promo')} <b>Промокоды</b>\n\n" + ("\n".join(lines) if lines else "Промокодов пока нет."), kb(buttons)
-
+    return (
+        f"{pe('check')} <b>HolyGram бесплатный</b>\n\nПромокоды на подписку больше не используются.",
+        kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME]),
+    )
 
 def page_admin_log(user_id: int) -> tuple[str, dict]:
     if not is_admin_user(user_id):
@@ -3398,15 +3359,9 @@ def page_gift_buy(payer_id: int, target_id: int) -> tuple[str, dict]:
 
 
 def page_panel(user_id: int) -> tuple[str, dict]:
-    now = int(time.time())
     with sqlite3.connect(DB_PATH) as conn:
         users = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
-        actives = int(conn.execute("SELECT COUNT(*) FROM subs WHERE until_ts > ?", (now,)).fetchone()[0])
         open_tickets = int(conn.execute("SELECT COUNT(*) FROM support_tickets WHERE status='open'").fetchone()[0])
-        pays = conn.execute("SELECT COUNT(*), COALESCE(SUM(stars), 0) FROM payments").fetchone()
-        sbp = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(rub), 0) FROM sbp_payments WHERE status = 'paid'"
-        ).fetchone()
 
     role = (
         "владелец" if is_owner_admin(user_id)
@@ -3416,17 +3371,13 @@ def page_panel(user_id: int) -> tuple[str, dict]:
     text = (
         f"{pe('admin')} <b>Админ-панель</b> · {role}\n\n"
         f"Пользователей: <b>{users}</b>\n"
-        f"Активных подписок: <b>{actives}</b>\n"
         f"Открытых обращений: <b>{open_tickets}</b>\n"
-        f"Оплат Stars: <b>{pays[0]}</b> · {pays[1]} ⭐\n"
-        f"Оплат СБП: <b>{sbp[0]}</b> · {sbp[1]} ₽"
+        f"Доступ: <b>бесплатный для всех</b>"
     )
 
     rows = [
         [btn("Пользователи", "users:0", emoji="view"), btn("Статистика", "stats", emoji="admin")],
-        [btn("Обращения", "tickets", emoji="support"), btn("Истекают подписки", "expiring", emoji="history")],
-        [btn("Рассылка", "broadcast", emoji="support"), btn("Промокоды", "promos", emoji="promo")],
-        [btn("Выдать подписку", "grant", emoji="add", style="success"), btn("Цены", "prices", emoji="pay")],
+        [btn("Обращения", "tickets", emoji="support"), btn("Рассылка", "broadcast", emoji="support")],
         [btn("Экспорт CSV", "export", emoji="view"), btn("Проверка работы", "health", emoji="check")],
         [btn("Журнал действий", "audit", emoji="history")],
     ]
@@ -3505,52 +3456,15 @@ def page_support_tickets(user_id: int) -> tuple[str, dict]:
 
 
 def page_expiring_subscriptions(user_id: int) -> tuple[str, dict]:
-    if not is_admin_user(user_id):
-        return "Только для администраторов.", kb([BACK_HOME])
-    now = int(time.time())
-    soon = now + 7 * 86400
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            """
-            SELECT u.user_id, u.first_name, u.last_name, u.username, s.until_ts
-            FROM subs AS s
-            LEFT JOIN users AS u ON u.user_id = s.user_id
-            WHERE s.until_ts > ? AND s.until_ts <= ?
-            ORDER BY s.until_ts ASC
-            LIMIT 30
-            """,
-            (now, soon),
-        ).fetchall()
-    lines = []
-    for uid, first_name, last_name, username, until_ts in rows:
-        label = stored_user_label(int(uid), first_name, last_name, username)
-        days = max(1, (int(until_ts) - now + 86399) // 86400)
-        lines.append(f"• {label} · <b>{days} дн.</b> · до {format_until(int(until_ts))}")
-    text = (
-        f"{pe('history')} <b>Подписки истекают за 7 дней</b>\n\n"
-        + ("\n".join(lines) if lines else "В ближайшие 7 дней активные подписки не заканчиваются.")
+    return (
+        f"{pe('check')} <b>HolyGram бесплатный</b>\n\nСроков подписки больше нет.",
+        kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME]),
     )
-    return text, kb([[btn("Обновить", "expiring", emoji="refresh")], [btn("Админ-панель", "panel", emoji="home")], BACK_HOME])
-
 
 def page_prices(user_id: int) -> tuple[str, dict]:
-    plans = get_plans()
-    lines = [
-        f"<b>{days} дней</b>: {prices['rub']} ₽ / {prices['stars']} ⭐"
-        for days, prices in plans.items()
-    ]
-    rows: list[list[dict]] = []
-    for days, prices in plans.items():
-        rows.append(
-            [
-                btn(f"{days} дн. · {prices['rub']} ₽", f"price:{days}:rub", emoji="pay"),
-                btn(f"{days} дн. · {prices['stars']} ⭐", f"price:{days}:stars", emoji="stars"),
-            ]
-        )
-    rows.extend([[btn("Назад в админ-панель", "panel", emoji="home")], BACK_HOME])
     return (
-        f"{pe('pay')} <b>Цены подписки</b>\n\n" + "\n".join(lines) + "\n\nНажми цену, которую хочешь изменить.",
-        kb(rows),
+        f"{pe('check')} <b>HolyGram бесплатный</b>\n\nТарифы и цены отключены.",
+        kb([[btn("Админ-панель", "panel", emoji="home")], BACK_HOME]),
     )
 
 
@@ -4318,33 +4232,8 @@ def notify_process_restart() -> None:
 
 
 def send_expiry_reminders() -> None:
-    now = int(time.time())
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            """
-            SELECT s.user_id, s.until_ts, u.private_chat_id FROM subs s
-            JOIN users u ON u.user_id=s.user_id
-            LEFT JOIN blocked_users b ON b.user_id=s.user_id
-            WHERE s.until_ts > ? AND s.until_ts <= ? AND u.private_chat_id IS NOT NULL AND b.user_id IS NULL
-            """,
-            (now, now + 3 * 86400),
-        ).fetchall()
-    for user_id, until_ts, chat_id in rows:
-        remaining = int(until_ts) - now
-        days_before = 1 if remaining <= 86400 else 3
-        with sqlite3.connect(DB_PATH) as conn:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO subscription_reminders (user_id,until_ts,days_before,sent_at) VALUES (?,?,?,?)",
-                (user_id, until_ts, days_before, now),
-            )
-        if cur.rowcount:
-            send_message(
-                int(chat_id),
-                f"{pe('warning')} Подписка закончится через <b>{days_before} {'день' if days_before == 1 else 'дня'}</b> — {format_until(int(until_ts))}.\nПродли сейчас, чтобы бот продолжал сохранять сообщения.",
-                parse_mode="HTML",
-                reply_markup=kb([[btn("Продлить подписку", "buy", emoji="stars", style="success")]]),
-            )
-
+    """Free mode: subscription expiry reminders are disabled."""
+    return
 
 def send_message_digest() -> None:
     now = int(time.time())
@@ -5977,26 +5866,16 @@ def handle_business_connection(connection: dict) -> None:
         return
 
     if connection.get("is_enabled", True):
-        sub_note = status_line(int(owner_id)) if owner_id else "—"
         send_message(
             int(notify_chat_id),
             f"{pe('check')} <b>Telegram Business подключен.</b>\n\n"
-            f"Теперь всё удалённое и исправленное в выбранных чатах прилетает сюда.\n"
-            f"Медиа сохраняется в локальный архив, если Telegram отдаёт файл через Bot API.\n"
-            f"{pe('stars')} Подписка: {sub_note}",
+            "Теперь всё удалённое и исправленное в выбранных чатах прилетает сюда.\n"
+            "Медиа сохраняется в локальный архив, если Telegram отдаёт файл через Bot API.\n\n"
+            f"{pe('check')} HolyGram работает бесплатно — подписка не нужна.",
             parse_mode="HTML",
         )
-        if owner_id and not sub_active(int(owner_id)):
-            text, markup = page_buy(int(owner_id))
-            send_message(
-                int(notify_chat_id),
-                f"{pe('warning')} Уведомления пойдут сразу, как активировать подписку:\n\n{text}",
-                parse_mode="HTML",
-                reply_markup=markup,
-            )
     else:
         send_message(int(notify_chat_id), "Telegram Business отключен для этого бота.")
-
 
 def apply_business_message_style(message: dict, owner_id: int | None) -> str | None:
     if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
@@ -6150,8 +6029,6 @@ def configure_bot() -> None:
         {"command": "menu", "description": "Открыть меню"},
         {"command": "help", "description": "Как подключить бота"},
         {"command": "support", "description": "Написать в поддержку"},
-        {"command": "gift", "description": "Подарить подписку"},
-        {"command": "promo", "description": "Активировать промокод"},
         {"command": "watch", "description": "Включить обычный чат"},
         {"command": "status", "description": "Статус обычного чата"},
         {"command": "list", "description": "Список обычных чатов"},
@@ -6166,7 +6043,6 @@ def configure_bot() -> None:
 
     for admin_id in list_admin_ids():
         admin_commands = list(user_commands) + [
-            {"command": "sub", "description": "Выдать подписку"},
             {"command": "admins", "description": "Администраторы"},
         ]
         if is_owner_admin(admin_id):
