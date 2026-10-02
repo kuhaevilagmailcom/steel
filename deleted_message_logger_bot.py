@@ -2125,11 +2125,19 @@ STYLE_LABELS = {
 }
 
 STYLE_EXAMPLES = {
-    "cute": "приветик, ты гдеее? я уже соскучилась :3 ♡",
+    "cute": "приветикк, ты гдеее? я уже соскучилась 🥺♡",
     "vasya": "вась, ты щас где? го потом, а то ваще дел много",
     "brother": "брат, салам. от души, давай потом спокойно решим",
     "dumb": "кароч я щас хз чо делать, типо потом разберёмся",
 }
+
+# The cute style is intentionally inspired by the attached CuteMessages client plugin:
+# soft lowercase, occasional stretched vowels, small suffixes/kaomoji and cute punctuation.
+# Keep the probability low so normal messages stay readable instead of becoming emoji spam.
+CUTE_STYLE_EMOJIS = ("🥺", "💕", "💗", "🌸", "✨", "🎀", "🫶", "🫧")
+CUTE_STYLE_KAOMOJI = ("(◕‿◕)", "(≧◡≦)", "(っ•ᴗ•)っ", "૮₍˶ᵔ ᵕ ᵔ˶₎ა", "(◕ᴗ◕✿)")
+CUTE_STYLE_SUFFIXES = ("~", " :3", " ♡", " hehe~", " nya~")
+CUTE_STYLE_VOWELS = "аеёиоуыэюя"
 
 STYLE_PROTECTED_RE = re.compile(
     r"(?i)(?:https?://\S+|tg://\S+|www\.\S+|(?:t\.me|telegram\.me)/\S+|"
@@ -2190,13 +2198,19 @@ def _style_plain_segment(style: str, segment: str) -> str:
             "привет": "приветик",
             "здравствуй": "приветик",
             "пока": "поки",
-            "хорошо": "хорошо, милаш",
+            "хорошо": "хорошоо",
             "отлично": "супер",
             "очень скучаю": "ужасно скучаю",
+            "скучаю": "скучаюю",
+            "люблю": "люблюю",
             "да": "ага",
             "нет": "неа",
         }
         result = _replace_style_phrases(segment, replacements)
+        # CuteMessages-like softness: casual outgoing text is lowercase unless the
+        # sender clearly typed an acronym/all-caps word.
+        if result and not re.search(r"\b[A-ZА-ЯЁ]{2,}\b", result):
+            result = result.lower()
         return result
 
     if style == "vasya":
@@ -2269,25 +2283,64 @@ def _style_intent(text: str) -> str:
     return "statement"
 
 
+def _cute_seed(source: str) -> int:
+    # Stable pseudo-randomness: the same Telegram edit won't mutate again and again.
+    return sum((index + 1) * ord(char) for index, char in enumerate(source.lower()))
+
+
+def _cute_stretch_one_word(text: str, seed: int) -> str:
+    words = list(re.finditer(r"(?iu)\b[а-яё]{3,}\b", text))
+    if not words or seed % 4:
+        return text
+    match = words[seed % len(words)]
+    word = match.group(0)
+    vowels = [index for index, char in enumerate(word.lower()) if char in CUTE_STYLE_VOWELS]
+    if not vowels:
+        return text
+    index = vowels[seed % len(vowels)]
+    char = word[index]
+    stretched = word[: index + 1] + char * (1 + (seed % 2)) + word[index + 1 :]
+    return text[:match.start()] + stretched + text[match.end():]
+
+
+def _cute_punctuation(text: str, seed: int) -> str:
+    if not text:
+        return text
+    if text.endswith("?") and seed % 3 == 0:
+        return text[:-1] + ("?🥺" if seed % 2 else "?♡")
+    if text.endswith("!") and seed % 4 == 0:
+        return text[:-1] + ("!✨" if seed % 2 else "!♡")
+    if text.endswith(".") and not text.endswith("...") and seed % 5 == 0:
+        return text[:-1] + ".~"
+    return text
+
+
 def _add_style_flavour(style: str, text: str, source: str) -> str:
-    """Adds one contextual touch at most; deterministic and idempotent."""
+    """Adds a restrained contextual touch; deterministic and idempotent."""
     stripped = text.strip()
     if not stripped:
         return text
     intent = _style_intent(source)
-    score = sum(ord(char) for char in source.lower())
+    score = _cute_seed(source) if style == "cute" else sum(ord(char) for char in source.lower())
     leading = text[: len(text) - len(text.lstrip())]
     body = text.strip()
 
     if style == "cute":
-        if intent == "question" and len(body) > 10 and not re.search(r"[🥺💗♡]|:3", body):
-            body = body.rstrip() + (" 🥺" if score % 2 else " :3")
-        elif intent in {"greeting", "thanks"} and not re.search(r"[💗♡]|:3", body):
-            body = body.rstrip(" .!") + (" 💗" if score % 2 else " :3")
-        elif len(body) > 30 and score % 4 == 0 and not re.search(r"[💗♡]|:3", body):
-            body += " ♡"
-        elif text == source and len(body) > 5 and not re.search(r"[🥺💗✨♡]|:3", body):
-            body = body.rstrip(" .!") + (" 💗" if re.search(r"(?iu)\b(тебя|люблю|скучаю)\b", body) else " ✨")
+        body = _cute_stretch_one_word(body, score)
+        body = _cute_punctuation(body, score)
+
+        # One decoration maximum. This ports the plugin's idea without turning every
+        # word into an emoji wall.
+        has_decoration = re.search(r"[🥺💕💗🌸✨🎀🫶🫧♡]|:3|\(◕|≧◡≦|૮₍", body)
+        if not has_decoration:
+            if intent == "question" and len(body) > 6:
+                body += " " + CUTE_STYLE_EMOJIS[score % len(CUTE_STYLE_EMOJIS)]
+            elif intent in {"greeting", "thanks"}:
+                body = body.rstrip(" .!") + CUTE_STYLE_SUFFIXES[score % len(CUTE_STYLE_SUFFIXES)]
+            elif re.search(r"(?iu)\b(люблю|скучаю|тебя|милый|милая)\b", body):
+                body = body.rstrip(" .!") + " " + CUTE_STYLE_EMOJIS[score % len(CUTE_STYLE_EMOJIS)]
+            elif len(body) >= 18 and score % 5 == 0:
+                body += " " + CUTE_STYLE_KAOMOJI[score % len(CUTE_STYLE_KAOMOJI)]
     elif style == "vasya":
         if intent == "question" and len(body) > 15 and not re.match(r"(?iu)^(вась|слушай)\b", body):
             body = ("вась, " if score % 2 else "слушай, ") + body[:1].lower() + body[1:]
@@ -2556,7 +2609,9 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
     text = (
         "🎭 <b>Стиль общения</b>\n"
         f"Сейчас: <b>{current_label}</b>\n\n"
-        "Выбери стиль — он будет применяться автоматически.\n"
+        "Выбери стиль — он будет применяться автоматически к исходящим Business-сообщениям.\n"
+        "🎀 Няшный переработан по логике CuteMessages: мягкий регистр, растяжение гласных, "
+        "редкие суффиксы/каомодзи и милая пунктуация — без спама в каждом слове.\n"
         "Ссылки, @username и номера телефонов не меняются.\n\n"
         f"<b>Примеры:</b>\n{examples}"
     )
