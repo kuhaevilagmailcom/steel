@@ -1394,7 +1394,7 @@ def get_private_chat_id(user_id: int) -> int:
     return int(row[0]) if row and row[0] else user_id
 
 
-def save_business_connection(connection: dict) -> None:
+def save_business_connection(connection: dict) -> bool | None:
     user = connection.get("user") or {}
     owner_id = user.get("id")
     notify_chat_id = connection.get("user_chat_id") or owner_id
@@ -1414,6 +1414,10 @@ def save_business_connection(connection: dict) -> None:
         register_user(int(owner_id), int(notify_chat_id) if notify_chat_id else None, user)
 
     with sqlite3.connect(DB_PATH) as conn:
+        previous = conn.execute(
+            "SELECT is_enabled FROM business_connections WHERE connection_id = ?",
+            (connection["id"],),
+        ).fetchone()
         conn.execute(
             """
             INSERT INTO business_connections
@@ -1438,6 +1442,40 @@ def save_business_connection(connection: dict) -> None:
                 now,
             ),
         )
+    return bool(previous[0]) if previous else None
+
+
+def notify_admins_business_connection(connection: dict, previous_enabled: bool | None) -> None:
+    user = connection.get("user") or {}
+    owner_id = user.get("id")
+    if not owner_id:
+        return
+
+    enabled = bool(connection.get("is_enabled", True))
+    if previous_enabled is not None and previous_enabled == enabled:
+        return
+
+    first_name = str(user.get("first_name") or "").strip()
+    last_name = str(user.get("last_name") or "").strip()
+    full_name = " ".join(part for part in (first_name, last_name) if part).strip() or "Без имени"
+    username = str(user.get("username") or "").strip().lstrip("@")
+    username_text = f"@{html_text(username)}" if username else "нет"
+    action = "🟢 <b>Подключил(а) бота к Telegram Business</b>" if enabled else "🔴 <b>Отключил(а) бота от Telegram Business</b>"
+    connection_id = short_connection_id(connection.get("id"))
+
+    text = (
+        f"🔔 <b>Изменение Business-подключения</b>\n\n"
+        f"{action}\n\n"
+        f"👤 Имя: <b>{html_text(full_name)}</b>\n"
+        f"🆔 ID: <code>{int(owner_id)}</code>\n"
+        f"🔗 Ник: <b>{username_text}</b>\n"
+        f"💼 Подключение: <code>{html_text(connection_id)}</code>"
+    )
+    for admin_id in list_admin_ids():
+        try:
+            send_message(admin_id, text, parse_mode="HTML")
+        except TelegramApiError as exc:
+            log(f"Business connection admin notice failed for {admin_id}: {exc}")
 
 
 def get_business_notify_chat_id(connection_id: str) -> int | None:
@@ -6267,7 +6305,8 @@ def handle_edited_regular_message(message: dict) -> None:
 
 def handle_business_connection(connection: dict) -> None:
     raw_log("business_connection", connection)
-    save_business_connection(connection)
+    previous_enabled = save_business_connection(connection)
+    notify_admins_business_connection(connection, previous_enabled)
     owner_id = (connection.get("user") or {}).get("id")
     notify_chat_id = connection.get("user_chat_id") or owner_id
     if not notify_chat_id:
