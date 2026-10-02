@@ -1,4 +1,4 @@
-# Holly Bot — логгер удалённых сообщений (Telegram Business)
+# HolyGram — логгер удалённых сообщений (Telegram Business)
 
 Бот на чистом Python (stdlib + `python-dotenv`), который следит за Telegram Business
 подключениями: логирует удалённые сообщения, пересылает медиа в архив, ведёт статистику.
@@ -12,7 +12,7 @@
 - Админ-команды в ЛС для пользователей из `ADMIN_USER_IDS`.
 - Защита от двойного запуска через lock-файл (`logger_data/bot.lock`).
 
-## Меню, подписка и рефералка
+## Меню и доступ
 
 Главное меню (`/start`, `/menu`) с кнопками из премиум-пака
 [NewsEmoji](https://t.me/addemoji/NewsEmoji):
