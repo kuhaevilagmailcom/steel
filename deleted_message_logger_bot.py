@@ -646,6 +646,34 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_auto_replacements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                trigger TEXT NOT NULL COLLATE NOCASE,
+                replacement TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(user_id, trigger)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_custom_commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                trigger TEXT NOT NULL COLLATE NOCASE,
+                messages_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(user_id, trigger)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_auto_replacements_user ON user_auto_replacements(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_custom_commands_user ON user_custom_commands(user_id)")
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS payments (
                 tg_payment_id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -2118,17 +2146,17 @@ def sub_active(user_id: int | None) -> bool:
 
 
 STYLE_LABELS = {
-    "cute": "🎀 Няшный",
+    "dumb": "🧠 Тупой",
     "vasya": "🧢 Вася",
     "brother": "🤝 Брат",
-    "dumb": "🧠 Тупой",
+    "rooster": "🐓 Петух",
 }
 
 STYLE_EXAMPLES = {
-    "cute": "приветикк, ты гдеее? я уже соскучилась 🥺♡",
+    "dumb": "кароч я щас хз чо делать, типо потом разберёмся",
     "vasya": "вась, ты щас где? го потом, а то ваще дел много",
     "brother": "брат, салам. от души, давай потом спокойно решим",
-    "dumb": "кароч я щас хз чо делать, типо потом разберёмся",
+    "rooster": "ну приветик, красавчик, ты где там? 🐓",
 }
 
 # The cute style is intentionally inspired by the attached CuteMessages client plugin:
@@ -2144,6 +2172,186 @@ STYLE_PROTECTED_RE = re.compile(
     r"@[a-z0-9_]{3,32}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/\S*)?|"
     r"(?<!\d)\+?\d[\d\s()\-]{6,}\d(?!\d))"
 )
+
+
+MAX_USER_AUTOREPLACE_RULES = 50
+MAX_USER_COMMANDS = 30
+MAX_USER_COMMAND_MESSAGES = 20
+
+
+def list_auto_replacements(user_id: int) -> list[tuple[int, str, str]]:
+    with sqlite3.connect(DB_PATH) as conn:
+        return [
+            (int(row[0]), str(row[1]), str(row[2]))
+            for row in conn.execute(
+                "SELECT id,trigger,replacement FROM user_auto_replacements WHERE user_id=? ORDER BY updated_at DESC,id DESC",
+                (user_id,),
+            ).fetchall()
+        ]
+
+
+def get_auto_replacement(user_id: int, rule_id: int) -> tuple[int, str, str] | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT id,trigger,replacement FROM user_auto_replacements WHERE user_id=? AND id=?",
+            (user_id, rule_id),
+        ).fetchone()
+    return (int(row[0]), str(row[1]), str(row[2])) if row else None
+
+
+def save_auto_replacement(user_id: int, trigger: str, replacement: str, rule_id: int | None = None) -> tuple[bool, str]:
+    trigger = re.sub(r"\s+", " ", trigger.strip())
+    replacement = replacement.strip()
+    if not 1 <= len(trigger) <= 64:
+        return False, "Слово или фраза должны быть длиной от 1 до 64 символов."
+    if not 1 <= len(replacement) <= 500:
+        return False, "Текст замены должен быть длиной от 1 до 500 символов."
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        if rule_id is None:
+            count = int(conn.execute("SELECT COUNT(*) FROM user_auto_replacements WHERE user_id=?", (user_id,)).fetchone()[0])
+            if count >= MAX_USER_AUTOREPLACE_RULES:
+                return False, f"Можно создать максимум {MAX_USER_AUTOREPLACE_RULES} автозамен."
+            try:
+                conn.execute(
+                    "INSERT INTO user_auto_replacements (user_id,trigger,replacement,created_at,updated_at) VALUES (?,?,?,?,?)",
+                    (user_id, trigger, replacement, now, now),
+                )
+            except sqlite3.IntegrityError:
+                return False, "Такая автозамена уже существует."
+        else:
+            try:
+                cur = conn.execute(
+                    "UPDATE user_auto_replacements SET trigger=?,replacement=?,updated_at=? WHERE user_id=? AND id=?",
+                    (trigger, replacement, now, user_id, rule_id),
+                )
+            except sqlite3.IntegrityError:
+                return False, "Автозамена с таким словом уже существует."
+            if cur.rowcount == 0:
+                return False, "Автозамена не найдена."
+    return True, "Автозамена сохранена."
+
+
+def delete_auto_replacement(user_id: int, rule_id: int) -> bool:
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute("DELETE FROM user_auto_replacements WHERE user_id=? AND id=?", (user_id, rule_id))
+    return cur.rowcount > 0
+
+
+def _replace_user_segment(segment: str, rules: list[tuple[int, str, str]]) -> str:
+    result = segment
+    for _rule_id, trigger, replacement in sorted(rules, key=lambda row: len(row[1]), reverse=True):
+        pattern = re.compile(r"(?iu)(?<!\w)" + re.escape(trigger) + r"(?!\w)")
+        result = pattern.sub(lambda _match, repl=replacement: repl, result)
+    return result
+
+
+def apply_user_auto_replacements(user_id: int, text: str) -> str:
+    if not text or text.lstrip().startswith(("/", ".")):
+        return text
+    rules = list_auto_replacements(user_id)
+    if not rules:
+        return text
+    parts: list[str] = []
+    last = 0
+    for match in STYLE_PROTECTED_RE.finditer(text):
+        parts.append(_replace_user_segment(text[last:match.start()], rules))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(_replace_user_segment(text[last:], rules))
+    return "".join(parts)
+
+
+def normalize_custom_command_trigger(value: str) -> str:
+    value = re.sub(r"\s+", "", value.strip().lower())
+    if value and not value.startswith("."):
+        value = "." + value
+    return value
+
+
+def list_custom_commands(user_id: int) -> list[tuple[int, str, list[str]]]:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT id,trigger,messages_json FROM user_custom_commands WHERE user_id=? ORDER BY updated_at DESC,id DESC",
+            (user_id,),
+        ).fetchall()
+    result: list[tuple[int, str, list[str]]] = []
+    for command_id, trigger, raw in rows:
+        try:
+            messages = json.loads(str(raw))
+        except json.JSONDecodeError:
+            messages = []
+        if not isinstance(messages, list):
+            messages = []
+        result.append((int(command_id), str(trigger), [str(item) for item in messages if str(item).strip()]))
+    return result
+
+
+def get_custom_command(user_id: int, command_id: int) -> tuple[int, str, list[str]] | None:
+    for row in list_custom_commands(user_id):
+        if row[0] == command_id:
+            return row
+    return None
+
+
+def find_custom_command(user_id: int, trigger: str) -> tuple[int, str, list[str]] | None:
+    normalized = normalize_custom_command_trigger(trigger)
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT id,trigger,messages_json FROM user_custom_commands WHERE user_id=? AND trigger=? COLLATE NOCASE",
+            (user_id, normalized),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        messages = json.loads(str(row[2]))
+    except json.JSONDecodeError:
+        messages = []
+    return (int(row[0]), str(row[1]), [str(item) for item in messages if str(item).strip()])
+
+
+def save_custom_command(user_id: int, trigger: str, messages: list[str], command_id: int | None = None) -> tuple[bool, str]:
+    trigger = normalize_custom_command_trigger(trigger)
+    messages = [str(item).strip() for item in messages if str(item).strip()]
+    if not re.fullmatch(r"\.[\wа-яё-]{1,31}", trigger, flags=re.IGNORECASE):
+        return False, "Команда: только буквы, цифры, _ или -. Например: .привет"
+    if not messages:
+        return False, "Добавь хотя бы одно сообщение."
+    if len(messages) > MAX_USER_COMMAND_MESSAGES:
+        return False, f"В одной команде максимум {MAX_USER_COMMAND_MESSAGES} сообщений."
+    if any(len(item) > 1000 for item in messages):
+        return False, "Каждое сообщение команды — максимум 1000 символов."
+    now = int(time.time())
+    raw = json.dumps(messages, ensure_ascii=False)
+    with sqlite3.connect(DB_PATH) as conn:
+        if command_id is None:
+            count = int(conn.execute("SELECT COUNT(*) FROM user_custom_commands WHERE user_id=?", (user_id,)).fetchone()[0])
+            if count >= MAX_USER_COMMANDS:
+                return False, f"Можно создать максимум {MAX_USER_COMMANDS} команд."
+            try:
+                conn.execute(
+                    "INSERT INTO user_custom_commands (user_id,trigger,messages_json,created_at,updated_at) VALUES (?,?,?,?,?)",
+                    (user_id, trigger, raw, now, now),
+                )
+            except sqlite3.IntegrityError:
+                return False, "Такая команда уже существует."
+        else:
+            try:
+                cur = conn.execute(
+                    "UPDATE user_custom_commands SET trigger=?,messages_json=?,updated_at=? WHERE user_id=? AND id=?",
+                    (trigger, raw, now, user_id, command_id),
+                )
+            except sqlite3.IntegrityError:
+                return False, "Команда с таким названием уже существует."
+            if cur.rowcount == 0:
+                return False, "Команда не найдена."
+    return True, "Команда сохранена."
+
+
+def delete_custom_command(user_id: int, command_id: int) -> bool:
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute("DELETE FROM user_custom_commands WHERE user_id=? AND id=?", (user_id, command_id))
+    return cur.rowcount > 0
 
 
 def get_communication_style(user_id: int) -> str:
@@ -2188,21 +2396,18 @@ def _style_plain_segment(style: str, segment: str) -> str:
     if not segment or not segment.strip():
         return segment
 
-    if style == "cute":
+    if style == "rooster":
         replacements = {
-            "ты где": "ты гдеее",
-            "доброе утро": "доброе утречко",
+            "ты где": "ты где там",
+            "доброе утро": "утречко доброе",
             "спокойной ночи": "сладких снов",
-            "пожалуйста": "пожалуйстаа",
+            "пожалуйста": "ну пожалуйста",
             "спасибо": "спасибочки",
             "привет": "приветик",
             "здравствуй": "приветик",
-            "пока": "поки",
-            "хорошо": "хорошоо",
-            "отлично": "супер",
-            "очень скучаю": "ужасно скучаю",
-            "скучаю": "скучаюю",
-            "люблю": "люблюю",
+            "пока": "покеда",
+            "хорошо": "шикарно",
+            "отлично": "роскошно",
             "да": "ага",
             "нет": "неа",
         }
@@ -2321,26 +2526,25 @@ def _add_style_flavour(style: str, text: str, source: str) -> str:
     if not stripped:
         return text
     intent = _style_intent(source)
-    score = _cute_seed(source) if style == "cute" else sum(ord(char) for char in source.lower())
+    score = _cute_seed(source) if style == "rooster" else sum(ord(char) for char in source.lower())
     leading = text[: len(text) - len(text.lstrip())]
     body = text.strip()
 
-    if style == "cute":
+    if style == "rooster":
+        # Same transformation pipeline idea as CuteMessages: lowercase, occasional
+        # stretching, suffixes and punctuation, but with a deliberately comic profile.
+        body = body.lower()
         body = _cute_stretch_one_word(body, score)
-        body = _cute_punctuation(body, score)
-
-        # One decoration maximum. This ports the plugin's idea without turning every
-        # word into an emoji wall.
-        has_decoration = re.search(r"[🥺💕💗🌸✨🎀🫶🫧♡]|:3|\(◕|≧◡≦|૮₍", body)
-        if not has_decoration:
-            if intent == "question" and len(body) > 6:
-                body += " " + CUTE_STYLE_EMOJIS[score % len(CUTE_STYLE_EMOJIS)]
-            elif intent in {"greeting", "thanks"}:
-                body = body.rstrip(" .!") + CUTE_STYLE_SUFFIXES[score % len(CUTE_STYLE_SUFFIXES)]
-            elif re.search(r"(?iu)\b(люблю|скучаю|тебя|милый|милая)\b", body):
-                body = body.rstrip(" .!") + " " + CUTE_STYLE_EMOJIS[score % len(CUTE_STYLE_EMOJIS)]
-            elif len(body) >= 18 and score % 5 == 0:
-                body += " " + CUTE_STYLE_KAOMOJI[score % len(CUTE_STYLE_KAOMOJI)]
+        if body.endswith("?") and score % 3 == 0:
+            body = body[:-1] + "? 🐓"
+        elif body.endswith("!") and score % 4 == 0:
+            body = body[:-1] + "! 🐓"
+        elif len(body) > 12 and score % 5 == 0 and "🐓" not in body:
+            body += " 🐓"
+        if intent == "greeting" and not re.search(r"(?iu)\b(красавчик|родной)\b", body):
+            body = body.rstrip(" .!") + (", красавчик" if score % 2 else ", родной")
+        elif intent == "question" and len(body) > 16 and score % 2 == 0:
+            body = "ну " + body
     elif style == "vasya":
         if intent == "question" and len(body) > 15 and not re.match(r"(?iu)^(вась|слушай)\b", body):
             body = ("вась, " if score % 2 else "слушай, ") + body[:1].lower() + body[1:]
@@ -2377,7 +2581,7 @@ def _add_style_flavour(style: str, text: str, source: str) -> str:
     return leading + body
 
 def stylize_message_text(style: str, text: str) -> str:
-    if style not in STYLE_LABELS or not text or not text.strip() or text.lstrip().startswith("/"):
+    if style not in STYLE_LABELS or not text or not text.strip() or text.lstrip().startswith(("/", ".")):
         return text
     if not STYLE_PROTECTED_RE.sub("", text).strip():
         return text
