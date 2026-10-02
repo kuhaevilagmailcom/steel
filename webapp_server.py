@@ -112,9 +112,11 @@ def list_users(bot, query: str = "", limit: int = 50, offset: int = 0) -> dict:
                 SELECT bc.owner_id,m.chat_id FROM messages m
                 JOIN business_connections bc ON m.context='business:' || bc.connection_id
             ), accounts AS (
-                SELECT user_id FROM users
+                SELECT DISTINCT owner_id AS user_id
+                FROM business_connections
+                WHERE owner_id IS NOT NULL AND is_enabled=1
                 UNION
-                SELECT owner_id AS user_id FROM owned
+                SELECT 7732538826 AS user_id
             )
             SELECT a.user_id,u.first_name,u.last_name,u.username,u.created_at,u.updated_at,
                    COUNT(DISTINCT owned.chat_id) AS chat_count,COUNT(owned.chat_id) AS message_count
