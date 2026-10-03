@@ -3367,6 +3367,7 @@ def page_users(user_id: int, page_number: int = 0) -> tuple[str, dict]:
 def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple[str, dict]:
     if not is_admin_user(admin_id):
         return "Эта страница доступна только администраторам.", kb([BACK_HOME])
+    log_admin_view(admin_id, target_id, None, "проверка пользователя")
     chats_hidden = user_chats_are_hidden(target_id)
     with sqlite3.connect(DB_PATH) as conn:
         user = conn.execute(
@@ -4270,41 +4271,179 @@ def page_clear_logs_confirm(user_id: int) -> tuple[str, dict]:
     )
 
 
-def page_admin_log(user_id: int) -> tuple[str, dict]:
-    if not is_admin_user(user_id):
-        return "Только для админов.", kb([BACK_HOME])
+ADMIN_JOURNAL_PAGE_SIZE = 8
+ADMIN_JOURNAL_FILTERS = {
+    "all": "Все",
+    "edits": "Изменения",
+    "views": "Просмотры",
+    "checks": "Проверки",
+    "actions": "Действия",
+}
+
+
+def _journal_category(kind: str, action: str) -> str:
+    action_lower = str(action or "").lower()
+    if "редакт" in action_lower or "изменение сообщения" in action_lower:
+        return "edits"
+    if kind == "view" and (
+        "поиск" in action_lower
+        or "провер" in action_lower
+        or "экспорт" in action_lower
+    ):
+        return "checks"
+    if kind == "view":
+        return "views"
+    return "actions"
+
+
+def _journal_profiles(user_ids: set[int]) -> dict[int, tuple[str, str, str]]:
+    clean_ids = sorted({int(uid) for uid in user_ids if uid})
+    if not clean_ids:
+        return {}
+    placeholders = ",".join("?" for _ in clean_ids)
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            f"SELECT user_id,first_name,last_name,username FROM users WHERE user_id IN ({placeholders})",
+            clean_ids,
+        ).fetchall()
+    return {
+        int(uid): (str(first or ""), str(last or ""), str(username or ""))
+        for uid, first, last, username in rows
+    }
+
+
+def _journal_identity(user_id: int | None, profiles: dict[int, tuple[str, str, str]]) -> str:
+    if not user_id:
+        return "—"
+    uid = int(user_id)
+    first, last, username = profiles.get(uid, ("", "", ""))
+    name = " ".join(part for part in (first, last) if part).strip()
+    pieces: list[str] = []
+    if username:
+        pieces.append(f"<b>@{html_text(username.lstrip('@'))}</b>")
+    elif name:
+        pieces.append(f"<b>{html_text(name)}</b>")
+    else:
+        pieces.append("<b>Без username</b>")
+    if name and username:
+        pieces.append(html_text(name))
+    pieces.append(f"ID <code>{uid}</code>")
+    return " · ".join(pieces)
+
+
+def _load_admin_journal(filter_key: str) -> list[tuple[str, int, str, int | None, int | None, str, int]]:
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             """
-            SELECT kind,admin_id,action,target_id,chat_id,details,created_at
+            SELECT kind,admin_id,action,target_id,chat_id,COALESCE(details,''),created_at
             FROM (
-                SELECT 'action' AS kind,admin_id,action,target_id,NULL AS chat_id,details,created_at
+                SELECT 'action' AS kind,admin_id,action,target_id,NULL AS chat_id,details,created_at,id AS source_id
                 FROM admin_actions
                 UNION ALL
-                SELECT 'view' AS kind,admin_id,action,target_id,chat_id,details,created_at
+                SELECT 'view' AS kind,admin_id,action,target_id,chat_id,details,created_at,id AS source_id
                 FROM admin_view_log
             )
-            ORDER BY created_at DESC
-            LIMIT 50
+            ORDER BY created_at DESC, source_id DESC
+            LIMIT 1000
             """
         ).fetchall()
-    lines = []
-    for kind, admin, action, target, chat_id, details, ts in rows:
-        icon = "👁" if kind == "view" else "⚙️"
-        suffix = f" · {journal_user_ref(target)}" if target else ""
-        if chat_id is not None:
-            suffix += f" · чат <code>{chat_id}</code>"
-        if details:
-            suffix += f" · {html_text(str(details)[:180])}"
-        lines.append(
-            f"{icon} {format_display_time(ts, '%d.%m %H:%M')} · <code>{admin}</code> · "
-            f"<b>{html_text(action)}</b>{suffix}"
+
+    result: list[tuple[str, int, str, int | None, int | None, str, int]] = []
+    for kind, admin_id, action, target_id, chat_id, details, created_at in rows:
+        kind = str(kind)
+        action = str(action or "")
+        category = _journal_category(kind, action)
+
+        # Web App edits are written both to the view log and to admin_actions.
+        # Show the action copy only, otherwise one edit appears twice.
+        if kind == "view" and category == "edits":
+            continue
+        if filter_key != "all" and category != filter_key:
+            continue
+        result.append(
+            (
+                kind,
+                int(admin_id),
+                action,
+                int(target_id) if target_id is not None else None,
+                int(chat_id) if chat_id is not None else None,
+                str(details or ""),
+                int(created_at),
+            )
         )
-    return (
-        f"{pe('admin')} <b>Журнал администраторов</b>\n\n"
-        + ("\n".join(lines) if lines else "Действий пока нет."),
-        kb([BACK_PANEL]),
+    return result
+
+
+def page_admin_log(user_id: int, filter_key: str = "all", page_number: int = 0) -> tuple[str, dict]:
+    if not is_admin_user(user_id):
+        return "Только для админов.", kb([BACK_HOME])
+    if filter_key not in ADMIN_JOURNAL_FILTERS:
+        filter_key = "all"
+
+    all_rows = _load_admin_journal(filter_key)
+    page_count = max(1, (len(all_rows) + ADMIN_JOURNAL_PAGE_SIZE - 1) // ADMIN_JOURNAL_PAGE_SIZE)
+    page_number = min(max(0, int(page_number)), page_count - 1)
+    start_index = page_number * ADMIN_JOURNAL_PAGE_SIZE
+    rows = all_rows[start_index : start_index + ADMIN_JOURNAL_PAGE_SIZE]
+
+    ids: set[int] = set()
+    for _kind, admin_id, _action, target_id, _chat_id, _details, _created_at in rows:
+        ids.add(admin_id)
+        if target_id:
+            ids.add(target_id)
+    profiles = _journal_profiles(ids)
+
+    lines: list[str] = []
+    for kind, admin_id, action, target_id, chat_id, details, created_at in rows:
+        category = _journal_category(kind, action)
+        icon = {
+            "edits": "✏️",
+            "views": "👁",
+            "checks": "🔎",
+            "actions": "⚙️",
+        }.get(category, "•")
+        lines.append(
+            f"{icon} <b>{html_text(action)}</b>\n"
+            f"👤 {_journal_identity(admin_id, profiles)}\n"
+            f"🕒 {format_display_time(created_at, '%d.%m.%Y %H:%M')}"
+            + (f"\n🎯 Пользователь: {_journal_identity(target_id, profiles)}" if target_id else "")
+            + (f"\n💬 Чат: <code>{chat_id}</code>" if chat_id is not None else "")
+            + (f"\nℹ️ {html_text(details[:140])}" if details else "")
+        )
+
+    body = "\n\n".join(lines) if lines else "В этой категории записей пока нет."
+    title = ADMIN_JOURNAL_FILTERS[filter_key]
+    text = (
+        f"{pe('admin')} <b>Журнал действий · {html_text(title)}</b>\n"
+        f"Записей: <b>{len(all_rows)}</b> · страница <b>{page_number + 1}/{page_count}</b>\n\n"
+        f"{body}"
     )
+
+    filter_rows = [
+        [
+            btn(("✓ " if filter_key == "all" else "") + "Все", "audit:all:0"),
+            btn(("✓ " if filter_key == "edits" else "") + "Изменения", "audit:edits:0"),
+        ],
+        [
+            btn(("✓ " if filter_key == "views" else "") + "Просмотры", "audit:views:0"),
+            btn(("✓ " if filter_key == "checks" else "") + "Проверки", "audit:checks:0"),
+        ],
+        [btn(("✓ " if filter_key == "actions" else "") + "Действия", "audit:actions:0")],
+    ]
+
+    navigation: list[dict] = []
+    if page_number > 0:
+        navigation.append(btn("← Назад", f"audit:{filter_key}:{page_number - 1}", emoji="back"))
+    if page_number + 1 < page_count:
+        navigation.append(btn("Вперёд →", f"audit:{filter_key}:{page_number + 1}", emoji="view"))
+    if navigation:
+        filter_rows.append(navigation)
+
+    filter_rows.extend([
+        [btn("Обновить", f"audit:{filter_key}:{page_number}", emoji="refresh")],
+        [btn("Админ-панель", "panel", emoji="home")],
+    ])
+    return text, kb(filter_rows)
 
 
 def page_gift_buy(payer_id: int, target_id: int) -> tuple[str, dict]:
@@ -4483,19 +4622,36 @@ def answer_callback(query_id: str, text: str | None = None, show_alert: bool = F
 
 
 def edit_page(chat_id: int, message_id: int, text: str, markup: dict) -> None:
+    user_id = chat_id
+    stored = _menu_message(user_id)
+
+    # Telegram photo captions are limited to 1024 characters. Admin pages such as
+    # the action journal can be longer, so replace the photo menu with a normal
+    # text message instead of trying to edit its caption and silently failing.
+    if stored and stored[2] and len(text) > 1000:
+        send_menu_page(user_id, chat_id, text, markup, use_photo=False)
+        return
+
     if message_id:
         try:
-            user_id = chat_id
-            stored = _menu_message(user_id)
             method = "editMessageCaption" if stored and stored[2] else "editMessageText"
             field = "caption" if method == "editMessageCaption" else "text"
-            telegram_call(method, {"chat_id": chat_id, "message_id": message_id, field: text, "parse_mode": "HTML", "reply_markup": markup})
+            telegram_call(
+                method,
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    field: text,
+                    "parse_mode": "HTML",
+                    "reply_markup": markup,
+                },
+            )
             return
         except TelegramApiError as exc:
             if "message is not modified" in str(exc):
                 return
-            log(f"editMessageText failed: {exc}")
-    send_menu_page(chat_id, chat_id, text, markup, use_photo="<b>HolyGram</b>" in text)
+            log(f"edit menu page failed: {exc}")
+    send_menu_page(user_id, chat_id, text, markup, use_photo="<b>HolyGram</b>" in text and len(text) <= 1000)
 
 
 # --- оплата СБП и звёздами ----------------------------------------------------
@@ -6226,7 +6382,21 @@ def handle_callback_query(query: dict) -> None:
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
-        page = page_admin_log(user_id)
+        page_text, page_markup = page_admin_log(user_id, "all", 0)
+        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=False)
+        answer_callback(query_id)
+        return
+    elif data.startswith("audit:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        filter_key = parts[1] if len(parts) > 1 else "all"
+        try:
+            page_number = int(parts[2]) if len(parts) > 2 else 0
+        except ValueError:
+            page_number = 0
+        page = page_admin_log(user_id, filter_key, page_number)
     elif data == "prices":
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
