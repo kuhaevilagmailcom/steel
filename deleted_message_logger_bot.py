@@ -4285,6 +4285,8 @@ def _journal_category(kind: str, action: str) -> str:
     action_lower = str(action or "").lower()
     if "редакт" in action_lower or "изменение сообщения" in action_lower:
         return "edits"
+    if "открыл просмотр чатов" in action_lower:
+        return "views"
     if kind == "view" and (
         "поиск" in action_lower
         or "провер" in action_lower
