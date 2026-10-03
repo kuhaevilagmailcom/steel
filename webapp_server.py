@@ -771,6 +771,7 @@ def make_handler(bot):
                 admin_id = _int(user.get("id"))
                 if path == "/api/bootstrap":
                     cookie = "" if (os.getenv("WEBAPP_DEV_MODE", "0") == "1" and self.client_address[0] in {"127.0.0.1", "::1"}) else self._session_cookie(admin_id, int(time.time()) + 86400)
+                    bot.audit_admin(admin_id, "открыл просмотр чатов", None, "Mini App")
                     self._send_json(HTTPStatus.OK, {"ok": True, "owner": {"id": admin_id, "name": str(user.get("first_name") or "Владелец"), "username": str(user.get("username") or "")}, "timezone": "Europe/Moscow"}, cookie)
                 elif path == "/api/users":
                     self._send_json(
