@@ -2083,8 +2083,8 @@ def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict
         issue = ""
 
     text = (
-        "🔒 <b>Для поиска музыки подпишитесь на каналы</b>\n\n"
-        "Поиск музыки бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
+        "🔒 <b>Для использования HolyGram подпишитесь на каналы</b>\n\n"
+        "HolyGram бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
         "• <b>АНОН МГН</b> — @anonmgn\n"
         "• <b>MGN VPN</b> — @mgnvpnn\n\n"
         "После подписки нажмите <b>«Проверить подписку»</b>."
@@ -3705,7 +3705,7 @@ def process_media_quick_action(user_id: int, chat_id: int, action: str, token: s
             output = work / "HolyGram_compressed.mp4"
             ok, error = _run_ffmpeg([
                 "-i", str(source),
-                "-vf", "scale='min(1280,iw)':-2",
+                "-vf", "scale='trunc(min(1280,iw)/2)*2':-2",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "29",
                 "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output),
             ])
@@ -6752,14 +6752,17 @@ def handle_callback_query(query: dict) -> None:
         if not _quick_get(user_id, token):
             answer_callback(query_id, text="Действие устарело", show_alert=True)
             return
-        page = (
+        send_message(
+            chat_id,
             "🎚 <b>Скорость голосового</b>\n\nВыбери скорость:",
-            kb([
+            parse_mode="HTML",
+            reply_markup=kb([
                 [btn("0.75×", f"qa:v:speed075:{token}"), btn("1.25×", f"qa:v:speed125:{token}")],
                 [btn("1.5×", f"qa:v:speed15:{token}"), btn("2×", f"qa:v:speed20:{token}")],
-                [btn("Назад", "hub:tools", emoji="back")],
             ]),
         )
+        answer_callback(query_id)
+        return
     elif data.startswith("qa:v:") or data.startswith("qa:c:") or data.startswith("qa:vid:"):
         parts = data.split(":")
         if len(parts) < 4:
