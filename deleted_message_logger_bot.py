@@ -3825,24 +3825,94 @@ def page_hub_music(user_id: int) -> tuple[str, dict]:
 
 def page_hub_tools(user_id: int) -> tuple[str, dict]:
     text = (
-        "🧰 <b>Инструменты</b>\n\n"
-        "Полезные функции HolyGram для сообщений и Telegram Business.\n\n"
-        "Можно подключить чаты, настроить автоматические команды и управлять тем, "
-        "как HolyGram работает с твоими сообщениями."
+        "🧰 <b>Инструменты HolyGram</b>\n\n"
+        "Отправляй контент прямо боту — HolyGram сам определит тип и покажет быстрые действия.\n\n"
+        "Выбери раздел:"
     )
     rows = [
         [
-            btn("💬 Подключённые чаты", "conns", emoji="view"),
-            btn("⚡ Мои команды", "commands", emoji="history"),
+            btn("🎙 Голосовые", "tools:voice"),
+            btn("⭕ Кружки", "tools:circles"),
         ],
         [
-            btn("🔁 Автозамена", "autoreplace", emoji="refresh"),
-            btn("🎭 Стили общения", "style", emoji="profile"),
+            btn("📝 Текст", "tools:text"),
+            btn("🔗 Ссылки", "tools:links"),
         ],
-        [btn("Как подключить", "help", emoji="support")],
+        [btn("🔥 Быстрые действия", "tools:quick", style="primary")],
+        [btn("💬 Telegram Business", "hub:settings", emoji="view")],
         [btn("Назад", "home", emoji="back")],
     ]
     return text, kb(rows)
+
+
+def page_tools_voice() -> tuple[str, dict]:
+    return (
+        "🎙 <b>Голосовые</b>\n\n"
+        "Просто отправь голосовое сообщение. HolyGram сразу предложит:\n"
+        "• расшифровку в текст;\n"
+        "• краткое содержание;\n"
+        "• перевод;\n"
+        "• скорость 0.75× / 1.25× / 1.5× / 2×;\n"
+        "• нормализацию громкости;\n"
+        "• MP3 и скачивание файла.",
+        kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]]),
+    )
+
+
+def page_tools_circles() -> tuple[str, dict]:
+    return (
+        "⭕ <b>Кружки и видео</b>\n\n"
+        "Отправь кружок — можно скачать его обычным видео или вытащить звук.\n\n"
+        "Отправь обычное видео — можно:\n"
+        "• вытащить звук;\n"
+        "• сжать видео;\n"
+        "• превратить в квадратный видеокружок;\n"
+        "• скачать исходный файл.",
+        kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]]),
+    )
+
+
+def page_tools_text() -> tuple[str, dict]:
+    text = (
+        "📝 <b>Текстовые инструменты</b>\n\n"
+        "Выбери действие, затем отправь текст."
+    )
+    rows = [
+        [btn("✅ Исправить", "txt:fix"), btn("✂️ Сократить", "txt:short")],
+        [btn("👔 Официальнее", "txt:official"), btn("💡 Проще", "txt:simple")],
+        [btn("😄 Смешнее", "txt:funny"), btn("🌐 Перевести", "txt:translate")],
+        [btn("🔤 Транслит", "txt:translit"), btn("AA ВЕРХНИЙ", "txt:upper")],
+        [btn("aa нижний", "txt:lower"), btn("Aa Заголовок", "txt:title")],
+        [btn("Назад в инструменты", "hub:tools", emoji="back")],
+    ]
+    return text, kb(rows)
+
+
+def page_tools_links() -> tuple[str, dict]:
+    text = (
+        "🔗 <b>Инструменты для ссылок</b>\n\n"
+        "Выбери действие и отправь ссылку. Если просто скинуть ссылку в HolyGram, "
+        "быстрые кнопки появятся автоматически."
+    )
+    rows = [
+        [btn("▦ QR-код", "link:prompt:qr"), btn("🔗 Сократить", "link:prompt:short")],
+        [btn("🛡 Проверить переход", "link:prompt:check"), btn("✨ Оформить", "link:prompt:pretty")],
+        [btn("Назад в инструменты", "hub:tools", emoji="back")],
+    ]
+    return text, kb(rows)
+
+
+def page_tools_quick() -> tuple[str, dict]:
+    return (
+        "🔥 <b>Быстрые действия</b>\n\n"
+        "Ничего включать не нужно — они работают автоматически.\n\n"
+        "🎙 Голосовое → В текст / Кратко / Перевести / Скорость / MP3\n"
+        "⭕ Кружок → Видео / Звук / Скачать\n"
+        "🎬 Видео → Звук / Сжать / В кружок / Скачать\n"
+        "🔗 Ссылка → QR / Сократить / Проверить / Оформить",
+        kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]]),
+    )
+
 
 
 def page_hub_mine(user_id: int) -> tuple[str, dict]:
