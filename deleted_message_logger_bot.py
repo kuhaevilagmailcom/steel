@@ -2902,6 +2902,195 @@ def check_trial(referrer_id: int) -> None:
     return
 
 
+# --- поиск музыки -------------------------------------------------------------
+
+MUSIC_SEARCH_CACHE_TTL_SEC = 300
+MUSIC_SEARCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
+MUSIC_RESULT_CACHE: dict[str, tuple[float, int, str, list[dict]]] = {}
+
+
+def _music_cache_cleanup() -> None:
+    now = time.time()
+    for key, value in list(MUSIC_SEARCH_CACHE.items()):
+        if value[0] < now:
+            MUSIC_SEARCH_CACHE.pop(key, None)
+    for key, value in list(MUSIC_RESULT_CACHE.items()):
+        if value[0] < now:
+            MUSIC_RESULT_CACHE.pop(key, None)
+
+
+def search_music_tracks(query: str, limit: int = 6) -> list[dict]:
+    query = re.sub(r"\s+", " ", str(query or "").strip())[:120]
+    if len(query) < 2:
+        return []
+
+    _music_cache_cleanup()
+    cache_key = query.casefold()
+    cached = MUSIC_SEARCH_CACHE.get(cache_key)
+    if cached and cached[0] >= time.time():
+        return [dict(item) for item in cached[1]]
+
+    params = (
+        "term=" + quote(query, safe="")
+        + "&country=US&media=music&entity=song"
+        + f"&limit={max(1, min(int(limit), 10))}&explicit=No"
+    )
+    request = Request(
+        "https://itunes.apple.com/search?" + params,
+        headers={"User-Agent": "HolyGram-MusicSearch/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        log(f"Music search failed for {query!r}: {type(exc).__name__}: {exc}")
+        return []
+
+    rows = payload.get("results") if isinstance(payload, dict) else []
+    results: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        track = str(row.get("trackName") or "").strip()
+        artist = str(row.get("artistName") or "").strip()
+        if not track or not artist:
+            continue
+        results.append(
+            {
+                "track": track,
+                "artist": artist,
+                "album": str(row.get("collectionName") or "").strip(),
+                "url": str(row.get("trackViewUrl") or "").strip(),
+                "artwork": str(row.get("artworkUrl100") or "").strip(),
+                "duration_ms": int(row.get("trackTimeMillis") or 0),
+                "genre": str(row.get("primaryGenreName") or "").strip(),
+                "release_date": str(row.get("releaseDate") or "").strip(),
+            }
+        )
+        if len(results) >= limit:
+            break
+
+    MUSIC_SEARCH_CACHE[cache_key] = (time.time() + MUSIC_SEARCH_CACHE_TTL_SEC, results)
+    return [dict(item) for item in results]
+
+
+def _music_duration(ms: int) -> str:
+    seconds = max(0, int(ms or 0) // 1000)
+    return f"{seconds // 60}:{seconds % 60:02d}" if seconds else "—"
+
+
+def _music_token(user_id: int, query: str, results: list[dict]) -> str:
+    token = uuid.uuid4().hex[:10]
+    MUSIC_RESULT_CACHE[token] = (
+        time.time() + MUSIC_SEARCH_CACHE_TTL_SEC,
+        int(user_id),
+        query,
+        [dict(item) for item in results],
+    )
+    return token
+
+
+def _music_cached(user_id: int, token: str) -> tuple[str, list[dict]] | None:
+    _music_cache_cleanup()
+    cached = MUSIC_RESULT_CACHE.get(token)
+    if not cached or int(cached[1]) != int(user_id):
+        return None
+    return str(cached[2]), [dict(item) for item in cached[3]]
+
+
+def page_music_results(user_id: int, query: str, results: list[dict], token: str | None = None) -> tuple[str, dict]:
+    token = token or _music_token(user_id, query, results)
+    if not results:
+        return (
+            "🎵 <b>Ничего не нашёл</b>\n\n"
+            f"Запрос: <code>{html_text(query)}</code>\n\n"
+            "Попробуй написать название немного иначе или добавь исполнителя.",
+            kb([
+                [btn("Новый поиск", "music:prompt", emoji="refresh", style="primary")],
+                [btn("Главное меню", "home", emoji="home")],
+            ]),
+        )
+
+    lines = []
+    rows: list[list[dict]] = []
+    for index, item in enumerate(results, start=1):
+        title = f"{item['artist']} — {item['track']}"
+        lines.append(
+            f"<b>{index}.</b> {html_text(title)}"
+            + (f"\n   {html_text(item['album'])}" if item.get("album") else "")
+        )
+        button_label = title if len(title) <= 42 else title[:39] + "…"
+        rows.append([btn(f"{index}. {button_label}", f"music:track:{token}:{index - 1}", emoji="view")])
+
+    rows.extend([
+        [btn("Новый поиск", "music:prompt", emoji="refresh", style="primary")],
+        [btn("Главное меню", "home", emoji="home")],
+    ])
+    return (
+        "🎵 <b>Результаты поиска</b>\n"
+        f"Запрос: <code>{html_text(query)}</code>\n\n"
+        + "\n\n".join(lines)
+        + "\n\nНажми на трек, чтобы открыть его на музыкальных сервисах.",
+        kb(rows),
+    )
+
+
+def page_music_track(user_id: int, token: str, index: int) -> tuple[str, dict]:
+    cached = _music_cached(user_id, token)
+    if not cached:
+        return (
+            "Поиск устарел. Выполни новый поиск.",
+            kb([[btn("Новый поиск", "music:prompt", emoji="refresh", style="primary")], [btn("Главное меню", "home", emoji="home")]]),
+        )
+    query, results = cached
+    if index < 0 or index >= len(results):
+        return page_music_results(user_id, query, results, token)
+
+    item = results[index]
+    search_term = quote(f"{item['artist']} {item['track']}", safe="")
+    spotify_term = quote(f"{item['artist']} {item['track']}", safe="")
+    rows: list[list[dict]] = []
+    service_row: list[dict] = []
+    if item.get("url"):
+        service_row.append(btn("Apple Music", url=str(item["url"]), emoji="view"))
+    service_row.append(btn("YouTube Music", url=f"https://music.youtube.com/search?q={search_term}", emoji="view"))
+    if service_row:
+        rows.append(service_row)
+    rows.append([btn("Spotify", url=f"https://open.spotify.com/search/{spotify_term}", emoji="view")])
+    rows.extend([
+        [btn("К результатам", f"music:results:{token}", emoji="back")],
+        [btn("Новый поиск", "music:prompt", emoji="refresh")],
+    ])
+
+    release_year = str(item.get("release_date") or "")[:4]
+    details = [
+        f"🎵 <b>{html_text(item['track'])}</b>",
+        f"👤 {html_text(item['artist'])}",
+    ]
+    if item.get("album"):
+        details.append(f"💿 {html_text(item['album'])}")
+    if item.get("genre"):
+        details.append(f"🎚 {html_text(item['genre'])}")
+    if item.get("duration_ms"):
+        details.append(f"⏱ {_music_duration(int(item['duration_ms']))}")
+    if release_year:
+        details.append(f"📅 {html_text(release_year)}")
+    details.append("\nВыбери сервис, где открыть трек.")
+    return "\n".join(details), kb(rows)
+
+
+def send_music_search_results(user_id: int, chat_id: int, query: str) -> None:
+    query = re.sub(r"\s+", " ", str(query or "").strip())[:120]
+    if len(query) < 2:
+        send_message(chat_id, "Напиши название песни или исполнителя.")
+        return
+    send_message(chat_id, f"🔎 Ищу: <b>{html_text(query)}</b>", parse_mode="HTML")
+    results = search_music_tracks(query)
+    token = _music_token(user_id, query, results)
+    text, markup = page_music_results(user_id, query, results, token)
+    send_menu_page(user_id, chat_id, text, markup, use_photo=False)
+
+
 # --- страницы меню ------------------------------------------------------------
 
 def bottom_navigation() -> list[list[dict]]:
@@ -2909,35 +3098,39 @@ def bottom_navigation() -> list[list[dict]]:
     return [[btn("Назад", "home", emoji="back")]]
 
 def page_home(user_id: int) -> tuple[str, dict]:
-    connections = list_business_connections(user_id)
-    regular_chats = get_user_chats(user_id)
-    enabled_count = sum(1 for row in connections if row.get("is_enabled")) + len(regular_chats)
-
     rows = [
-        [btn("Функции бота", "functions", emoji="view", style="primary")],
+        [btn("🔎 Найти музыку", "music:prompt", style="primary")],
         [
-            btn("Реферальная система", "ref", emoji="invite"),
+            btn("Как пользоваться", "music:help", emoji="support"),
             btn("Поддержка", "support", emoji="support"),
         ],
-        [btn("Как подключить", "help", emoji="add")],
     ]
     if is_admin_user(user_id):
         rows.append([btn("Админ-панель", "panel", emoji="admin", style="success")])
 
-    status = (
-        f"{pe('check')} Подключено чатов: <b>{enabled_count}</b>"
-        if enabled_count
-        else f"{pe('warning')} Чаты пока не подключены"
-    )
     text = (
-        f"{pe('home')} <b>HolyGram</b>\n\n"
-        "Удалённые, изменённые и одноразовые сообщения — в одном месте.\n\n"
-        f"{status}\n"
-        f"{pe('check')} <b>Бесплатно для всех</b>\n"
-        f"{pe('check')} <b>Telegram Premium для подключения не нужен</b>\n\n"
-        "Основное меню стало компактнее — всё дополнительное находится в «Функции бота»."
+        "🎵 <b>Поиск музыки</b>\n\n"
+        "Напиши мне <b>название песни</b> или <b>исполнителя</b> — "
+        "я найду подходящие треки и дам ссылки на музыкальные сервисы.\n\n"
+        "Можно просто отправить запрос сообщением, например:\n"
+        "<code>Imagine Dragons Believer</code>"
     )
     return text, kb(rows)
+
+
+def page_music_help(user_id: int) -> tuple[str, dict]:
+    text = (
+        "🎧 <b>Как искать музыку</b>\n\n"
+        "1. Отправь название трека или исполнителя.\n"
+        "2. Выбери нужный трек из результатов.\n"
+        "3. Открой его в Apple Music, YouTube Music или Spotify.\n\n"
+        "Чем точнее запрос, тем точнее результат."
+    )
+    return text, kb([
+        [btn("🔎 Найти музыку", "music:prompt", style="primary")],
+        [btn("Назад", "home", emoji="back")],
+    ])
+
 
 def page_buy(user_id: int) -> tuple[str, dict]:
     text = (
