@@ -9,7 +9,10 @@ import json
 import mimetypes
 import os
 import re
+import shutil
+import socket
 import sqlite3
+import subprocess
 import sys
 import time
 import uuid
@@ -18,9 +21,10 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
+import ipaddress
 
 from dotenv import load_dotenv
 
@@ -1985,6 +1989,12 @@ PENDING_HIDE_CHAT_USER: dict[int, float] = {}
 # chat_id -> (stage, item_id, temporary_value, deadline)
 PENDING_AUTOREPLACE: dict[int, tuple[str, int | None, str | None, float]] = {}
 PENDING_CUSTOM_COMMAND: dict[int, tuple[str, int | None, str | None, float]] = {}
+# chat_id -> (mode, deadline)
+PENDING_TEXT_TOOL: dict[int, tuple[str, float]] = {}
+PENDING_LINK_TOOL: dict[int, tuple[str, float]] = {}
+# token -> (expires_at, owner_user_id, payload)
+QUICK_ACTION_CACHE: dict[str, tuple[float, int, dict]] = {}
+QUICK_ACTION_TTL_SEC = 15 * 60
 LAST_MAINTENANCE_TS = 0.0
 POLLING_ERROR_COUNT = 0
 
