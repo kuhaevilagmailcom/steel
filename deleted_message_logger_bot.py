@@ -22,7 +22,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from zoneinfo import ZoneInfo
 import ipaddress
 
@@ -3542,15 +3542,45 @@ def shorten_url(url: str) -> tuple[bool, str]:
     return False, "Не удалось сократить ссылку."
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def resolve_url(url: str) -> tuple[bool, str]:
-    ok, value = safe_public_url(url)
-    if not ok:
-        return False, value
+    current = str(url or "").strip()
+    opener = build_opener(_NoRedirectHandler())
     try:
-        request = Request(value, headers={"User-Agent": "HolyGram/1.0"})
-        with urlopen(request, timeout=15) as response:
-            final = str(response.geturl() or value)
-        return True, final
+        for _ in range(6):
+            ok, checked = safe_public_url(current)
+            if not ok:
+                return False, checked
+            request = Request(checked, headers={"User-Agent": "HolyGram/1.0"}, method="HEAD")
+            try:
+                response = opener.open(request, timeout=12)
+                final = str(response.geturl() or checked)
+                response.close()
+                final_ok, final_checked = safe_public_url(final)
+                return (True, final_checked) if final_ok else (False, final_checked)
+            except HTTPError as exc:
+                if exc.code in {301, 302, 303, 307, 308}:
+                    location = str(exc.headers.get("Location") or "").strip()
+                    if not location:
+                        return False, "Редирект без адреса назначения."
+                    if location.startswith("/"):
+                        parsed = urlparse(checked)
+                        location = f"{parsed.scheme}://{parsed.netloc}{location}"
+                    current = location
+                    continue
+                if exc.code in {405, 501}:
+                    request = Request(checked, headers={"User-Agent": "HolyGram/1.0"})
+                    response = opener.open(request, timeout=12)
+                    final = str(response.geturl() or checked)
+                    response.close()
+                    final_ok, final_checked = safe_public_url(final)
+                    return (True, final_checked) if final_ok else (False, final_checked)
+                raise
+        return False, "Слишком много перенаправлений."
     except Exception as exc:
         log(f"URL resolve failed: {type(exc).__name__}: {exc}")
         return False, "Не удалось открыть ссылку для проверки."
