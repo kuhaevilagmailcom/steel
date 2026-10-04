@@ -6718,6 +6718,96 @@ def handle_callback_query(query: dict) -> None:
         page = page_hub_music(user_id)
     elif data == "hub:tools":
         page = page_hub_tools(user_id)
+    elif data == "tools:voice":
+        page = page_tools_voice()
+    elif data == "tools:circles":
+        page = page_tools_circles()
+    elif data == "tools:text":
+        page = page_tools_text()
+    elif data == "tools:links":
+        page = page_tools_links()
+    elif data == "tools:quick":
+        page = page_tools_quick()
+    elif data.startswith("txt:"):
+        mode = data.split(":", 1)[1]
+        allowed = {"fix","short","official","simple","funny","translate","translit","upper","lower","title"}
+        if mode not in allowed:
+            answer_callback(query_id, text="Неизвестный инструмент", show_alert=True)
+            return
+        PENDING_TEXT_TOOL[chat_id] = (mode, time.time() + 600)
+        send_message(chat_id, "📝 Отправь текст одним сообщением. Отмена — /cancel")
+        answer_callback(query_id, text="Жду текст")
+        return
+    elif data.startswith("link:prompt:"):
+        mode = data.rsplit(":", 1)[1]
+        if mode not in {"qr","short","check","pretty"}:
+            answer_callback(query_id, text="Неизвестный инструмент", show_alert=True)
+            return
+        PENDING_LINK_TOOL[chat_id] = (mode, time.time() + 600)
+        send_message(chat_id, "🔗 Отправь ссылку одним сообщением. Отмена — /cancel")
+        answer_callback(query_id, text="Жду ссылку")
+        return
+    elif data.startswith("qa:v:speeds:"):
+        token = data.rsplit(":", 1)[1]
+        if not _quick_get(user_id, token):
+            answer_callback(query_id, text="Действие устарело", show_alert=True)
+            return
+        page = (
+            "🎚 <b>Скорость голосового</b>\n\nВыбери скорость:",
+            kb([
+                [btn("0.75×", f"qa:v:speed075:{token}"), btn("1.25×", f"qa:v:speed125:{token}")],
+                [btn("1.5×", f"qa:v:speed15:{token}"), btn("2×", f"qa:v:speed20:{token}")],
+                [btn("Назад", "hub:tools", emoji="back")],
+            ]),
+        )
+    elif data.startswith("qa:v:") or data.startswith("qa:c:") or data.startswith("qa:vid:"):
+        parts = data.split(":")
+        if len(parts) < 4:
+            answer_callback(query_id, text="Действие устарело", show_alert=True)
+            return
+        group, action_code, token = parts[1], parts[2], parts[3]
+        action_map = {
+            ("v","text"): ("voice_text",""),
+            ("v","sum"): ("voice_summary",""),
+            ("v","tr"): ("voice_translate",""),
+            ("v","norm"): ("voice_norm",""),
+            ("v","mp3"): ("voice_mp3",""),
+            ("v","download"): ("voice_download",""),
+            ("v","speed075"): ("voice_speed","0.75"),
+            ("v","speed125"): ("voice_speed","1.25"),
+            ("v","speed15"): ("voice_speed","1.5"),
+            ("v","speed20"): ("voice_speed","2.0"),
+            ("c","video"): ("circle_video",""),
+            ("c","audio"): ("circle_audio",""),
+            ("c","download"): ("circle_download",""),
+            ("vid","audio"): ("video_audio",""),
+            ("vid","compress"): ("video_compress",""),
+            ("vid","circle"): ("video_circle",""),
+            ("vid","download"): ("video_download",""),
+        }
+        mapped = action_map.get((group, action_code))
+        if not mapped:
+            answer_callback(query_id, text="Неизвестное действие", show_alert=True)
+            return
+        answer_callback(query_id, text="Обрабатываю…")
+        ok, result_text = process_media_quick_action(user_id, chat_id, mapped[0], token, mapped[1])
+        if not ok:
+            send_message(chat_id, "⚠️ " + result_text)
+        return
+    elif data.startswith("qa:l:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            answer_callback(query_id, text="Действие устарело", show_alert=True)
+            return
+        action, token = parts[2], parts[3]
+        if action not in {"qr","short","check","pretty"}:
+            answer_callback(query_id, text="Неизвестное действие", show_alert=True)
+            return
+        answer_callback(query_id, text="Готовлю…")
+        ok, result_text = process_link_quick_action(user_id, chat_id, action, token)
+        if not ok:
+            send_message(chat_id, "⚠️ " + result_text)
+        return
     elif data == "hub:mine":
         page = page_hub_mine(user_id)
     elif data == "mine:music":
