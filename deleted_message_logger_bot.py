@@ -3257,7 +3257,7 @@ def page_hub_music(user_id: int) -> tuple[str, dict]:
     rows = [
         [btn("🔎 Найти музыку", "music:prompt", style="primary")],
         [btn("Как искать", "music:help", emoji="support")],
-        [btn("Назад в музыку", "hub:music", emoji="back")],
+        [btn("Назад", "home", emoji="back")],
     ]
     return text, kb(rows)
 
@@ -3380,7 +3380,7 @@ def page_music_help(user_id: int) -> tuple[str, dict]:
     )
     return text, kb([
         [btn("🔎 Найти музыку", "music:prompt", style="primary")],
-        [btn("Назад", "home", emoji="back")],
+        [btn("Назад в музыку", "hub:music", emoji="back")],
     ])
 
 
