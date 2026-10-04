@@ -2056,14 +2056,14 @@ def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict
     if errors:
         issue = (
             "\n\n⚠️ <b>Telegram не дал проверить один из каналов.</b> "
-            "Добавь HolyGram администратором в оба канала, затем снова нажми «Проверить подписку»."
+            "Добавь бота администратором в оба канала, затем снова нажми «Проверить подписку»."
         )
     else:
         issue = ""
 
     text = (
-        "🔒 <b>Для использования HolyGram подпишитесь на каналы</b>\n\n"
-        "HolyGram бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
+        "🔒 <b>Для поиска музыки подпишитесь на каналы</b>\n\n"
+        "Поиск музыки бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
         "• <b>АНОН МГН</b> — @anonmgn\n"
         "• <b>MGN VPN</b> — @mgnvpnn\n\n"
         "После подписки нажмите <b>«Проверить подписку»</b>."
@@ -5789,7 +5789,7 @@ def handle_callback_query(query: dict) -> None:
             if subscribed:
                 check_text = "Подписка подтверждена ✅ Повторите команду."
             elif errors:
-                check_text = "Telegram не дал проверить канал. Добавь HolyGram администратором в оба канала."
+                check_text = "Telegram не дал проверить канал. Добавь бота администратором в оба канала."
             else:
                 check_text = "Подпишитесь на оба канала и попробуйте ещё раз"
             answer_callback(query_id, text=check_text, show_alert=not subscribed)
@@ -5806,11 +5806,11 @@ def handle_callback_query(query: dict) -> None:
     if data == "required:check":
         subscribed, missing, errors = required_channel_membership(user_id, force=True)
         page_text, page_markup = page_home(user_id) if subscribed else page_required_channels(user_id)
-        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=subscribed)
+        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=False)
         if subscribed:
             check_text = "Подписка подтверждена ✅"
         elif errors:
-            check_text = "Telegram не дал проверить канал. Добавь HolyGram администратором в оба канала."
+            check_text = "Telegram не дал проверить канал. Добавь бота администратором в оба канала."
         else:
             check_text = "Подпишитесь на оба канала и попробуйте ещё раз"
         answer_callback(query_id, text=check_text, show_alert=not subscribed)
@@ -5827,13 +5827,44 @@ def handle_callback_query(query: dict) -> None:
     alert: str | None = None
 
     if data == "home":
-        # The setup flow uses its own guide image. Returning home must always
-        # restore the normal HolyGram main-menu photo instead of only editing
-        # the caption on the setup-guide photo.
         page_text, page_markup = page_home(user_id)
-        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=True)
+        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=False)
         answer_callback(query_id)
         return
+    elif data == "music:prompt":
+        send_message(
+            chat_id,
+            "🔎 <b>Напиши название песни или исполнителя.</b>\n\n"
+            "Например: <code>Imagine Dragons Believer</code>",
+            parse_mode="HTML",
+        )
+        answer_callback(query_id)
+        return
+    elif data == "music:help":
+        page = page_music_help(user_id)
+    elif data.startswith("music:results:"):
+        token = data.split(":", 2)[2]
+        cached = _music_cached(user_id, token)
+        if not cached:
+            page = (
+                "Поиск устарел. Выполни новый поиск.",
+                kb([[btn("Новый поиск", "music:prompt", emoji="refresh", style="primary")], [btn("Главное меню", "home", emoji="home")]]),
+            )
+        else:
+            query, results = cached
+            page = page_music_results(user_id, query, results, token)
+    elif data.startswith("music:track:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            answer_callback(query_id, text="Трек не найден", show_alert=True)
+            return
+        token = parts[2]
+        try:
+            index = int(parts[3])
+        except ValueError:
+            answer_callback(query_id, text="Трек не найден", show_alert=True)
+            return
+        page = page_music_track(user_id, token, index)
     elif data == "buy" or data in {"grant", "prices", "promos", "expiring"} or data.startswith(("buy:", "gift:", "promo:", "sbp:check:", "price:", "useradd:")):
         page = page_buy(user_id)
         alert = "HolyGram бесплатный — подписки и оплаты отключены"
@@ -7091,12 +7122,11 @@ def handle_start(message: dict, args: list[str] | None = None) -> None:
 
     if is_private_chat(message):
         text, markup = page_home(user_id)
-        send_menu_page(user_id, chat_id, text, markup, use_photo=True)
+        send_menu_page(user_id, chat_id, text, markup, use_photo=False)
     else:
         send_message(
             chat_id,
-            f"{pe('home')} Меню, подписка и помощь — в личных сообщениях со мной.\n"
-            f"Этот чат подключить можно командой /watch.",
+            "🎵 Поиск музыки работает в личных сообщениях со мной.",
             parse_mode="HTML",
         )
 
@@ -7559,9 +7589,19 @@ def handle_regular_message(message: dict) -> None:
             handle_start(message, args)
         elif name == "/menu":
             handle_start(message, [])
+        elif name in {"/music", "/search"} and is_private_chat(message):
+            if args:
+                send_music_search_results(user_id, chat_id, " ".join(args))
+            else:
+                send_message(
+                    chat_id,
+                    "🔎 <b>Напиши название песни или исполнителя.</b>",
+                    parse_mode="HTML",
+                )
         elif name == "/help":
             if is_private_chat(message):
-                send_setup_guide(user_id, chat_id)
+                help_text, help_markup = page_music_help(user_id)
+                send_menu_page(user_id, chat_id, help_text, help_markup, use_photo=False)
             else:
                 send_message(chat_id, "Помощь покажу в личных сообщениях со мной.")
         elif name == "/support" and is_private_chat(message):
@@ -7621,6 +7661,10 @@ def handle_regular_message(message: dict) -> None:
             handle_restore(message, restore_all=False)
         elif name in {"/restore_all", "/enable_all"}:
             send_message(chat_id, "Эта команда больше не используется. Для своих подключений: /restore")
+        return
+
+    if is_private_chat(message) and text.strip():
+        send_music_search_results(user_id, chat_id, text)
         return
 
     owner_id = get_chat_owner(chat_id)
@@ -7899,15 +7943,10 @@ def handle_update(update: dict) -> None:
 def configure_bot() -> None:
     user_commands = [
         {"command": "start", "description": "Главное меню"},
-        {"command": "menu", "description": "Открыть меню"},
-        {"command": "help", "description": "Как подключить бота"},
-        {"command": "support", "description": "Написать в поддержку"},
-        {"command": "watch", "description": "Включить обычный чат"},
-        {"command": "status", "description": "Статус обычного чата"},
-        {"command": "list", "description": "Список обычных чатов"},
-        {"command": "stop", "description": "Отключить обычные чаты"},
-        {"command": "connections", "description": "Мои Business-подключения"},
-        {"command": "restore", "description": "Включить свои Business-подключения"},
+        {"command": "music", "description": "Найти музыку"},
+        {"command": "search", "description": "Поиск по названию или исполнителю"},
+        {"command": "help", "description": "Как пользоваться"},
+        {"command": "support", "description": "Поддержка"},
     ]
     try:
         telegram_call("setMyCommands", {"commands": user_commands})
