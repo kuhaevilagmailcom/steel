@@ -670,6 +670,17 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                query TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_music_search_history_user ON music_search_history(user_id, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_auto_replacements_user ON user_auto_replacements(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_custom_commands_user ON user_custom_commands(user_id)")
         conn.execute(
@@ -3006,6 +3017,44 @@ def _music_cached(user_id: int, token: str) -> tuple[str, list[dict]] | None:
     return str(cached[2]), [dict(item) for item in cached[3]]
 
 
+def remember_music_search(user_id: int, query: str) -> None:
+    query = re.sub(r"\s+", " ", str(query or "").strip())[:120]
+    if not query:
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO music_search_history (user_id,query,created_at) VALUES (?,?,?)",
+            (user_id, query, int(time.time())),
+        )
+        conn.execute(
+            """
+            DELETE FROM music_search_history
+            WHERE user_id=? AND id NOT IN (
+                SELECT id FROM music_search_history
+                WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 30
+            )
+            """,
+            (user_id, user_id),
+        )
+
+
+def recent_music_searches(user_id: int, limit: int = 8) -> list[str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT query FROM music_search_history WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ?",
+            (user_id, max(1, min(int(limit), 30))),
+        ).fetchall()
+    seen: set[str] = set()
+    result: list[str] = []
+    for (query,) in rows:
+        value = str(query or "").strip()
+        key = value.casefold()
+        if value and key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
 def page_music_results(
     user_id: int,
     query: str,
@@ -3156,6 +3205,7 @@ def send_music_search_results(user_id: int, chat_id: int, query: str) -> None:
         send_message(chat_id, "Напиши название песни или исполнителя.")
         return
     send_message(chat_id, f"🔎 Ищу: <b>{html_text(query)}</b>", parse_mode="HTML")
+    remember_music_search(user_id, query)
     results = search_music_tracks(query, MUSIC_SEARCH_LIMIT)
     token = _music_token(user_id, query, results)
     text, markup = page_music_results(user_id, query, results, token, 0)
@@ -3170,23 +3220,153 @@ def bottom_navigation() -> list[list[dict]]:
 
 def page_home(user_id: int) -> tuple[str, dict]:
     rows = [
-        [btn("🔎 Найти музыку", "music:prompt", style="primary")],
         [
-            btn("Как пользоваться", "music:help", emoji="support"),
-            btn("Поддержка", "support", emoji="support"),
+            btn("🎵 Музыка", "hub:music", style="primary"),
+            btn("🧰 Инструменты", "hub:tools"),
         ],
+        [
+            btn("📂 Моё", "hub:mine"),
+            btn("🎲 Развлечения", "hub:fun"),
+        ],
+        [btn("⚙️ Настройки", "hub:settings")],
     ]
     if is_admin_user(user_id):
-        rows.append([btn("Админ-панель", "panel", emoji="admin", style="success")])
+        rows.append([btn("🛡 Админ-панель", "panel", emoji="admin", style="success")])
 
     text = (
-        "🎵 <b>Поиск музыки</b>\n\n"
-        "Напиши мне <b>название песни</b> или <b>исполнителя</b> — "
-        "я найду подходящие треки, покажу их страницами и отправлю аудио прямо в Telegram.\n\n"
-        "Можно просто отправить запрос сообщением, например:\n"
-        "<code>Imagine Dragons Believer</code>"
+        "✨ <b>HolyGram</b>\n\n"
+        "Одна экосистема внутри Telegram: музыка, полезные инструменты, "
+        "личные функции, развлечения и настройки.\n\n"
+        "Выбери раздел:"
     )
     return text, kb(rows)
+
+
+def page_hub_music(user_id: int) -> tuple[str, dict]:
+    history = recent_music_searches(user_id, 5)
+    history_text = (
+        "\n".join(f"• {html_text(query)}" for query in history)
+        if history else "Пока ничего не искал."
+    )
+    text = (
+        "🎵 <b>Музыка</b>\n\n"
+        "Ищи треки по названию или исполнителю. HolyGram покажет результаты страницами "
+        "и отправит выбранное аудио прямо в Telegram.\n\n"
+        f"<b>Недавние запросы:</b>\n{history_text}"
+    )
+    rows = [
+        [btn("🔎 Найти музыку", "music:prompt", style="primary")],
+        [btn("Как искать", "music:help", emoji="support")],
+        [btn("Назад в музыку", "hub:music", emoji="back")],
+    ]
+    return text, kb(rows)
+
+
+def page_hub_tools(user_id: int) -> tuple[str, dict]:
+    text = (
+        "🧰 <b>Инструменты</b>\n\n"
+        "Полезные функции HolyGram для сообщений и Telegram Business.\n\n"
+        "Можно подключить чаты, настроить автоматические команды и управлять тем, "
+        "как HolyGram работает с твоими сообщениями."
+    )
+    rows = [
+        [
+            btn("💬 Подключённые чаты", "conns", emoji="view"),
+            btn("⚡ Мои команды", "commands", emoji="history"),
+        ],
+        [
+            btn("🔁 Автозамена", "autoreplace", emoji="refresh"),
+            btn("🎭 Стили общения", "style", emoji="profile"),
+        ],
+        [btn("Как подключить", "help", emoji="support")],
+        [btn("Назад", "home", emoji="back")],
+    ]
+    return text, kb(rows)
+
+
+def page_hub_mine(user_id: int) -> tuple[str, dict]:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT first_name,last_name,username FROM users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    first, last, username = row or ("", "", "")
+    name = " ".join(part for part in (str(first or ""), str(last or "")) if part).strip() or "Пользователь"
+    mention = f"@{str(username).lstrip('@')}" if username else "без username"
+    history_count = len(recent_music_searches(user_id, 30))
+    text = (
+        "📂 <b>Моё</b>\n\n"
+        f"👤 <b>{html_text(name)}</b> · {html_text(mention)}\n"
+        f"🆔 <code>{user_id}</code>\n"
+        f"🎵 Запросов в истории: <b>{history_count}</b>\n"
+        f"👥 Приглашено друзей: <b>{ref_count(user_id)}</b>\n\n"
+        "Здесь собраны твои личные разделы HolyGram."
+    )
+    rows = [
+        [btn("🎵 История музыки", "mine:music", emoji="history")],
+        [btn("👥 Реферальная система", "ref", emoji="invite")],
+        [btn("💬 Поддержка", "support", emoji="support")],
+        [btn("Назад", "home", emoji="back")],
+    ]
+    return text, kb(rows)
+
+
+def page_my_music_history(user_id: int) -> tuple[str, dict]:
+    history = recent_music_searches(user_id, 15)
+    body = "\n".join(f"{index}. {html_text(query)}" for index, query in enumerate(history, 1)) if history else "История пока пустая."
+    return (
+        "🎵 <b>История музыки</b>\n\n" + body,
+        kb([
+            [btn("🔎 Новый поиск", "music:prompt", style="primary")],
+            [btn("Назад в «Моё»", "hub:mine", emoji="back")],
+        ]),
+    )
+
+
+def page_hub_fun(user_id: int, result: str | None = None) -> tuple[str, dict]:
+    text = (
+        "🎲 <b>Развлечения</b>\n\n"
+        "Быстрые штуки, когда хочется просто потыкать HolyGram."
+    )
+    if result:
+        text += f"\n\n{result}"
+    rows = [
+        [
+            btn("🪙 Монетка", "fun:coin"),
+            btn("🎲 Кубик", "fun:dice"),
+        ],
+        [
+            btn("🔢 Число 1–100", "fun:number"),
+            btn("✨ Кто ты сегодня", "fun:today"),
+        ],
+        [btn("Назад", "home", emoji="back")],
+    ]
+    return text, kb(rows)
+
+
+def page_hub_settings(user_id: int) -> tuple[str, dict]:
+    style = STYLE_LABELS.get(get_communication_style(user_id), "Отключён")
+    text = (
+        "⚙️ <b>Настройки</b>\n\n"
+        f"Стиль общения: <b>{html_text(style)}</b>\n"
+        f"Автозамен: <b>{len(list_auto_replacements(user_id))}</b>\n"
+        f"Команд: <b>{len(list_custom_commands(user_id))}</b>\n\n"
+        "Настрой HolyGram под себя."
+    )
+    rows = [
+        [
+            btn("🎭 Стиль", "style", emoji="profile"),
+            btn("🔁 Автозамена", "autoreplace", emoji="refresh"),
+        ],
+        [
+            btn("⚡ Команды", "commands", emoji="history"),
+            btn("💬 Чаты", "conns", emoji="view"),
+        ],
+        [btn("Как подключить", "help", emoji="support")],
+        [btn("Назад", "home", emoji="back")],
+    ]
+    return text, kb(rows)
+
 
 
 def page_music_help(user_id: int) -> tuple[str, dict]:
@@ -3254,7 +3434,7 @@ def page_auto_replacements(user_id: int) -> tuple[str, dict]:
         rows.append([btn(label, f"ar:item:{rule_id}")])
     rows.extend([
         [btn("Добавить автозамену", "ar:add", emoji="add", style="success")],
-        [btn("Назад к функциям", "functions", emoji="back")],
+        [btn("Назад в настройки", "hub:settings", emoji="back")],
     ])
     text = (
         "🔁 <b>Автозамена</b>\n\n"
@@ -3290,7 +3470,7 @@ def page_custom_commands(user_id: int) -> tuple[str, dict]:
         rows.append([btn(f"{trigger} · {len(messages)} сообщ.", f"cmd:item:{command_id}")])
     rows.extend([
         [btn("Создать команду", "cmd:add", emoji="add", style="success")],
-        [btn("Назад к функциям", "functions", emoji="back")],
+        [btn("Назад в настройки", "hub:settings", emoji="back")],
     ])
     text = (
         "⌨️ <b>Мои команды</b>\n\n"
@@ -3354,7 +3534,7 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
         rows.append([btn("Настройки мата", "rooster:settings", emoji="refresh", style="primary")])
     rows.extend([
         [btn("Отключить стиль", "style:off", emoji="warning", style="danger")],
-        [btn("Назад к функциям", "functions", emoji="back")],
+        [btn("Назад в настройки", "hub:settings", emoji="back")],
     ])
     examples = "\n".join(
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
@@ -3414,7 +3594,7 @@ def page_ref(user_id: int) -> tuple[str, dict]:
                 emoji="invite",
             ),
         ],
-        [btn("Назад", "home", emoji="back")],
+        [btn("Назад в «Моё»", "hub:mine", emoji="back")],
     ]
     return text, kb(rows)
 
@@ -3537,7 +3717,7 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     rows.extend([
         [btn("Добавить или изменить чаты", "help", emoji="add")],
         [btn("Обновить", "conns", emoji="refresh")],
-        [btn("Назад к функциям", "functions", emoji="back")],
+        [btn("Назад в настройки", "hub:settings", emoji="back")],
     ])
     return text, kb(rows)
 
@@ -5903,6 +6083,36 @@ def handle_callback_query(query: dict) -> None:
         send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=False)
         answer_callback(query_id)
         return
+    elif data == "hub:music":
+        page = page_hub_music(user_id)
+    elif data == "hub:tools":
+        page = page_hub_tools(user_id)
+    elif data == "hub:mine":
+        page = page_hub_mine(user_id)
+    elif data == "mine:music":
+        page = page_my_music_history(user_id)
+    elif data == "hub:fun":
+        page = page_hub_fun(user_id)
+    elif data == "hub:settings":
+        page = page_hub_settings(user_id)
+    elif data == "fun:coin":
+        side = "Орёл 🦅" if uuid.uuid4().int % 2 == 0 else "Решка 🪙"
+        page = page_hub_fun(user_id, f"🪙 Выпало: <b>{side}</b>")
+    elif data == "fun:dice":
+        value = uuid.uuid4().int % 6 + 1
+        page = page_hub_fun(user_id, f"🎲 Выпало: <b>{value}</b>")
+    elif data == "fun:number":
+        value = uuid.uuid4().int % 100 + 1
+        page = page_hub_fun(user_id, f"🔢 Твоё число: <b>{value}</b>")
+    elif data == "fun:today":
+        variants = (
+            "легенда дня 😎", "главный по вайбу ✨", "сонный гений 😴",
+            "человек-прикол 🤡", "машина продуктивности ⚡", "тайный босс 🕶",
+            "герой сюжета 🎬", "мастер импровизации 🎭",
+        )
+        day_key = int(time.time() // 86400)
+        value = variants[(user_id + day_key) % len(variants)]
+        page = page_hub_fun(user_id, f"✨ Сегодня ты — <b>{value}</b>.")
     elif data == "music:prompt":
         send_message(
             chat_id,
@@ -5951,7 +6161,7 @@ def handle_callback_query(query: dict) -> None:
         page = page_buy(user_id)
         alert = "HolyGram бесплатный — подписки и оплаты отключены"
     elif data == "functions":
-        page = page_functions(user_id)
+        page = page_hub_tools(user_id)
     elif data == "style":
         if sub_active(user_id):
             page = page_communication_style(user_id)
@@ -8024,10 +8234,10 @@ def handle_update(update: dict) -> None:
 
 def configure_bot() -> None:
     user_commands = [
-        {"command": "start", "description": "Главное меню"},
+        {"command": "start", "description": "HolyGram — главное меню"},
         {"command": "music", "description": "Найти музыку"},
-        {"command": "search", "description": "Поиск по названию или исполнителю"},
-        {"command": "help", "description": "Как пользоваться"},
+        {"command": "search", "description": "Поиск музыки"},
+        {"command": "help", "description": "Помощь"},
         {"command": "support", "description": "Поддержка"},
     ]
     try:
