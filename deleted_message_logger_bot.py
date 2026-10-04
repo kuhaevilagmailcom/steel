@@ -8345,6 +8345,7 @@ def handle_regular_message(message: dict) -> None:
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
         PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_VIEW_ACCESS, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
         PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER, PENDING_AUTOREPLACE, PENDING_CUSTOM_COMMAND,
+        PENDING_TEXT_TOOL, PENDING_LINK_TOOL,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
         for pending in pending_maps:
@@ -8472,6 +8473,45 @@ def handle_regular_message(message: dict) -> None:
             page_text, page_markup = page_custom_command_item(user_id, command_id)
             send_menu_page(user_id, chat_id, page_text, page_markup)
             return
+
+    if text and not text.startswith("/") and chat_id in PENDING_TEXT_TOOL:
+        mode, deadline = PENDING_TEXT_TOOL[chat_id]
+        if deadline < time.time():
+            PENDING_TEXT_TOOL.pop(chat_id, None)
+            send_message(chat_id, "Время ожидания текста истекло.")
+            return
+        ok, result = text_tool_transform(mode, text)
+        if not ok:
+            send_message(chat_id, "⚠️ " + result)
+            return
+        PENDING_TEXT_TOOL.pop(chat_id, None)
+        send_message(
+            chat_id,
+            "📝 <b>Готово:</b>\n\n" + html_quote(result),
+            parse_mode="HTML",
+            reply_markup=kb([
+                [btn("Скопировать", copy=result[:256], emoji="view")],
+                [btn("Ещё инструмент", "tools:text", emoji="refresh")],
+            ]),
+        )
+        return
+
+    if text and not text.startswith("/") and chat_id in PENDING_LINK_TOOL:
+        mode, deadline = PENDING_LINK_TOOL[chat_id]
+        if deadline < time.time():
+            PENDING_LINK_TOOL.pop(chat_id, None)
+            send_message(chat_id, "Время ожидания ссылки истекло.")
+            return
+        url = extract_first_url(text)
+        if not url:
+            send_message(chat_id, "Не вижу http/https ссылку. Отправь ссылку ещё раз или /cancel.")
+            return
+        PENDING_LINK_TOOL.pop(chat_id, None)
+        token = _quick_put(user_id, {"kind": "link", "url": url})
+        ok, result = process_link_quick_action(user_id, chat_id, mode, token)
+        if not ok:
+            send_message(chat_id, "⚠️ " + result)
+        return
 
     # ответ админа на выдачу подписки («ID дней») — до разбора команд
     if text and not text.startswith("/") and chat_id in PENDING_HIDE_CHAT_USER and is_owner_admin(user_id):
@@ -8674,6 +8714,9 @@ def handle_regular_message(message: dict) -> None:
             handle_restore(message, restore_all=False)
         elif name in {"/restore_all", "/enable_all"}:
             send_message(chat_id, "Эта команда больше не используется. Для своих подключений: /restore")
+        return
+
+    if is_private_chat(message) and quick_actions_for_message(user_id, chat_id, message):
         return
 
     if is_private_chat(message) and text.strip():
