@@ -3222,6 +3222,557 @@ def send_music_search_results(user_id: int, chat_id: int, query: str) -> None:
     send_menu_page(user_id, chat_id, text, markup, use_photo=False)
 
 
+
+# --- HolyGram инструменты и быстрые действия ----------------------------------
+
+def _quick_cleanup() -> None:
+    now = time.time()
+    for token, item in list(QUICK_ACTION_CACHE.items()):
+        if item[0] < now:
+            QUICK_ACTION_CACHE.pop(token, None)
+
+
+def _quick_put(user_id: int, payload: dict) -> str:
+    _quick_cleanup()
+    token = uuid.uuid4().hex[:10]
+    QUICK_ACTION_CACHE[token] = (time.time() + QUICK_ACTION_TTL_SEC, int(user_id), dict(payload))
+    return token
+
+
+def _quick_get(user_id: int, token: str) -> dict | None:
+    _quick_cleanup()
+    item = QUICK_ACTION_CACHE.get(str(token))
+    if not item or int(item[1]) != int(user_id):
+        return None
+    return dict(item[2])
+
+
+def _tool_temp_dir(prefix: str, user_id: int) -> Path:
+    root = DATA_DIR / "tools_tmp"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{safe_part(prefix)}_{user_id}_{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _cleanup_tool_dir(path: Path) -> None:
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def download_telegram_tool_file(file_id: str, target_dir: Path, preferred_name: str = "file") -> Path:
+    info = telegram_call("getFile", {"file_id": file_id}, timeout=30)
+    file_path = str((info or {}).get("file_path") or "")
+    if not file_path:
+        raise RuntimeError("Telegram не вернул путь к файлу")
+    suffix = Path(file_path).suffix or Path(preferred_name).suffix or ".bin"
+    stem = Path(preferred_name).stem or "file"
+    target = target_dir / (safe_part(stem, "file") + suffix)
+    request = Request(FILE_API_URL + quote(file_path, safe="/"))
+    total = 0
+    with urlopen(request, timeout=120) as response, target.open("wb") as output:
+        while True:
+            chunk = response.read(256 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > 50 * 1024 * 1024:
+                raise ValueError("Файл слишком большой для инструмента")
+            output.write(chunk)
+    return target
+
+
+def _ffmpeg_available() -> bool:
+    return bool(shutil.which("ffmpeg"))
+
+
+def _run_ffmpeg(args: list[str], timeout: int = 180) -> tuple[bool, str]:
+    binary = shutil.which("ffmpeg")
+    if not binary:
+        return False, "На сервере не найден ffmpeg."
+    proc = subprocess.run(
+        [binary, "-y", "-hide_banner", "-loglevel", "error", *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        check=False,
+    )
+    if proc.returncode != 0:
+        error = proc.stderr.decode("utf-8", errors="ignore").strip()
+        return False, (error[-700:] if error else "ffmpeg завершился с ошибкой")
+    return True, ""
+
+
+def _send_tool_document(chat_id: int, path: Path, caption: str = "") -> None:
+    fields: dict[str, object] = {"chat_id": chat_id}
+    if caption:
+        fields["caption"] = caption
+    telegram_multipart_call("sendDocument", fields, {"document": path}, timeout=120)
+
+
+def _send_tool_audio(chat_id: int, path: Path, title: str = "", performer: str = "HolyGram", caption: str = "") -> None:
+    fields: dict[str, object] = {"chat_id": chat_id}
+    if title:
+        fields["title"] = title[:64]
+    if performer:
+        fields["performer"] = performer[:64]
+    if caption:
+        fields["caption"] = caption
+    telegram_multipart_call("sendAudio", fields, {"audio": path}, timeout=120)
+
+
+def _send_tool_voice(chat_id: int, path: Path, caption: str = "") -> None:
+    fields: dict[str, object] = {"chat_id": chat_id}
+    if caption:
+        fields["caption"] = caption
+    telegram_multipart_call("sendVoice", fields, {"voice": path}, timeout=120)
+
+
+def _send_tool_video(chat_id: int, path: Path, caption: str = "") -> None:
+    fields: dict[str, object] = {"chat_id": chat_id, "supports_streaming": True}
+    if caption:
+        fields["caption"] = caption
+    telegram_multipart_call("sendVideo", fields, {"video": path}, timeout=180)
+
+
+def _send_tool_video_note(chat_id: int, path: Path) -> None:
+    telegram_multipart_call("sendVideoNote", {"chat_id": chat_id}, {"video_note": path}, timeout=180)
+
+
+def _stt_multipart(url: str, api_key: str, model: str, path: Path) -> str | None:
+    boundary = f"----HolyGramSTT{uuid.uuid4().hex}"
+    body = bytearray()
+
+    def add(value: str) -> None:
+        body.extend(value.encode("utf-8"))
+
+    add(f"--{boundary}\r\n")
+    add('Content-Disposition: form-data; name="model"\r\n\r\n')
+    add(model)
+    add("\r\n")
+
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    add(f"--{boundary}\r\n")
+    add(f'Content-Disposition: form-data; name="file"; filename="{path.name.replace(chr(34), "_")}"\r\n')
+    add(f"Content-Type: {mime}\r\n\r\n")
+    body.extend(path.read_bytes())
+    add("\r\n")
+    add(f"--{boundary}--\r\n")
+
+    request = Request(
+        url,
+        data=bytes(body),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with urlopen(request, timeout=120) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    text_value = str((data or {}).get("text") or "").strip()
+    return text_value or None
+
+
+def transcribe_voice_file(path: Path) -> tuple[bool, str]:
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    custom_url = os.getenv("HOLYGRAM_STT_API_URL", "").strip()
+    custom_key = os.getenv("HOLYGRAM_STT_API_KEY", "").strip()
+    custom_model = os.getenv("HOLYGRAM_STT_MODEL", "whisper-large-v3-turbo").strip()
+
+    providers: list[tuple[str, str, str]] = []
+    if custom_url and custom_key:
+        providers.append((custom_url, custom_key, custom_model))
+    if groq_key:
+        providers.append(("https://api.groq.com/openai/v1/audio/transcriptions", groq_key, "whisper-large-v3-turbo"))
+    if openai_key:
+        providers.append(("https://api.openai.com/v1/audio/transcriptions", openai_key, "gpt-4o-mini-transcribe"))
+
+    if not providers:
+        return False, (
+            "Расшифровка подготовлена, но на сервере не настроен STT. "
+            "Добавь GROQ_API_KEY, OPENAI_API_KEY или HOLYGRAM_STT_API_URL/HOLYGRAM_STT_API_KEY."
+        )
+
+    last_error = ""
+    for url, key, model in providers:
+        try:
+            transcript = _stt_multipart(url, key, model, path)
+            if transcript:
+                return True, transcript
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            log(f"STT provider failed: {last_error}")
+    return False, "Не удалось расшифровать голосовое." + (f" {last_error[:180]}" if last_error else "")
+
+
+def summarize_text_local(text: str, max_sentences: int = 3) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not cleaned:
+        return ""
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", cleaned) if part.strip()]
+    if len(sentences) <= max_sentences:
+        return cleaned
+    chosen = sentences[:max_sentences]
+    return " ".join(chosen)
+
+
+def translate_text_free(text: str, target: str | None = None) -> tuple[bool, str]:
+    value = str(text or "").strip()
+    if not value:
+        return False, "Пустой текст."
+    if target is None:
+        target = "en" if re.search(r"[А-Яа-яЁё]", value) else "ru"
+    params = (
+        "client=gtx&sl=auto&tl=" + quote(target, safe="")
+        + "&dt=t&q=" + quote(value[:3500], safe="")
+    )
+    try:
+        with urlopen(Request("https://translate.googleapis.com/translate_a/single?" + params, headers={"User-Agent": "HolyGram/1.0"}), timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        translated = "".join(str(chunk[0]) for chunk in (data[0] or []) if chunk and chunk[0]).strip()
+        return (True, translated) if translated else (False, "Перевод не получен.")
+    except Exception as exc:
+        log(f"Translate failed: {type(exc).__name__}: {exc}")
+        return False, "Не удалось выполнить перевод."
+
+
+TRANSLIT_MAP = str.maketrans({
+    "а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"yo","ж":"zh","з":"z","и":"i","й":"y",
+    "к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f",
+    "х":"kh","ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya",
+    "А":"A","Б":"B","В":"V","Г":"G","Д":"D","Е":"E","Ё":"Yo","Ж":"Zh","З":"Z","И":"I","Й":"Y",
+    "К":"K","Л":"L","М":"M","Н":"N","О":"O","П":"P","Р":"R","С":"S","Т":"T","У":"U","Ф":"F",
+    "Х":"Kh","Ц":"Ts","Ч":"Ch","Ш":"Sh","Щ":"Sch","Ъ":"","Ы":"Y","Ь":"","Э":"E","Ю":"Yu","Я":"Ya",
+})
+
+
+def text_tool_transform(mode: str, text: str) -> tuple[bool, str]:
+    value = str(text or "").strip()
+    if not value:
+        return False, "Отправь непустой текст."
+
+    if mode == "fix":
+        result = re.sub(r"[ \t]+", " ", value)
+        result = re.sub(r"\s+([,.;:!?])", r"\1", result)
+        result = re.sub(r"([,.;:!?])(?=[^\s\n])", r"\1 ", result)
+        result = re.sub(r"\s*\n\s*", "\n", result)
+        result = result[:1].upper() + result[1:] if result else result
+        return True, result
+    if mode == "short":
+        return True, summarize_text_local(value, 2)
+    if mode == "official":
+        replacements = {
+            r"(?iu)\bпривет\b": "Здравствуйте",
+            r"(?iu)\bпока\b": "Всего доброго",
+            r"(?iu)\bхочу\b": "хотел(а) бы",
+            r"(?iu)\bнадо\b": "необходимо",
+            r"(?iu)\bскинь\b": "отправьте",
+            r"(?iu)\bго\b": "предлагаю",
+        }
+        result = value
+        for pattern, replacement in replacements.items():
+            result = re.sub(pattern, replacement, result)
+        if result and result[-1] not in ".!?":
+            result += "."
+        return True, result
+    if mode == "simple":
+        replacements = {
+            "осуществить": "сделать", "произвести": "сделать", "необходимо": "нужно",
+            "вследствие": "из-за", "посредством": "через", "предоставить": "дать",
+            "использовать": "применять",
+        }
+        result = value
+        for source, replacement in replacements.items():
+            result = re.sub(r"(?iu)(?<!\w)" + re.escape(source) + r"(?!\w)", replacement, result)
+        return True, result
+    if mode == "funny":
+        tails = (" 😄", " — ну ты понял 😎", " ✨", " ахах")
+        return True, value + tails[sum(ord(ch) for ch in value) % len(tails)]
+    if mode == "translate":
+        return translate_text_free(value)
+    if mode == "translit":
+        return True, value.translate(TRANSLIT_MAP)
+    if mode == "upper":
+        return True, value.upper()
+    if mode == "lower":
+        return True, value.lower()
+    if mode == "title":
+        return True, value.title()
+    return False, "Неизвестный текстовый инструмент."
+
+
+URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>()]+")
+def extract_first_url(text: str) -> str | None:
+    match = URL_RE.search(str(text or ""))
+    return match.group(0).rstrip(".,!?;:") if match else None
+
+
+def safe_public_url(url: str) -> tuple[bool, str]:
+    value = str(url or "").strip()
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False, "Нужна обычная http/https ссылка."
+    host = parsed.hostname
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                return False, "Локальные и приватные адреса не поддерживаются."
+    except Exception:
+        return False, "Не удалось проверить адрес ссылки."
+    return True, value
+
+
+def shorten_url(url: str) -> tuple[bool, str]:
+    ok, value = safe_public_url(url)
+    if not ok:
+        return False, value
+    try:
+        endpoint = "https://is.gd/create.php?format=simple&url=" + quote(value, safe="")
+        with urlopen(Request(endpoint, headers={"User-Agent": "HolyGram/1.0"}), timeout=15) as response:
+            short = response.read().decode("utf-8", errors="ignore").strip()
+        if short.startswith("http"):
+            return True, short
+    except Exception as exc:
+        log(f"URL shorten failed: {type(exc).__name__}: {exc}")
+    return False, "Не удалось сократить ссылку."
+
+
+def resolve_url(url: str) -> tuple[bool, str]:
+    ok, value = safe_public_url(url)
+    if not ok:
+        return False, value
+    try:
+        request = Request(value, headers={"User-Agent": "HolyGram/1.0"})
+        with urlopen(request, timeout=15) as response:
+            final = str(response.geturl() or value)
+        return True, final
+    except Exception as exc:
+        log(f"URL resolve failed: {type(exc).__name__}: {exc}")
+        return False, "Не удалось открыть ссылку для проверки."
+
+
+def send_qr_for_url(chat_id: int, url: str) -> tuple[bool, str]:
+    ok, value = safe_public_url(url)
+    if not ok:
+        return False, value
+    qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=700x700&data=" + quote(value, safe="")
+    try:
+        telegram_call(
+            "sendPhoto",
+            {
+                "chat_id": chat_id,
+                "photo": qr_url,
+                "caption": "🔗 QR-код · HolyGram",
+                "reply_markup": kb([[btn("Скопировать ссылку", copy=value, emoji="view")]]),
+            },
+            timeout=45,
+        )
+        return True, "QR-код отправлен"
+    except TelegramApiError as exc:
+        log(f"QR send failed: {exc}")
+        return False, "Не удалось создать QR-код."
+
+
+def quick_actions_for_message(user_id: int, chat_id: int, message: dict) -> bool:
+    media = message_media(message)
+    if media and media.get("file_id"):
+        media_type = str(media.get("type") or "")
+        payload = {"kind": "media", "media": media}
+        token = _quick_put(user_id, payload)
+        if media_type in {"voice", "audio"}:
+            rows = [
+                [btn("📝 В текст", f"qa:v:text:{token}"), btn("🧾 Кратко", f"qa:v:sum:{token}")],
+                [btn("🌐 Перевести", f"qa:v:tr:{token}"), btn("🎚 Скорость", f"qa:v:speeds:{token}")],
+                [btn("🔊 Нормализовать", f"qa:v:norm:{token}"), btn("🎵 MP3", f"qa:v:mp3:{token}")],
+                [btn("⬇️ Скачать", f"qa:v:download:{token}")],
+            ]
+            send_message(chat_id, "🎙 <b>Голосовое получено.</b> Что сделать?", parse_mode="HTML", reply_markup=kb(rows))
+            return True
+        if media_type == "video_note":
+            rows = [
+                [btn("🎬 Обычное видео", f"qa:c:video:{token}"), btn("🎵 Вытащить звук", f"qa:c:audio:{token}")],
+                [btn("⬇️ Скачать", f"qa:c:download:{token}")],
+            ]
+            send_message(chat_id, "⭕ <b>Кружок получен.</b> Что сделать?", parse_mode="HTML", reply_markup=kb(rows))
+            return True
+        if media_type == "video":
+            rows = [
+                [btn("🎵 Вытащить звук", f"qa:vid:audio:{token}"), btn("🗜 Сжать", f"qa:vid:compress:{token}")],
+                [btn("⭕ В кружок", f"qa:vid:circle:{token}"), btn("⬇️ Скачать", f"qa:vid:download:{token}")],
+            ]
+            send_message(chat_id, "🎬 <b>Видео получено.</b> Что сделать?", parse_mode="HTML", reply_markup=kb(rows))
+            return True
+
+    url = extract_first_url(str(message.get("text") or ""))
+    if url:
+        token = _quick_put(user_id, {"kind": "link", "url": url})
+        rows = [
+            [btn("▦ QR-код", f"qa:l:qr:{token}"), btn("🔗 Сократить", f"qa:l:short:{token}")],
+            [btn("🛡 Проверить", f"qa:l:check:{token}"), btn("✨ Оформить", f"qa:l:pretty:{token}")],
+        ]
+        send_message(chat_id, "🔥 <b>Быстрые действия со ссылкой</b>", parse_mode="HTML", reply_markup=kb(rows))
+        return True
+    return False
+
+
+def process_media_quick_action(user_id: int, chat_id: int, action: str, token: str, extra: str = "") -> tuple[bool, str]:
+    payload = _quick_get(user_id, token)
+    if not payload or payload.get("kind") != "media":
+        return False, "Действие устарело. Отправь файл ещё раз."
+    media = payload.get("media") or {}
+    file_id = str(media.get("file_id") or "")
+    if not file_id:
+        return False, "Файл недоступен."
+
+    work = _tool_temp_dir("media", user_id)
+    try:
+        preferred = str(media.get("file_name") or f"{media.get('type') or 'media'}")
+        source = download_telegram_tool_file(file_id, work, preferred)
+
+        if action in {"voice_download", "circle_download", "video_download"}:
+            _send_tool_document(chat_id, source, "⬇️ Файл · HolyGram")
+            return True, "Файл отправлен"
+
+        if action in {"voice_text", "voice_summary", "voice_translate"}:
+            ok, transcript = transcribe_voice_file(source)
+            if not ok:
+                return False, transcript
+            if action == "voice_text":
+                send_message(chat_id, "📝 <b>Расшифровка:</b>\n\n" + html_quote(transcript), parse_mode="HTML")
+                return True, "Готово"
+            if action == "voice_summary":
+                summary = summarize_text_local(transcript, 3)
+                send_message(chat_id, "🧾 <b>Кратко:</b>\n\n" + html_quote(summary), parse_mode="HTML")
+                return True, "Готово"
+            tr_ok, translated = translate_text_free(transcript)
+            if not tr_ok:
+                return False, translated
+            send_message(chat_id, "🌐 <b>Перевод:</b>\n\n" + html_quote(translated), parse_mode="HTML")
+            return True, "Готово"
+
+        if action == "voice_mp3":
+            output = work / "HolyGram_voice.mp3"
+            ok, error = _run_ffmpeg(["-i", str(source), "-vn", "-codec:a", "libmp3lame", "-q:a", "2", str(output)])
+            if not ok:
+                return False, error
+            _send_tool_audio(chat_id, output, "Voice", "HolyGram", "🎵 Конвертировано через HolyGram")
+            return True, "MP3 отправлен"
+
+        if action == "voice_norm":
+            output = work / "HolyGram_normalized.ogg"
+            ok, error = _run_ffmpeg(["-i", str(source), "-af", "loudnorm", "-c:a", "libopus", "-b:a", "64k", str(output)])
+            if not ok:
+                return False, error
+            _send_tool_voice(chat_id, output, "🔊 Громкость нормализована · HolyGram")
+            return True, "Готово"
+
+        if action == "voice_speed":
+            try:
+                speed = float(extra)
+            except ValueError:
+                return False, "Неверная скорость."
+            if speed not in {0.75, 1.25, 1.5, 2.0}:
+                return False, "Недоступная скорость."
+            output = work / f"HolyGram_{str(speed).replace('.', '_')}x.ogg"
+            ok, error = _run_ffmpeg(["-i", str(source), "-filter:a", f"atempo={speed}", "-c:a", "libopus", "-b:a", "64k", str(output)])
+            if not ok:
+                return False, error
+            _send_tool_voice(chat_id, output, f"🎚 Скорость {speed:g}× · HolyGram")
+            return True, "Готово"
+
+        if action in {"circle_audio", "video_audio"}:
+            output = work / "HolyGram_audio.mp3"
+            ok, error = _run_ffmpeg(["-i", str(source), "-vn", "-codec:a", "libmp3lame", "-q:a", "2", str(output)])
+            if not ok:
+                return False, error
+            _send_tool_audio(chat_id, output, "Extracted audio", "HolyGram", "🎵 Звук извлечён через HolyGram")
+            return True, "Аудио отправлено"
+
+        if action == "circle_video":
+            output = work / "HolyGram_circle.mp4"
+            ok, error = _run_ffmpeg(["-i", str(source), "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "aac", "-movflags", "+faststart", str(output)])
+            if not ok:
+                return False, error
+            _send_tool_video(chat_id, output, "⭕ Кружок как обычное видео · HolyGram")
+            return True, "Видео отправлено"
+
+        if action == "video_compress":
+            output = work / "HolyGram_compressed.mp4"
+            ok, error = _run_ffmpeg([
+                "-i", str(source),
+                "-vf", "scale='min(1280,iw)':-2",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "29",
+                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output),
+            ])
+            if not ok:
+                return False, error
+            _send_tool_video(chat_id, output, "🗜 Сжато через HolyGram")
+            return True, "Сжатое видео отправлено"
+
+        if action == "video_circle":
+            output = work / "HolyGram_video_note.mp4"
+            ok, error = _run_ffmpeg([
+                "-i", str(source),
+                "-t", "60",
+                "-vf", "crop='min(iw,ih)':'min(iw,ih)',scale=640:640",
+                "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0",
+                "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "24",
+                "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(output),
+            ])
+            if not ok:
+                return False, error
+            _send_tool_video_note(chat_id, output)
+            return True, "Кружок отправлен"
+        return False, "Неизвестное действие."
+    except Exception as exc:
+        log(f"Tool media action failed {action}: {type(exc).__name__}: {exc}")
+        return False, "Не удалось обработать файл."
+    finally:
+        _cleanup_tool_dir(work)
+
+
+def process_link_quick_action(user_id: int, chat_id: int, action: str, token: str) -> tuple[bool, str]:
+    payload = _quick_get(user_id, token)
+    if not payload or payload.get("kind") != "link":
+        return False, "Действие устарело. Отправь ссылку ещё раз."
+    url = str(payload.get("url") or "")
+    if action == "qr":
+        return send_qr_for_url(chat_id, url)
+    if action == "short":
+        ok, result = shorten_url(url)
+        if ok:
+            send_message(chat_id, f"🔗 <b>Короткая ссылка:</b>\n<code>{html_text(result)}</code>", parse_mode="HTML", reply_markup=kb([[btn("Скопировать", copy=result, emoji="view")]]))
+        return ok, result
+    if action == "check":
+        ok, result = resolve_url(url)
+        if ok:
+            changed = result != url
+            text_value = (
+                f"🛡 <b>Проверка ссылки</b>\n\n"
+                f"Исходная:\n<code>{html_text(url)}</code>\n\n"
+                f"{'После переходов:' if changed else 'Адрес:'}\n<code>{html_text(result)}</code>"
+            )
+            send_message(chat_id, text_value, parse_mode="HTML")
+        return ok, result
+    if action == "pretty":
+        ok, checked = safe_public_url(url)
+        if not ok:
+            return False, checked
+        send_message(
+            chat_id,
+            f"🔗 <b>Ссылка</b>\n\n<code>{html_text(url)}</code>",
+            parse_mode="HTML",
+            reply_markup=kb([[btn("Открыть", url=url, emoji="view"), btn("Скопировать", copy=url, emoji="view")]]),
+        )
+        return True, "Готово"
+    return False, "Неизвестное действие."
+
+
 # --- страницы меню ------------------------------------------------------------
 
 def bottom_navigation() -> list[list[dict]]:
