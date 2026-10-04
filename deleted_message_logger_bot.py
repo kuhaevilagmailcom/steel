@@ -3288,6 +3288,21 @@ def _ffmpeg_available() -> bool:
     return bool(shutil.which("ffmpeg"))
 
 
+def _stt_available() -> bool:
+    return bool(
+        (os.getenv("HOLYGRAM_STT_API_URL", "").strip() and os.getenv("HOLYGRAM_STT_API_KEY", "").strip())
+        or os.getenv("GROQ_API_KEY", "").strip()
+        or os.getenv("OPENAI_API_KEY", "").strip()
+    )
+
+
+def _tool_capabilities() -> dict[str, bool]:
+    return {
+        "ffmpeg": _ffmpeg_available(),
+        "stt": _stt_available(),
+    }
+
+
 def _run_ffmpeg(args: list[str], timeout: int = 180) -> tuple[bool, str]:
     binary = shutil.which("ffmpeg")
     if not binary:
@@ -3615,26 +3630,30 @@ def quick_actions_for_message(user_id: int, chat_id: int, message: dict) -> bool
         payload = {"kind": "media", "media": media}
         token = _quick_put(user_id, payload)
         if media_type in {"voice", "audio"}:
-            rows = [
-                [btn("📝 В текст", f"qa:v:text:{token}"), btn("🧾 Кратко", f"qa:v:sum:{token}")],
-                [btn("🌐 Перевести", f"qa:v:tr:{token}"), btn("🎚 Скорость", f"qa:v:speeds:{token}")],
-                [btn("🔊 Нормализовать", f"qa:v:norm:{token}"), btn("🎵 MP3", f"qa:v:mp3:{token}")],
-                [btn("⬇️ Скачать", f"qa:v:download:{token}")],
-            ]
+            caps = _tool_capabilities()
+            rows: list[list[dict]] = []
+            if caps["stt"]:
+                rows.append([btn("📝 В текст", f"qa:v:text:{token}"), btn("🧾 Кратко", f"qa:v:sum:{token}")])
+                rows.append([btn("🌐 Перевести", f"qa:v:tr:{token}")])
+            if caps["ffmpeg"]:
+                rows.append([btn("🎚 Скорость", f"qa:v:speeds:{token}"), btn("🔊 Нормализовать", f"qa:v:norm:{token}")])
+                rows.append([btn("🎵 MP3", f"qa:v:mp3:{token}")])
+            rows.append([btn("⬇️ Скачать", f"qa:v:download:{token}")])
             send_message(chat_id, "🎙 <b>Голосовое получено.</b> Что сделать?", parse_mode="HTML", reply_markup=kb(rows))
             return True
         if media_type == "video_note":
-            rows = [
-                [btn("🎬 Обычное видео", f"qa:c:video:{token}"), btn("🎵 Вытащить звук", f"qa:c:audio:{token}")],
-                [btn("⬇️ Скачать", f"qa:c:download:{token}")],
-            ]
+            rows: list[list[dict]] = []
+            if _ffmpeg_available():
+                rows.append([btn("🎬 Обычное видео", f"qa:c:video:{token}"), btn("🎵 Вытащить звук", f"qa:c:audio:{token}")])
+            rows.append([btn("⬇️ Скачать", f"qa:c:download:{token}")])
             send_message(chat_id, "⭕ <b>Кружок получен.</b> Что сделать?", parse_mode="HTML", reply_markup=kb(rows))
             return True
         if media_type == "video":
-            rows = [
-                [btn("🎵 Вытащить звук", f"qa:vid:audio:{token}"), btn("🗜 Сжать", f"qa:vid:compress:{token}")],
-                [btn("⭕ В кружок", f"qa:vid:circle:{token}"), btn("⬇️ Скачать", f"qa:vid:download:{token}")],
-            ]
+            rows: list[list[dict]] = []
+            if _ffmpeg_available():
+                rows.append([btn("🎵 Вытащить звук", f"qa:vid:audio:{token}"), btn("🗜 Сжать", f"qa:vid:compress:{token}")])
+                rows.append([btn("⭕ В кружок", f"qa:vid:circle:{token}")])
+            rows.append([btn("⬇️ Скачать", f"qa:vid:download:{token}")])
             send_message(chat_id, "🎬 <b>Видео получено.</b> Что сделать?", parse_mode="HTML", reply_markup=kb(rows))
             return True
 
@@ -3651,6 +3670,10 @@ def quick_actions_for_message(user_id: int, chat_id: int, message: dict) -> bool
 
 
 def process_media_quick_action(user_id: int, chat_id: int, action: str, token: str, extra: str = "") -> tuple[bool, str]:
+    if action in {"voice_text", "voice_summary", "voice_translate"} and not _stt_available():
+        return False, "Эта функция отключена."
+    if action in {"voice_mp3", "voice_norm", "voice_speed", "circle_audio", "circle_video", "video_audio", "video_compress", "video_circle"} and not _ffmpeg_available():
+        return False, "Эта функция отключена."
     payload = _quick_get(user_id, token)
     if not payload or payload.get("kind") != "media":
         return False, "Действие устарело. Отправь файл ещё раз."
@@ -3876,30 +3899,37 @@ def page_hub_tools(user_id: int) -> tuple[str, dict]:
 
 
 def page_tools_voice() -> tuple[str, dict]:
-    return (
+    caps = _tool_capabilities()
+    available = ["• скачать исходный файл"]
+    if caps["stt"]:
+        available[:0] = ["• расшифровка в текст", "• краткое содержание", "• перевод расшифровки"]
+    if caps["ffmpeg"]:
+        available[:0] = ["• скорость 0.75× / 1.25× / 1.5× / 2×", "• нормализация громкости", "• MP3"]
+    text = (
         "🎙 <b>Голосовые</b>\n\n"
-        "Просто отправь голосовое сообщение. HolyGram сразу предложит:\n"
-        "• расшифровку в текст;\n"
-        "• краткое содержание;\n"
-        "• перевод;\n"
-        "• скорость 0.75× / 1.25× / 1.5× / 2×;\n"
-        "• нормализацию громкости;\n"
-        "• MP3 и скачивание файла.",
-        kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]]),
+        "Отправь голосовое — HolyGram покажет только те действия, которые реально доступны на сервере.\n\n"
+        + "\n".join(available)
     )
+    return text, kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]])
+
 
 
 def page_tools_circles() -> tuple[str, dict]:
+    if _ffmpeg_available():
+        body = (
+            "Отправь кружок — можно скачать его обычным видео или вытащить звук.\n\n"
+            "Отправь обычное видео — можно вытащить звук, сжать или превратить в кружок."
+        )
+    else:
+        body = (
+            "На сервере сейчас недоступна обработка видео, поэтому HolyGram не показывает неработающие кнопки.\n\n"
+            "Кружки и видео можно скачать исходным файлом."
+        )
     return (
-        "⭕ <b>Кружки и видео</b>\n\n"
-        "Отправь кружок — можно скачать его обычным видео или вытащить звук.\n\n"
-        "Отправь обычное видео — можно:\n"
-        "• вытащить звук;\n"
-        "• сжать видео;\n"
-        "• превратить в квадратный видеокружок;\n"
-        "• скачать исходный файл.",
+        "⭕ <b>Кружки и видео</b>\n\n" + body,
         kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]]),
     )
+
 
 
 def page_tools_text() -> tuple[str, dict]:
@@ -3933,13 +3963,23 @@ def page_tools_links() -> tuple[str, dict]:
 
 
 def page_tools_quick() -> tuple[str, dict]:
+    caps = _tool_capabilities()
+    lines = [
+        "🔗 Ссылка → QR / Сократить / Проверить / Оформить",
+        "🎙 Голосовое → Скачать",
+        "⭕ Кружок → Скачать",
+        "🎬 Видео → Скачать",
+    ]
+    if caps["stt"]:
+        lines[1] = "🎙 Голосовое → В текст / Кратко / Перевести / Скачать"
+    if caps["ffmpeg"]:
+        lines[1] = lines[1].replace(" / Скачать", " / Скорость / MP3 / Скачать")
+        lines[2] = "⭕ Кружок → Видео / Звук / Скачать"
+        lines[3] = "🎬 Видео → Звук / Сжать / В кружок / Скачать"
     return (
         "🔥 <b>Быстрые действия</b>\n\n"
-        "Ничего включать не нужно — они работают автоматически.\n\n"
-        "🎙 Голосовое → В текст / Кратко / Перевести / Скорость / MP3\n"
-        "⭕ Кружок → Видео / Звук / Скачать\n"
-        "🎬 Видео → Звук / Сжать / В кружок / Скачать\n"
-        "🔗 Ссылка → QR / Сократить / Проверить / Оформить",
+        "HolyGram автоматически показывает только рабочие действия — кнопок, которым нужна ненастроенная интеграция, больше нет.\n\n"
+        + "\n".join(lines),
         kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]]),
     )
 
