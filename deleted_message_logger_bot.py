@@ -2919,13 +2919,18 @@ def _music_cache_cleanup() -> None:
             MUSIC_RESULT_CACHE.pop(key, None)
 
 
-def search_music_tracks(query: str, limit: int = 6) -> list[dict]:
+MUSIC_RESULTS_PAGE_SIZE = 6
+MUSIC_SEARCH_LIMIT = 30
+
+
+def search_music_tracks(query: str, limit: int = MUSIC_SEARCH_LIMIT) -> list[dict]:
     query = re.sub(r"\s+", " ", str(query or "").strip())[:120]
     if len(query) < 2:
         return []
 
     _music_cache_cleanup()
-    cache_key = query.casefold()
+    limit = max(1, min(int(limit), 50))
+    cache_key = f"{query.casefold()}:{limit}"
     cached = MUSIC_SEARCH_CACHE.get(cache_key)
     if cached and cached[0] >= time.time():
         return [dict(item) for item in cached[1]]
@@ -2933,7 +2938,7 @@ def search_music_tracks(query: str, limit: int = 6) -> list[dict]:
     params = (
         "term=" + quote(query, safe="")
         + "&country=US&media=music&entity=song"
-        + f"&limit={max(1, min(int(limit), 10))}&explicit=No"
+        + f"&limit={limit}&explicit=No"
     )
     request = Request(
         "https://itunes.apple.com/search?" + params,
@@ -3001,7 +3006,13 @@ def _music_cached(user_id: int, token: str) -> tuple[str, list[dict]] | None:
     return str(cached[2]), [dict(item) for item in cached[3]]
 
 
-def page_music_results(user_id: int, query: str, results: list[dict], token: str | None = None) -> tuple[str, dict]:
+def page_music_results(
+    user_id: int,
+    query: str,
+    results: list[dict],
+    token: str | None = None,
+    page_number: int = 0,
+) -> tuple[str, dict]:
     token = token or _music_token(user_id, query, results)
     if not results:
         return (
@@ -3009,36 +3020,67 @@ def page_music_results(user_id: int, query: str, results: list[dict], token: str
             f"Запрос: <code>{html_text(query)}</code>\n\n"
             "Попробуй написать название немного иначе или добавь исполнителя.",
             kb([
-                [btn("Новый поиск", "music:prompt", emoji="refresh", style="primary")],
+                [btn("🔎 Новый поиск", "music:prompt", style="primary")],
                 [btn("Главное меню", "home", emoji="home")],
             ]),
         )
 
-    lines = []
+    page_count = max(1, (len(results) + MUSIC_RESULTS_PAGE_SIZE - 1) // MUSIC_RESULTS_PAGE_SIZE)
+    page_number = min(max(0, int(page_number)), page_count - 1)
+    start_index = page_number * MUSIC_RESULTS_PAGE_SIZE
+    page_items = results[start_index : start_index + MUSIC_RESULTS_PAGE_SIZE]
+
     rows: list[list[dict]] = []
-    for index, item in enumerate(results, start=1):
+    for local_index, item in enumerate(page_items, start=1):
+        global_index = start_index + local_index - 1
         title = f"{item['artist']} — {item['track']}"
-        lines.append(
-            f"<b>{index}.</b> {html_text(title)}"
-            + (f"\n   {html_text(item['album'])}" if item.get("album") else "")
-        )
-        button_label = title if len(title) <= 42 else title[:39] + "…"
-        rows.append([btn(f"🎧 {index}. {button_label}", f"music:send:{token}:{index - 1}", emoji="view")])
+        if item.get("album"):
+            title += f" · {item['album']}"
+        button_label = title if len(title) <= 52 else title[:49] + "…"
+        rows.append([
+            btn(
+                f"🎧 {button_label}",
+                f"music:send:{token}:{global_index}:{page_number}",
+                emoji="view",
+            )
+        ])
+
+    navigation: list[dict] = []
+    if page_number > 0:
+        navigation.append(btn("← Назад", f"music:results:{token}:{page_number - 1}", emoji="back"))
+    if page_number + 1 < page_count:
+        navigation.append(btn("Дальше →", f"music:results:{token}:{page_number + 1}", emoji="view"))
+    if navigation:
+        rows.append(navigation)
 
     rows.extend([
-        [btn("Новый поиск", "music:prompt", emoji="refresh", style="primary")],
+        [btn("🔎 Новый поиск", "music:prompt", style="primary")],
         [btn("Главное меню", "home", emoji="home")],
     ])
-    return (
+
+    text = (
         "🎵 <b>Результаты поиска</b>\n"
-        f"Запрос: <code>{html_text(query)}</code>\n\n"
-        + "\n\n".join(lines)
-        + "\n\nНажми на трек — бот отправит его аудио-превью прямо сообщением.",
-        kb(rows),
+        f"Запрос: <code>{html_text(query)}</code>\n"
+        f"Найдено: <b>{len(results)}</b> · страница <b>{page_number + 1}/{page_count}</b>\n\n"
+        "Выбери трек кнопкой ниже — бот отправит аудио прямо в чат."
     )
+    return text, kb(rows)
 
 
-def send_music_preview_audio(user_id: int, chat_id: int, token: str, index: int) -> tuple[bool, str]:
+def _safe_music_filename(value: str) -> str:
+    value = re.sub(r'[\\/:*?"<>|]+', " ", str(value or ""))
+    value = re.sub(r"\s+", " ", value).strip(" .")
+    return (value[:110] or "track")
+
+
+
+def send_music_preview_audio(
+    user_id: int,
+    chat_id: int,
+    token: str,
+    index: int,
+    page_number: int = 0,
+) -> tuple[bool, str]:
     cached = _music_cached(user_id, token)
     if not cached:
         return False, "Поиск устарел. Выполни новый поиск."
@@ -3050,30 +3092,21 @@ def send_music_preview_audio(user_id: int, chat_id: int, token: str, index: int)
     item = results[index]
     preview_url = str(item.get("preview_url") or "").strip()
     if not preview_url.startswith(("https://", "http://")):
-        return False, "Для этого трека аудио-превью недоступно."
+        return False, "Для этого трека аудио недоступно."
 
-    title = str(item.get("track") or "Трек")[:64]
-    performer = str(item.get("artist") or "Исполнитель")[:64]
-    caption = "🎵 Найдено через поиск музыки"
+    title = str(item.get("track") or "Трек").strip()[:64]
+    performer = str(item.get("artist") or "Исполнитель").strip()[:64]
+    caption = "🎵 Найдено через HolyGram"
 
-    payload = {
-        "chat_id": chat_id,
-        "audio": preview_url,
-        "title": title,
-        "performer": performer,
-        "caption": caption,
-    }
-    try:
-        telegram_call("sendAudio", payload, timeout=45)
-        return True, "Аудио отправлено"
-    except TelegramApiError as direct_exc:
-        log(f"Music preview URL send failed for {user_id}: {direct_exc}")
-
-    # Fallback: download the licensed preview and upload it to Telegram.
     suffix = Path(preview_url.split("?", 1)[0]).suffix.lower()
     if suffix not in {".m4a", ".mp3", ".aac"}:
         suffix = ".m4a"
-    temp_path = DATA_DIR / f"music_preview_{user_id}_{uuid.uuid4().hex[:10]}{suffix}"
+
+    temp_dir = DATA_DIR / "music_tmp" / uuid.uuid4().hex
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    filename = _safe_music_filename(f"{performer} - {title}") + suffix
+    temp_path = temp_dir / filename
+
     try:
         request = Request(preview_url, headers={"User-Agent": "HolyGram-MusicSearch/1.0"})
         total = 0
@@ -3086,6 +3119,12 @@ def send_music_preview_audio(user_id: int, chat_id: int, token: str, index: int)
                 if total > 15 * 1024 * 1024:
                     raise ValueError("preview too large")
                 output.write(chunk)
+
+        result_markup = kb([[
+            btn("← К результатам", f"music:results:{token}:{max(0, page_number)}", emoji="back"),
+            btn("🔎 Новый поиск", "music:prompt", emoji="refresh"),
+        ]])
+
         telegram_multipart_call(
             "sendAudio",
             {
@@ -3093,6 +3132,7 @@ def send_music_preview_audio(user_id: int, chat_id: int, token: str, index: int)
                 "title": title,
                 "performer": performer,
                 "caption": caption,
+                "reply_markup": json.dumps(result_markup, ensure_ascii=False),
             },
             {"audio": temp_path},
             timeout=60,
@@ -3104,6 +3144,7 @@ def send_music_preview_audio(user_id: int, chat_id: int, token: str, index: int)
     finally:
         try:
             temp_path.unlink(missing_ok=True)
+            temp_dir.rmdir()
         except Exception:
             pass
 
@@ -3115,9 +3156,9 @@ def send_music_search_results(user_id: int, chat_id: int, query: str) -> None:
         send_message(chat_id, "Напиши название песни или исполнителя.")
         return
     send_message(chat_id, f"🔎 Ищу: <b>{html_text(query)}</b>", parse_mode="HTML")
-    results = search_music_tracks(query)
+    results = search_music_tracks(query, MUSIC_SEARCH_LIMIT)
     token = _music_token(user_id, query, results)
-    text, markup = page_music_results(user_id, query, results, token)
+    text, markup = page_music_results(user_id, query, results, token, 0)
     send_menu_page(user_id, chat_id, text, markup, use_photo=False)
 
 
@@ -3141,7 +3182,7 @@ def page_home(user_id: int) -> tuple[str, dict]:
     text = (
         "🎵 <b>Поиск музыки</b>\n\n"
         "Напиши мне <b>название песни</b> или <b>исполнителя</b> — "
-        "я найду подходящие треки и отправлю аудио прямо в Telegram.\n\n"
+        "я найду подходящие треки, покажу их страницами и отправлю аудио прямо в Telegram.\n\n"
         "Можно просто отправить запрос сообщением, например:\n"
         "<code>Imagine Dragons Believer</code>"
     )
@@ -3153,7 +3194,8 @@ def page_music_help(user_id: int) -> tuple[str, dict]:
         "🎧 <b>Как искать музыку</b>\n\n"
         "1. Отправь название трека или исполнителя.\n"
         "2. Выбери нужный трек из результатов.\n"
-        "3. Бот отправит аудиофайл-превью прямо в чат.\n\n"
+        "3. Бот отправит аудиофайл с нормальным названием прямо в чат.\n"
+        "4. Если результатов много — листай страницы кнопками «Назад / Дальше».\n\n"
         "Чем точнее запрос, тем точнее результат."
     )
     return text, kb([
@@ -5873,29 +5915,37 @@ def handle_callback_query(query: dict) -> None:
     elif data == "music:help":
         page = page_music_help(user_id)
     elif data.startswith("music:results:"):
-        token = data.split(":", 2)[2]
+        parts = data.split(":")
+        token = parts[2] if len(parts) > 2 else ""
+        try:
+            page_number = int(parts[3]) if len(parts) > 3 else 0
+        except ValueError:
+            page_number = 0
         cached = _music_cached(user_id, token)
         if not cached:
             page = (
                 "Поиск устарел. Выполни новый поиск.",
-                kb([[btn("Новый поиск", "music:prompt", emoji="refresh", style="primary")], [btn("Главное меню", "home", emoji="home")]]),
+                kb([[btn("🔎 Новый поиск", "music:prompt", style="primary")], [btn("Главное меню", "home", emoji="home")]]),
             )
         else:
             query, results = cached
-            page = page_music_results(user_id, query, results, token)
+            page = page_music_results(user_id, query, results, token, page_number)
     elif data.startswith("music:send:"):
         parts = data.split(":")
-        if len(parts) != 4:
+        if len(parts) < 4:
             answer_callback(query_id, text="Трек не найден", show_alert=True)
             return
         token = parts[2]
         try:
             index = int(parts[3])
+            page_number = int(parts[4]) if len(parts) > 4 else 0
         except ValueError:
             answer_callback(query_id, text="Трек не найден", show_alert=True)
             return
-        ok, result_text = send_music_preview_audio(user_id, chat_id, token, index)
-        answer_callback(query_id, text=result_text, show_alert=not ok)
+        answer_callback(query_id, text="Отправляю аудио…")
+        ok, result_text = send_music_preview_audio(user_id, chat_id, token, index, page_number)
+        if not ok:
+            send_message(chat_id, result_text)
         return
     elif data == "buy" or data in {"grant", "prices", "promos", "expiring"} or data.startswith(("buy:", "gift:", "promo:", "sbp:check:", "price:", "useradd:")):
         page = page_buy(user_id)
