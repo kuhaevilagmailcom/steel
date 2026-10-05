@@ -2,7 +2,7 @@
   const tg = window.Telegram?.WebApp;
   if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor?.('#000000'); tg.setBackgroundColor?.('#000000'); }
 
-  const state = { users: [], user: null, chats: [], chat: null, filter: 'all', nextBefore: null, loadingMore: false, messages: new Map(), editingMessage: null };
+  const state = { users: [], user: null, chats: [], chat: null, filter: 'all', nextBefore: null, loadingMore: false, messages: new Map(), editingMessage: null, globalSearchQuery: '', searchResults: [], searchOffset: 0, searchHasMore: false, searchLoading: false };
   const $ = (id) => document.getElementById(id);
   const app = $('app');
   const qs = new URLSearchParams(location.search);
@@ -149,7 +149,7 @@
     $('selectedUserMeta').textContent = `${state.user.username ? '@' + state.user.username + ' · ' : ''}${state.user.chat_count} чат. · ${state.user.message_count} сообщ.`;
     setAvatar($('selectedUserAvatar'), state.user);
     setAvatar($('accountAvatar'), state.user);
-    $('chatSearch').disabled = false; $('chatSearch').value = '';
+    $('chatSearch').disabled = false; $('chatSearch').value = ''; state.globalSearchQuery = ''; state.searchResults = []; state.searchOffset = 0; state.searchHasMore = false;
     app.dataset.view = 'chats';
     await loadChats();
   }
@@ -162,6 +162,127 @@
       state.chats = data.items;
       renderChats(query);
     } catch (error) { $('chatsList').className = 'list empty-state'; $('chatsList').innerHTML = empty('!', 'Не удалось открыть чаты', error.message); }
+  }
+
+  async function searchAllMessages(query, append = false) {
+    const normalized = String(query || '').trim();
+    state.globalSearchQuery = normalized;
+
+    if (!normalized) {
+      state.searchResults = [];
+      state.searchOffset = 0;
+      state.searchHasMore = false;
+      await loadChats();
+      return;
+    }
+    if (state.searchLoading) return;
+
+    const requestedQuery = normalized;
+    const offset = append ? state.searchOffset : 0;
+    if (!append) {
+      state.searchResults = [];
+      state.searchOffset = 0;
+      $('chatsList').className = 'list';
+      $('chatsList').innerHTML = skeleton(4);
+    }
+
+    state.searchLoading = true;
+    try {
+      const data = await api(`/api/messages/search?q=${encodeURIComponent(requestedQuery)}&limit=80&offset=${offset}`);
+      if (state.globalSearchQuery !== requestedQuery) return;
+      state.searchResults = append ? state.searchResults.concat(data.items || []) : (data.items || []);
+      state.searchOffset = state.searchResults.length;
+      state.searchHasMore = Boolean(data.has_more);
+      renderGlobalSearchResults(requestedQuery);
+    } catch (error) {
+      if (state.globalSearchQuery !== requestedQuery) return;
+      $('chatsList').className = 'list empty-state';
+      $('chatsList').innerHTML = empty('!', 'Не удалось выполнить поиск', error.message);
+    } finally {
+      state.searchLoading = false;
+    }
+  }
+
+  function renderGlobalSearchResults(query) {
+    const items = state.searchResults;
+    if (!items.length) {
+      $('chatsList').className = 'list empty-state';
+      $('chatsList').innerHTML = empty('⌕', 'Сообщений не найдено', 'Поиск выполнен по чатам всех пользователей');
+      return;
+    }
+
+    $('chatsList').className = 'list';
+    $('chatsList').innerHTML = items.map((item, index) => {
+      const preview = item.text || (item.media_type ? `[${item.media_type}]` : 'Сообщение без текста');
+      const direction = item.outgoing ? '→' : '←';
+      return `
+        <button class="list-item global-search-result" data-search-result="${index}" type="button">
+          ${avatarHtml({id: item.user.id, name: item.user.name})}
+          <span class="list-body">
+            <span class="list-line">
+              <span class="list-title">${escapeHtml(item.user.name)} · ${escapeHtml(cleanChatName(item.chat_name))}</span>
+              <span class="list-time">${formatTime(item.updated_at, true)}</span>
+            </span>
+            <span class="list-preview">
+              <span>${direction} ${escapeHtml(item.author)}: ${escapeHtml(preview)}</span>
+              <span>#${item.message_id}</span>
+            </span>
+          </span>
+        </button>`;
+    }).join('') + (state.searchHasMore ? '<button id="loadMoreSearch" class="global-search-more" type="button">Показать ещё</button>' : '');
+
+    document.querySelectorAll('[data-search-result]').forEach(button => button.addEventListener('click', () => openGlobalSearchResult(Number(button.dataset.searchResult))));
+    $('loadMoreSearch')?.addEventListener('click', () => searchAllMessages(query, true));
+  }
+
+  async function openGlobalSearchResult(index) {
+    const item = state.searchResults[index];
+    if (!item) return;
+
+    try {
+      let user = state.users.find(candidate => candidate.id === item.user.id);
+      if (!user) {
+        const users = await api(`/api/users?q=${encodeURIComponent(String(item.user.id))}&limit=5`);
+        user = (users.items || []).find(candidate => candidate.id === item.user.id);
+        if (user) state.users.push(user);
+      }
+      if (!user) {
+        user = {
+          id: item.user.id,
+          name: item.user.name,
+          username: item.user.username || '',
+          updated_at: item.updated_at,
+          chat_count: 0,
+          message_count: 0,
+          pinned: false
+        };
+        state.users.push(user);
+      }
+
+      await selectUser(user.id);
+
+      let targetChat = state.chats.find(chat => chat.id === item.chat_id);
+      if (!targetChat) {
+        const data = await api(`/api/users/${user.id}/chats?q=${encodeURIComponent(String(item.chat_id))}`);
+        targetChat = (data.items || []).find(chat => chat.id === item.chat_id);
+        if (targetChat) {
+          state.chats = [targetChat, ...state.chats.filter(chat => chat.id !== targetChat.id)];
+          renderChats('');
+        }
+      }
+
+      if (!targetChat) {
+        toast('Чат найденного сообщения недоступен');
+        return;
+      }
+
+      $('chatSearch').value = '';
+      state.globalSearchQuery = '';
+      state.searchResults = [];
+      await selectChat(item.chat_id, { before: Number(item.updated_at || 0) + 1, focus: item.message_id });
+    } catch (error) {
+      toast(error.message || 'Не удалось открыть найденное сообщение');
+    }
   }
 
   function renderChats(query = '') {
@@ -177,7 +298,7 @@
       document.querySelectorAll('[data-chat]').forEach(button => button.addEventListener('click', () => selectChat(Number(button.dataset.chat))));
   }
 
-  async function selectChat(id) {
+  async function selectChat(id, options = {}) {
     state.chat = state.chats.find(item => item.id === id);
     if (!state.chat) return;
     document.querySelectorAll('[data-chat]').forEach(el => el.classList.toggle('active', Number(el.dataset.chat) === id));
@@ -186,7 +307,7 @@
     setAvatar($('chatAvatar'), {id: state.chat.avatar_id, name: cleanChatName(state.chat.name)});
     $('refreshButton').disabled = false;
     app.dataset.view = 'messages';
-    await loadMessages(false);
+    await loadMessages(false, Number(options.before || 0), Number(options.focus || 0));
   }
 
   function mediaMarkup(media) {
@@ -347,18 +468,30 @@
     });
   }
 
-  async function loadMessages(older) {
+  async function loadMessages(older, beforeOverride = 0, focusMessageId = 0) {
     if (!state.user || !state.chat || (older && (!state.nextBefore || state.loadingMore))) return;
     const scroll = $('messageScroll');
     if (!older) { scroll.className = 'message-scroll'; scroll.innerHTML = skeleton(4); }
     state.loadingMore = true;
     try {
-      const before = older ? `&before=${state.nextBefore}` : '';
+      const before = older ? `&before=${state.nextBefore}` : (beforeOverride ? `&before=${beforeOverride}` : '');
       const data = await api(`/api/users/${state.user.id}/chats/${state.chat.id}/messages?limit=60${before}`);
       state.nextBefore = data.next_before;
       if (!older && !data.items.length) { scroll.className = 'message-scroll empty-state'; scroll.innerHTML = empty('…', 'Сообщений нет', 'В этом чате пока ничего не сохранено'); return; }
       renderMessages(data.items, older);
       state.chat.unread = 0;
+      if (!older && focusMessageId) {
+        requestAnimationFrame(() => {
+          const row = $('messageScroll').querySelector(`[data-message="${focusMessageId}"]`);
+          if (row) {
+            row.classList.add('search-focus');
+            row.scrollIntoView({block: 'center', behavior: 'smooth'});
+            setTimeout(() => row.classList.remove('search-focus'), 2600);
+          } else {
+            toast('Чат открыт, но сообщение глубже в истории');
+          }
+        });
+      }
     } catch (error) { if (!older) { scroll.className = 'message-scroll empty-state'; scroll.innerHTML = empty('!', 'Не удалось открыть сообщения', error.message); } else toast(error.message); }
     finally { state.loadingMore = false; }
   }
@@ -370,11 +503,11 @@
   }
 
   $('userSearch').addEventListener('input', debounce(event => loadUsers(event.target.value)));
-  $('chatSearch').addEventListener('input', debounce(event => loadChats(event.target.value)));
+  $('chatSearch').addEventListener('input', debounce(event => { const query = event.target.value.trim(); if (query) searchAllMessages(query); else { state.globalSearchQuery = ''; state.searchResults = []; state.searchOffset = 0; state.searchHasMore = false; loadChats(); } }));
   $('accountButton').addEventListener('click', () => toggleAccounts(true));
   $('closeAccounts').addEventListener('click', () => toggleAccounts(false));
   $('accountScrim').addEventListener('click', () => toggleAccounts(false));
-  $('refreshChatsButton').addEventListener('click', () => { if (state.user) loadChats($('chatSearch').value); });
+  $('refreshChatsButton').addEventListener('click', () => { const query = $('chatSearch').value.trim(); if (query) searchAllMessages(query); else if (state.user) loadChats(); });
   $('conversationSearch').addEventListener('click', () => { $('messageSearchBar').classList.toggle('hidden'); if (!$('messageSearchBar').classList.contains('hidden')) $('messageSearch').focus(); });
   $('closeMessageSearch').addEventListener('click', () => { $('messageSearchBar').classList.add('hidden'); $('messageSearch').value = ''; document.querySelectorAll('.message-row').forEach(row => row.classList.remove('hidden')); });
   $('messageSearch').addEventListener('input', event => { const q = event.target.value.trim().toLocaleLowerCase('ru'); document.querySelectorAll('.message-row').forEach(row => row.classList.toggle('hidden', Boolean(q) && !row.textContent.toLocaleLowerCase('ru').includes(q))); });
