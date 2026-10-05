@@ -175,8 +175,6 @@
       await loadChats();
       return;
     }
-    if (state.searchLoading) return;
-
     const requestedQuery = normalized;
     const offset = append ? state.searchOffset : 0;
     if (!append) {
