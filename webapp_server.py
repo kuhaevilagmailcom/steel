@@ -219,6 +219,135 @@ def list_chats(bot, admin_id: int, target_id: int, query: str = "", limit: int =
     ]
 
 
+def search_messages(bot, admin_id: int, query: str, limit: int = 60, offset: int = 0) -> dict:
+    """Search stored messages across every visible HolyGram account and chat."""
+    if not bot.can_view_user_chats(admin_id):
+        raise PermissionError("Нет доступа к поиску сообщений")
+
+    query = str(query or "").strip()
+    limit = min(MAX_PAGE_SIZE, max(1, limit))
+    offset = max(0, offset)
+    if not query:
+        return {"items": [], "has_more": False, "offset": offset}
+
+    escaped = query.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    needle = f"%{escaped}%"
+    wanted = offset + limit + 1
+    raw_offset = 0
+    batch_size = min(500, max(100, limit * 4))
+    visible: list[sqlite3.Row] = []
+    seen: set[tuple[int, str, int, int]] = set()
+
+    with sqlite3.connect(bot.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.create_function("casefold_text", 1, lambda value: str(value or "").casefold())
+        while len(visible) < wanted:
+            rows = conn.execute(
+                """
+                SELECT
+                    CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END AS target_id,
+                    m.context,m.chat_id,m.message_id,m.user_id,m.author,m.content,m.media_type,
+                    m.created_at,m.updated_at,m.deleted_at,
+                    u.first_name,u.last_name,u.username,
+                    COALESCE(
+                        (
+                            SELECT m2.author
+                            FROM messages AS m2
+                            WHERE m2.context=m.context
+                              AND m2.chat_id=m.chat_id
+                              AND m2.user_id IS NOT NULL
+                              AND m2.user_id != CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END
+                              AND trim(COALESCE(m2.author,'')) != ''
+                            ORDER BY m2.updated_at DESC,m2.message_id DESC
+                            LIMIT 1
+                        ),
+                        m.author
+                    ) AS peer
+                FROM messages AS m
+                LEFT JOIN chat_owners AS co
+                  ON m.context='regular' AND co.chat_id=m.chat_id
+                LEFT JOIN business_connections AS bc
+                  ON m.context='business:' || bc.connection_id
+                LEFT JOIN users AS u
+                  ON u.user_id=CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END
+                WHERE CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END IS NOT NULL
+                  AND CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END != 7732538826
+                  AND casefold_text(
+                        COALESCE(m.content,'') || ' ' ||
+                        COALESCE(m.author,'') || ' ' ||
+                        COALESCE(m.reply_to_content,'') || ' ' ||
+                        COALESCE(u.first_name,'') || ' ' ||
+                        COALESCE(u.last_name,'') || ' ' ||
+                        COALESCE(u.username,'') || ' ' ||
+                        CAST(m.chat_id AS TEXT)
+                      ) LIKE ? ESCAPE '\\'
+                ORDER BY m.updated_at DESC,m.message_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (needle, batch_size, raw_offset),
+            ).fetchall()
+            if not rows:
+                break
+            raw_offset += len(rows)
+
+            for row in rows:
+                target_id = _int(row["target_id"])
+                if not target_id or bot.user_chats_are_hidden(target_id):
+                    continue
+                key = (
+                    target_id,
+                    str(row["context"] or ""),
+                    _int(row["chat_id"]),
+                    _int(row["message_id"]),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                visible.append(row)
+                if len(visible) >= wanted:
+                    break
+
+            if len(rows) < batch_size:
+                break
+
+    page = visible[offset:offset + limit]
+    items: list[dict] = []
+    for row in page:
+        target_id = _int(row["target_id"])
+        name = " ".join(
+            part for part in (str(row["first_name"] or "").strip(), str(row["last_name"] or "").strip()) if part
+        ).strip()
+        username = str(row["username"] or "").strip()
+        if target_id == 7732538826:
+            name = "Святоша"
+        items.append(
+            {
+                "user": {
+                    "id": target_id,
+                    "name": name or (f"@{username}" if username else f"ID {target_id}"),
+                    "username": username,
+                },
+                "chat_id": _int(row["chat_id"]),
+                "chat_name": _plain_author(row["peer"], "Диалог"),
+                "message_id": _int(row["message_id"]),
+                "author_id": _int(row["user_id"]),
+                "author": _plain_author(row["author"]),
+                "outgoing": _int(row["user_id"]) == target_id,
+                "text": str(row["content"] or ""),
+                "media_type": str(row["media_type"] or ""),
+                "deleted": bool(row["deleted_at"]),
+                "created_at": _int(row["created_at"]),
+                "updated_at": _int(row["updated_at"]),
+            }
+        )
+
+    return {
+        "items": items,
+        "has_more": len(visible) > offset + limit,
+        "offset": offset,
+    }
+
+
 def list_messages(bot, admin_id: int, target_id: int, chat_id: int, before: int = 0, limit: int = 50) -> dict:
     if not bot.can_view_user_chats(admin_id):
         raise PermissionError("Нет доступа к чатам")
@@ -781,6 +910,18 @@ def make_handler(bot):
                             admin_id,
                             str(query.get("q", [""])[0]),
                             _int(query.get("limit", [50])[0], 50),
+                            _int(query.get("offset", [0])[0]),
+                        ),
+                    )
+                elif path == "/api/messages/search":
+                    search_query = str(query.get("q", [""])[0])
+                    self._send_json(
+                        HTTPStatus.OK,
+                        search_messages(
+                            bot,
+                            admin_id,
+                            search_query,
+                            _int(query.get("limit", [60])[0], 60),
                             _int(query.get("offset", [0])[0]),
                         ),
                     )
