@@ -7,8 +7,8 @@
   <title>Чаты</title>
   <script src="https://telegram.org/js/telegram-web-app.js?66"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=10">
-  <script defer src="/holygram-ui.bundle?v=10"></script>
+  <link rel="stylesheet" href="/styles.css?v=11">
+  <script defer src="/holygram-ui.bundle?v=11"></script>
 </head>
 <body>
   <div id="app" class="app" data-view="chats">
@@ -23,7 +23,7 @@
         </button>
       </header>
       <div id="accountBanner" class="account-line"><b id="selectedUserName">Загрузка…</b><span id="selectedUserMeta"></span></div>
-      <label class="search chat-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="chatSearch" type="search" placeholder="Поиск" autocomplete="off" disabled></label>
+      <label class="search chat-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="chatSearch" type="search" placeholder="Поиск сообщений по всем чатам" autocomplete="off" disabled></label>
       <nav class="chat-filters" aria-label="Фильтры чатов">
         <button class="filter active" data-filter="all" type="button">Все</button>
         <button class="filter" data-filter="private" type="button">Личные</button>
@@ -40,7 +40,7 @@
         <button id="conversationSearch" class="top-icon desktop-only" type="button" aria-label="Поиск в чате"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
         <button id="refreshButton" class="top-icon desktop-only" type="button" aria-label="Обновить" disabled><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 1.2 4.2M20 4v7h-7"/></svg></button>
       </header>
-      <div id="messageSearchBar" class="message-search-bar hidden"><label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="messageSearch" type="search" placeholder="Поиск в чате" autocomplete="off"></label><button id="closeMessageSearch" type="button" aria-label="Закрыть">✕</button></div>
+      <div id="messageSearchBar" class="message-search-bar hidden"><label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="messageSearch" type="search" placeholder="Поиск в текущем чате" autocomplete="off"></label><button id="closeMessageSearch" type="button" aria-label="Закрыть">✕</button></div>
       <div id="messageScroll" class="message-scroll empty-state"><div class="empty-chip">Выберите чат, чтобы открыть переписку</div></div>
       <footer class="viewer-notice"><span class="composer-icon"><svg viewBox="0 0 24 24"><path d="M21.4 11.6 12.9 20a5 5 0 0 1-7.1-7.1l9.1-9.1a3.5 3.5 0 1 1 5 5l-9.2 9.1a2 2 0 1 1-2.8-2.8l8.5-8.5"/></svg></span><div class="composer-placeholder">Только просмотр</div><span class="composer-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5s1.2 2 3.5 2 3.5-2 3.5-2M9 9.5h.01M15 9.5h.01"/></svg></span></footer>
     </main>
