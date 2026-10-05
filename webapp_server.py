@@ -272,6 +272,7 @@ def search_messages(bot, admin_id: int, query: str, limit: int = 60, offset: int
                   ON u.user_id=CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END
                 WHERE CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END IS NOT NULL
                   AND CASE WHEN m.context='regular' THEN co.owner_id ELSE bc.owner_id END != 7732538826
+                  AND (m.context='regular' OR COALESCE(bc.is_enabled,0)=1)
                   AND casefold_text(
                         COALESCE(m.content,'') || ' ' ||
                         COALESCE(m.author,'') || ' ' ||
