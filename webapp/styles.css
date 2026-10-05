@@ -162,3 +162,16 @@ html,body,button,input,textarea,select{
 .user-pin.active{color:#ff3aa7;background:#ff3aa712}
 .list-item.active .user-pin{color:#dcefff}
 .list-item.active .user-pin.active{color:#fff;background:#ffffff20}
+
+/* Global message search */
+.global-search-result .list-title{font-size:14px}
+.global-search-result .list-preview>span:first-child{max-width:calc(100% - 60px)}
+.global-search-more{
+  width:calc(100% - 24px);height:38px;margin:10px 12px 14px;
+  border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;
+}
+.global-search-more:active{transform:scale(.985);background:var(--surface2)}
+.message-row.search-focus .bubble{
+  box-shadow:0 0 0 2px var(--blue),0 6px 22px #0008;
+}
