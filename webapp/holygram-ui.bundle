@@ -532,6 +532,7 @@
       const bootstrap = await api('/api/bootstrap');
       $('ownerAvatar').textContent = initials(bootstrap.owner.name);
       await loadUsers();
+      $('chatSearch').disabled = false;
       const targetUser = Number(qs.get('target'));
       if (targetUser && state.users.some(user => user.id === targetUser)) {
         await selectUser(targetUser);
