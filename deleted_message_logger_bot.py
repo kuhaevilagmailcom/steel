@@ -2814,8 +2814,52 @@ def _replace_style_phrases(text: str, replacements: dict[str, str]) -> str:
     return result
 
 
+def _schizo_pick(items: tuple[str, ...]) -> str:
+    if not items:
+        return ""
+    return items[uuid.uuid4().int % len(items)]
+
+
+def _schizo_transform_segment(text: str) -> str:
+    if not text.strip():
+        return text
+    leading = text[: len(text) - len(text.lstrip())]
+    trailing = text[len(text.rstrip()):] if text.rstrip() != text else ""
+    body = text.strip()
+    tokens = body.split()
+    if not tokens:
+        return text
+
+    insertion_count = min(
+        SCHIZO_MAX_INSERTIONS,
+        max(2, 2 + len(tokens) // 3 + (uuid.uuid4().int % 3)),
+    )
+    output = list(tokens)
+
+    for _ in range(insertion_count):
+        word = _schizo_pick(SCHIZO_WORDS)
+        position = uuid.uuid4().int % (len(output) + 1)
+        glue = _schizo_pick(SCHIZO_GLUE)
+        if glue and position > 0:
+            word = glue + " " + word
+        output.insert(position, word)
+
+    if len(output) >= 4 and uuid.uuid4().int % 100 < 45:
+        position = uuid.uuid4().int % len(output)
+        output.insert(position, _schizo_pick(SCHIZO_WORDS))
+
+    result = " ".join(output)
+    result = re.sub(r"\s+([,.!?])", r"\1", result)
+    if uuid.uuid4().int % 100 < 35:
+        result = result.rstrip(" .!?") + _schizo_pick(("...", "?", ".", " вообще.", " почему."))
+    return leading + result + trailing
+
+
 def _style_plain_segment(style: str, segment: str) -> str:
     if not segment or not segment.strip():
+        return segment
+
+    if style == "schizo":
         return segment
 
     if style == "cute":
@@ -3092,6 +3136,9 @@ def _add_style_flavour(style: str, text: str, source: str, user_id: int | None =
 
     if style == "cute":
         return _cute_transform_segment(text, source)
+
+    if style == "schizo":
+        return _schizo_transform_segment(text)
 
     if style == "rooster":
         percent = get_rooster_profanity_percent(user_id) if user_id is not None else 40
