@@ -41,7 +41,7 @@ RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
 MENU_IMAGE_PATH = BASE_DIR / "assets" / "holly_menu.png"
 SETUP_GUIDE_B64_PATH = BASE_DIR / "assets" / "huntermod_setup_guide_v5.b64"
 SETUP_GUIDE_B64_PART_GLOB = "huntermod_setup_guide_v5.b64.*"
-SETUP_GUIDE_IMAGE_PATH = DATA_DIR / "huntermod_setup_guide_v5.jpg"
+SETUP_GUIDE_IMAGE_PATH = BASE_DIR / "assets" / "huntermod_setup_guide_v5.jpg"
 SETUP_GUIDE_FILE_ID_KEY = "setup_guide_photo_file_id_v5"
 WEBAPP_URL = os.getenv(
     "WEBAPP_URL", "https://bot-1789500279-7661-furadev.bothost.tech"
