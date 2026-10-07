@@ -514,8 +514,8 @@ def tg_android_edit_icon(name: str) -> str:
 def compact_edited_author(author: str) -> str:
     """Keep name/@username in edit alerts, but hide the technical Telegram ID."""
     value = str(author or "").strip()
-    value = re.sub(r",\\s*ID:\\s*-?\\d+(?=\\))", "", value)
-    value = re.sub(r"\\s*\\(ID:\\s*-?\\d+\\)", "", value)
+    value = re.sub(r",\s*ID:\s*-?\d+(?=\))", "", value)
+    value = re.sub(r"\s*\(ID:\s*-?\d+\)", "", value)
     return value.strip() or "Неизвестный пользователь"
 
 
