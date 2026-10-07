@@ -4440,6 +4440,8 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
 
 def page_rooster_settings(user_id: int) -> tuple[str, dict]:
     current = get_rooster_profanity_percent(user_id)
+    style_notice = STYLE_CHANGE_NOTICE.pop(user_id, None)
+    level_notice = STYLE_LEVEL_NOTICE.pop(user_id, None)
 
     def level_button(percent: int) -> dict:
         return btn(
@@ -4453,8 +4455,15 @@ def page_rooster_settings(user_id: int) -> tuple[str, dict]:
         [level_button(60), level_button(100)],
         [btn("Назад к стилям", "style", emoji="back")],
     ]
+    notices = []
+    if style_notice:
+        notices.append(style_changed_notification_html(*style_notice))
+    if level_notice:
+        notices.append(style_level_notification_html(*level_notice))
+    notice_text = ("\n\n".join(notices) + "\n\n") if notices else ""
     text = (
-        f"{tg_icon('design')} <b>Настройка стиля «Петух»</b>\n\n"
+        notice_text
+        + f"{tg_icon('design')} <b>Настройка стиля «Петух»</b>\n\n"
         f"{tg_icon('brush')} Стиль: <b>Петух</b>\n"
         f"{tg_icon('settings')} Уровень: <b>{current}%</b>\n\n"
         "Чем выше процент, тем чаще HolyGram заменяет обычные слова обсценными вариантами "
