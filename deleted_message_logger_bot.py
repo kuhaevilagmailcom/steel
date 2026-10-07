@@ -40,7 +40,7 @@ LOCK_PATH = DATA_DIR / "bot.lock"
 RAW_UPDATES_PATH = DATA_DIR / "raw_updates.jsonl"
 MENU_IMAGE_PATH = BASE_DIR / "assets" / "holly_menu.png"
 SETUP_GUIDE_B64_PATH = BASE_DIR / "assets" / "huntermod_setup_guide_v5.b64"
-SETUP_GUIDE_B64_PART_GLOB = "holygram_setup_guide_v4.b64.*"
+SETUP_GUIDE_B64_PART_GLOB = "huntermod_setup_guide_v5.b64.*"
 SETUP_GUIDE_IMAGE_PATH = DATA_DIR / "huntermod_setup_guide_v5.jpg"
 SETUP_GUIDE_FILE_ID_KEY = "setup_guide_photo_file_id_v5"
 WEBAPP_URL = os.getenv(
@@ -4723,8 +4723,8 @@ def ensure_setup_guide_image() -> Path | None:
             encoded = "".join(part.read_text(encoding="ascii").strip() for part in parts)
 
         raw = base64.b64decode(encoded, validate=True)
-        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
-            raise ValueError("setup guide is not a PNG")
+        if not (raw.startswith(b"\xff\xd8\xff") or raw.startswith(b"\x89PNG\r\n\x1a\n")):
+            raise ValueError("setup guide has unsupported image format")
         SETUP_GUIDE_IMAGE_PATH.write_bytes(raw)
         return SETUP_GUIDE_IMAGE_PATH
     except Exception as exc:
