@@ -495,19 +495,50 @@ def deleted_notification_html(
     )
 
 
-TG_ANDROID_EDIT_ICONS = {
+TG_ANDROID_ICONS = {
     # https://t.me/addemoji/TgAndroidIcons
     "edit": ("✏️", "5879841310902324730"),
     "user": ("👤", "5814247475141153332"),
     "document": ("📄", "5839323457015256759"),
     "new": ("🆕", "5886306834410640699"),
+    "delete": ("🗑", "5879896690210639947"),
+    "message": ("💬", "5884179047482659474"),
+    "chat": ("💬", "5886666250158870040"),
+    "timer": ("⏲", "5877613700344450910"),
+    "time": ("⏲", "5798535677318533269"),
+    "photo": ("📷", "5846024087033353251"),
+    "video": ("🎥", "5882002216323125435"),
+    "voice": ("🎤", "5933541411558264121"),
+    "audio": ("🎵", "5891249688933305846"),
+    "animation": ("🎞", "5775981206319402773"),
+    "file": ("📄", "5877301185639091664"),
+    "reply": ("⬅️", "5877536313623711363"),
+    "memo": ("📝", "5886330010054168711"),
+    "check": ("✅", "5776375003280838798"),
+    "link": ("🔗", "5877465816030515018"),
+    "close": ("❌", "5985346521103604145"),
+    "save": ("💾", "5884448719889240368"),
+    "warning": ("⚠️", "5881702736843511327"),
+    "design": ("🎨", "5814690801665446789"),
+    "replace": ("🔃", "6006085522311614682"),
+    "brush": ("🖌", "5924961243721896074"),
+    "shield": ("🛡", "5926783847453692661"),
+    "add": ("➕", "5877219383691972108"),
+    "block": ("🚫", "5877413297170419326"),
+    "calendar": ("📅", "5967412305338568701"),
+    "announcement": ("📢", "5771695636411847302"),
+    "group": ("👥", "5942877472163892475"),
+    "search": ("🔎", "5942826671290715541"),
+    "success": ("✅", "5776375003280838798"),
+    "error": ("❌", "5778527486270770928"),
+    "settings": ("⚙", "5877260593903177342"),
+    "info": ("ℹ️", "5879785854284599288"),
 }
 
 
-def tg_android_edit_icon(name: str) -> str:
-    fallback, emoji_id = TG_ANDROID_EDIT_ICONS[name]
+def tg_icon(name: str) -> str:
+    fallback, emoji_id = TG_ANDROID_ICONS[name]
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
-
 
 def compact_edited_author(author: str) -> str:
     """Keep name/@username in edit alerts, but hide the technical Telegram ID."""
@@ -521,11 +552,11 @@ def edited_notification_html(author: str, old_content: str, new_content: str) ->
     # Layout intentionally mirrors Telegram's compact edited-message card:
     # title -> interlocutor -> old quote -> new quote.
     return (
-        f"{tg_android_edit_icon('edit')} <b>Собеседник изменил сообщение</b>\n\n"
-        f"{tg_android_edit_icon('user')} {html_text(compact_edited_author(author))}\n\n"
-        f"{tg_android_edit_icon('document')} <b>Было:</b>\n"
+        f"{tg_icon('edit')} <b>Собеседник изменил сообщение</b>\n\n"
+        f"{tg_icon('user')} {html_text(compact_edited_author(author))}\n\n"
+        f"{tg_icon('document')} <b>Было:</b>\n"
         f"{html_quote(old_content)}\n\n"
-        f"{tg_android_edit_icon('new')} <b>Стало:</b>\n"
+        f"{tg_icon('new')} <b>Стало:</b>\n"
         f"{html_quote(new_content)}"
     )
 
