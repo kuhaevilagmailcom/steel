@@ -9041,7 +9041,7 @@ def handle_regular_message(message: dict) -> None:
         PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_BROADCAST_BUTTON, PENDING_PROMO_CREATE,
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
         PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_VIEW_ACCESS, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
-        PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER, PENDING_AUTOREPLACE, PENDING_CUSTOM_COMMAND,
+        PENDING_USER_LABEL, PENDING_ADMIN_USER_MESSAGE, PENDING_HIDE_CHAT_USER, PENDING_AUTOREPLACE, PENDING_CUSTOM_COMMAND,
         PENDING_AUTOREPLY_MESSAGES, PENDING_AUTOREPLY_PHOTO, PENDING_TEXT_TOOL, PENDING_LINK_TOOL,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
@@ -9050,6 +9050,49 @@ def handle_regular_message(message: dict) -> None:
         BROADCAST_PREVIEWS.pop(chat_id, None)
         PENDING_BROADCAST_BUTTON.pop(chat_id, None)
         send_message(chat_id, "Отменено.")
+        return
+
+    if text and not text.startswith("/") and chat_id in PENDING_ADMIN_USER_MESSAGE and is_admin_user(user_id):
+        target_id, return_page, deadline = PENDING_ADMIN_USER_MESSAGE[chat_id]
+        if deadline < time.time():
+            PENDING_ADMIN_USER_MESSAGE.pop(chat_id, None)
+            send_message(chat_id, "Время отправки сообщения истекло.")
+            return
+        body = text.strip()
+        if not body:
+            send_message(chat_id, "Сообщение не может быть пустым. Напиши текст или /cancel.")
+            return
+        if len(body) > 3500:
+            send_message(chat_id, "Сообщение слишком длинное. Максимум 3500 символов.")
+            return
+
+        PENDING_ADMIN_USER_MESSAGE.pop(chat_id, None)
+        try:
+            send_message(
+                get_private_chat_id(target_id),
+                admin_user_message_html(body),
+                parse_mode="HTML",
+            )
+        except TelegramApiError as exc:
+            log(f"Admin-to-user message failed {user_id}->{target_id}: {exc}")
+            send_message(
+                chat_id,
+                f"{tg_icon('warning')} <b>Не удалось доставить сообщение</b>\n\n"
+                "Пользователь мог заблокировать бота или ещё не открыть личный чат с ним.",
+                parse_mode="HTML",
+            )
+            return
+
+        audit_admin(user_id, "сообщение пользователю", target_id, body[:500])
+        send_message(
+            chat_id,
+            f"{tg_icon('check')} <b>Сообщение отправлено</b>\n\n"
+            f"{tg_icon('user')} {stored_user_notification_label(target_id)}\n\n"
+            f"{tg_icon('message')} {html_quote(body)}",
+            parse_mode="HTML",
+        )
+        page_text, page_markup = page_user_card(user_id, target_id, return_page)
+        send_menu_page(user_id, chat_id, page_text, page_markup)
         return
 
     if chat_id in PENDING_AUTOREPLY_PHOTO:
