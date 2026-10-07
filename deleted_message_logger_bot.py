@@ -5221,8 +5221,9 @@ def page_chat_search_results(admin_id: int, target_id: int, return_page: int = 0
         for chat_id, message_id, author, content, updated_at in found
     ]
     text = (
-        f"{pe('view')} <b>Поиск в чатах</b>\nЗапрос: <code>{html_text(query)}</code> · найдено: <b>{total}</b>\n\n"
-        + ("\n\n".join(lines) if lines else "Совпадений нет.")
+        f"{tg_icon('search')} <b>Найдено сообщений: {total}</b>\n\n"
+        f"{tg_icon('memo')} Запрос: <code>{html_text(query)}</code>\n\n"
+        + ("\n\n".join(lines) if lines else f"{tg_icon('warning')} Совпадений нет.")
     )
     rows = [[btn(f"Открыть · {chat_participant_label(author)[:28]}", f"uchat:{target_id}:{chat_id}:{return_page}:0", emoji="view")]
             for chat_id, _message_id, author, _content, _updated_at in found]
