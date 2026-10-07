@@ -4168,15 +4168,13 @@ def page_home(user_id: int) -> tuple[str, dict]:
             btn("🎲 Развлечения", "hub:fun"),
         ],
         [btn("⚙️ Настройки", "hub:settings")],
-        [btn("🚀 Открыть HunterGram", url=MINI_APP_PUBLIC_URL, style="primary")],
     ]
     if is_admin_user(user_id):
         rows.append([btn("🛡 Админ-панель", "panel", emoji="admin", style="success")])
 
     text = (
         "✨ <b>HunterGram</b>\n\n"
-        "Одна экосистема внутри Telegram: музыка, полезные инструменты, "
-        "личные функции, развлечения и настройки.\n\n"
+        "Всё нужное — в одном месте.\n"
         "Выбери раздел:"
     )
     return text, kb(rows)
