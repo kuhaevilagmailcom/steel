@@ -4426,8 +4426,8 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
         for key, label in STYLE_LABELS.items()
     )
     text = (
-        "🎭 <b>Стиль общения</b>\n"
-        f"Сейчас: <b>{current_label}</b>\n\n"
+        f"{tg_icon('design')} <b>Стиль общения</b>\n"
+        f"{tg_icon('brush')} Сейчас: <b>{current_label}</b>\n\n"
         "Выбери стиль — он будет применяться автоматически к исходящим Business-сообщениям.\n"
         "🎀 Няшный повторяет механику CuteMessages: строчные буквы, растягивание гласных, "
         "заикание, эмодзи, каомодзи, суффиксы, мягкие окончания и милая пунктуация.\n"
@@ -4453,8 +4453,9 @@ def page_rooster_settings(user_id: int) -> tuple[str, dict]:
         [btn("Назад к стилям", "style", emoji="back")],
     ]
     text = (
-        "🐓 <b>Настройки стиля «Петух»</b>\n\n"
-        f"Количество мата: <b>{current}%</b>\n\n"
+        f"{tg_icon('design')} <b>Настройка стиля «Петух»</b>\n\n"
+        f"{tg_icon('brush')} Стиль: <b>Петух</b>\n"
+        f"{tg_icon('settings')} Уровень: <b>{current}%</b>\n\n"
         "Чем выше процент, тем чаще HolyGram заменяет обычные слова обсценными вариантами "
         "и добавляет матерные вставки. На 100% стиль специально становится максимально насыщенным."
     )
