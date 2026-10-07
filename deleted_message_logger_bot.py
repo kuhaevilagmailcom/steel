@@ -712,13 +712,9 @@ def broadcast_done_notification_html(sent: int, failed: int) -> str:
 
 
 def unknown_deleted_notification_html(message_id: int, chat_info: str | None = None) -> str:
-    header = "Неизвестный пользователь удалил(а) сообщение"
-    if chat_info:
-        header += f" в чате {html_text(chat_info)}"
     return (
-        f"{header}:\n\n"
-        f"{html_quote(f'ID {message_id}; сообщение не было сохранено')}"
-        f"{bot_signature_html()}"
+        f"{tg_icon('delete')} <b>Собеседник удалил сообщение</b>\n\n"
+        f"{tg_icon('warning')} Текст сообщения не успел сохраниться."
     )
 
 
