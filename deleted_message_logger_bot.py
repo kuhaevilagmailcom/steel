@@ -7474,6 +7474,47 @@ def handle_callback_query(query: dict) -> None:
         alert = "HolyGram бесплатный — подписки и оплаты отключены"
     elif data == "functions":
         page = page_hub_tools(user_id)
+    elif data == "autoreply":
+        page = page_autoreply(user_id)
+    elif data == "autoreply:toggle":
+        settings = get_autoreply_settings(user_id)
+        ok, result = set_autoreply_enabled(user_id, not settings["enabled"])
+        page = page_autoreply(user_id)
+        alert = result
+        if not ok:
+            alert = result
+    elif data == "autoreply:messages":
+        PENDING_AUTOREPLY_MESSAGES[chat_id] = time.time() + 600
+        send_message(
+            chat_id,
+            "🤖 <b>Сообщения автоответчика</b>\n\n"
+            "Отправь до 10 вариантов ответа.\n"
+            "Если каждый вариант короткий — пиши по одному на строку.\n"
+            "Если нужен многострочный вариант — разделяй варианты строкой <code>---</code>.\n\n"
+            "Отмена — /cancel",
+            parse_mode="HTML",
+        )
+        page = page_autoreply(user_id)
+        alert = "Жду варианты ответов"
+    elif data == "autoreply:messages:clear":
+        clear_autoreply_messages(user_id)
+        page = page_autoreply(user_id)
+        alert = "Сообщения очищены"
+    elif data == "autoreply:photo":
+        PENDING_AUTOREPLY_PHOTO[chat_id] = time.time() + 600
+        send_message(
+            chat_id,
+            "🖼 <b>Картинка автоответчика</b>\n\n"
+            "Отправь одну фотографию. Она будет прикрепляться к автоматическому ответу.\n\n"
+            "Отмена — /cancel",
+            parse_mode="HTML",
+        )
+        page = page_autoreply(user_id)
+        alert = "Жду фотографию"
+    elif data == "autoreply:photo:clear":
+        clear_autoreply_photo(user_id)
+        page = page_autoreply(user_id)
+        alert = "Картинка удалена"
     elif data == "style":
         if sub_active(user_id):
             page = page_communication_style(user_id)
