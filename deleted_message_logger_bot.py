@@ -55,7 +55,16 @@ IMPORT_DIR.mkdir(parents=True, exist_ok=True)
 load_dotenv(BASE_DIR / ".env.deleted_logger", encoding="utf-8-sig", override=True)
 
 BOT_TOKEN = (os.getenv("LOGGER_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
-BOT_USERNAME = os.getenv("LOGGER_BOT_USERNAME", "").strip().lstrip("@")
+BOT_USERNAME = (
+    os.getenv("LOGGER_BOT_USERNAME")
+    or os.getenv("BOT_USERNAME")
+    or "Hunterchatbbot"
+).strip().lstrip("@")
+BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "https://t.me/Hunterchatbbot").strip()
+MINI_APP_PUBLIC_URL = os.getenv(
+    "MINI_APP_PUBLIC_URL",
+    "https://t.me/Hunterchatbbot/ghsdgjsdgjhjsa",
+).strip()
 # Only these two accounts are owners with full administrative control.
 # Environment variables must never silently promote another account to owner.
 ADMIN_USER_IDS = {8464597898, 1141626866}
@@ -1425,7 +1434,7 @@ def disable_message_digest_storage() -> None:
 
 
 def import_text_archive_file(path: Path) -> tuple[int, int]:
-    """Import data-only HolyGram text archive without importing any HTML/CSS design."""
+    """Import data-only HunterGram text archive without importing any HTML/CSS design."""
     raw_bytes = path.read_bytes()
     digest = hashlib.sha256(raw_bytes).hexdigest()
     marker = f"text_archive_import:{digest}"
@@ -2283,8 +2292,8 @@ def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict
         issue = ""
 
     text = (
-        "🔒 <b>Для использования HolyGram подпишитесь на каналы</b>\n\n"
-        "HolyGram бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
+        "🔒 <b>Для использования HunterGram подпишитесь на каналы</b>\n\n"
+        "HunterGram бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
         "• <b>АНОН МГН</b> — @anonmgn\n"
         "• <b>MGN VPN</b> — @mgnvpnn\n\n"
         "После подписки нажмите <b>«Проверить подписку»</b>."
@@ -2302,7 +2311,7 @@ def require_channels_for_private_action(user_id: int, chat_id: int, force: bool 
     return False
 
 def referral_link(user_id: int) -> str:
-    username = bot_username() or "hollyboot_bot"
+    username = bot_username() or "Hunterchatbbot"
     return f"https://t.me/{username}?start=ref_{user_id}"
 
 
@@ -3348,7 +3357,7 @@ def add_referral(referrer_id: int, invitee_id: int) -> bool:
 
 
 def check_trial(referrer_id: int) -> None:
-    """Legacy no-op: HolyGram no longer has trials or paid subscriptions."""
+    """Legacy no-op: HunterGram no longer has trials or paid subscriptions."""
     return
 
 
@@ -3392,7 +3401,7 @@ def search_music_tracks(query: str, limit: int = MUSIC_SEARCH_LIMIT) -> list[dic
     )
     request = Request(
         "https://itunes.apple.com/search?" + params,
-        headers={"User-Agent": "HolyGram-MusicSearch/1.0"},
+        headers={"User-Agent": "HunterGram-MusicSearch/1.0"},
     )
     try:
         with urlopen(request, timeout=12) as response:
@@ -3584,7 +3593,7 @@ def send_music_preview_audio(
 
     title = str(item.get("track") or "Трек").strip()[:64]
     performer = str(item.get("artist") or "Исполнитель").strip()[:64]
-    caption = "🎵 Найдено через HolyGram"
+    caption = "🎵 Найдено через HunterGram"
 
     suffix = Path(preview_url.split("?", 1)[0]).suffix.lower()
     if suffix not in {".m4a", ".mp3", ".aac"}:
@@ -3596,7 +3605,7 @@ def send_music_preview_audio(
     temp_path = temp_dir / filename
 
     try:
-        request = Request(preview_url, headers={"User-Agent": "HolyGram-MusicSearch/1.0"})
+        request = Request(preview_url, headers={"User-Agent": "HunterGram-MusicSearch/1.0"})
         total = 0
         with urlopen(request, timeout=20) as response, temp_path.open("wb") as output:
             while True:
@@ -3652,7 +3661,7 @@ def send_music_search_results(user_id: int, chat_id: int, query: str) -> None:
 
 
 
-# --- HolyGram инструменты и быстрые действия ----------------------------------
+# --- HunterGram инструменты и быстрые действия ----------------------------------
 
 def _quick_cleanup() -> None:
     now = time.time()
@@ -3756,7 +3765,7 @@ def _send_tool_document(chat_id: int, path: Path, caption: str = "") -> None:
     telegram_multipart_call("sendDocument", fields, {"document": path}, timeout=120)
 
 
-def _send_tool_audio(chat_id: int, path: Path, title: str = "", performer: str = "HolyGram", caption: str = "") -> None:
+def _send_tool_audio(chat_id: int, path: Path, title: str = "", performer: str = "HunterGram", caption: str = "") -> None:
     fields: dict[str, object] = {"chat_id": chat_id}
     if title:
         fields["title"] = title[:64]
@@ -3786,7 +3795,7 @@ def _send_tool_video_note(chat_id: int, path: Path) -> None:
 
 
 def _stt_multipart(url: str, api_key: str, model: str, path: Path) -> str | None:
-    boundary = f"----HolyGramSTT{uuid.uuid4().hex}"
+    boundary = f"----HunterGramSTT{uuid.uuid4().hex}"
     body = bytearray()
 
     def add(value: str) -> None:
@@ -3874,7 +3883,7 @@ def translate_text_free(text: str, target: str | None = None) -> tuple[bool, str
         + "&dt=t&q=" + quote(value[:3500], safe="")
     )
     try:
-        with urlopen(Request("https://translate.googleapis.com/translate_a/single?" + params, headers={"User-Agent": "HolyGram/1.0"}), timeout=15) as response:
+        with urlopen(Request("https://translate.googleapis.com/translate_a/single?" + params, headers={"User-Agent": "HunterGram/1.0"}), timeout=15) as response:
             data = json.loads(response.read().decode("utf-8"))
         translated = "".join(str(chunk[0]) for chunk in (data[0] or []) if chunk and chunk[0]).strip()
         return (True, translated) if translated else (False, "Перевод не получен.")
@@ -3977,7 +3986,7 @@ def shorten_url(url: str) -> tuple[bool, str]:
         return False, value
     try:
         endpoint = "https://is.gd/create.php?format=simple&url=" + quote(value, safe="")
-        with urlopen(Request(endpoint, headers={"User-Agent": "HolyGram/1.0"}), timeout=15) as response:
+        with urlopen(Request(endpoint, headers={"User-Agent": "HunterGram/1.0"}), timeout=15) as response:
             short = response.read().decode("utf-8", errors="ignore").strip()
         if short.startswith("http"):
             return True, short
@@ -3999,7 +4008,7 @@ def resolve_url(url: str) -> tuple[bool, str]:
             ok, checked = safe_public_url(current)
             if not ok:
                 return False, checked
-            request = Request(checked, headers={"User-Agent": "HolyGram/1.0"}, method="HEAD")
+            request = Request(checked, headers={"User-Agent": "HunterGram/1.0"}, method="HEAD")
             try:
                 response = opener.open(request, timeout=12)
                 final = str(response.geturl() or checked)
@@ -4017,7 +4026,7 @@ def resolve_url(url: str) -> tuple[bool, str]:
                     current = location
                     continue
                 if exc.code in {405, 501}:
-                    request = Request(checked, headers={"User-Agent": "HolyGram/1.0"})
+                    request = Request(checked, headers={"User-Agent": "HunterGram/1.0"})
                     response = opener.open(request, timeout=12)
                     final = str(response.geturl() or checked)
                     response.close()
@@ -4041,7 +4050,7 @@ def send_qr_for_url(chat_id: int, url: str) -> tuple[bool, str]:
             {
                 "chat_id": chat_id,
                 "photo": qr_url,
-                "caption": "🔗 QR-код · HolyGram",
+                "caption": "🔗 QR-код · HunterGram",
                 "reply_markup": kb([[btn("Скопировать ссылку", copy=value, emoji="view")]]),
             },
             timeout=45,
@@ -4117,7 +4126,7 @@ def process_media_quick_action(user_id: int, chat_id: int, action: str, token: s
         source = download_telegram_tool_file(file_id, work, preferred)
 
         if action in {"voice_download", "circle_download", "video_download"}:
-            _send_tool_document(chat_id, source, "⬇️ Файл · HolyGram")
+            _send_tool_document(chat_id, source, "⬇️ Файл · HunterGram")
             return True, "Файл отправлен"
 
         if action in {"voice_text", "voice_summary", "voice_translate"}:
@@ -4138,19 +4147,19 @@ def process_media_quick_action(user_id: int, chat_id: int, action: str, token: s
             return True, "Готово"
 
         if action == "voice_mp3":
-            output = work / "HolyGram_voice.mp3"
+            output = work / "HunterGram_voice.mp3"
             ok, error = _run_ffmpeg(["-i", str(source), "-vn", "-codec:a", "libmp3lame", "-q:a", "2", str(output)])
             if not ok:
                 return False, error
-            _send_tool_audio(chat_id, output, "Voice", "HolyGram", "🎵 Конвертировано через HolyGram")
+            _send_tool_audio(chat_id, output, "Voice", "HunterGram", "🎵 Конвертировано через HunterGram")
             return True, "MP3 отправлен"
 
         if action == "voice_norm":
-            output = work / "HolyGram_normalized.ogg"
+            output = work / "HunterGram_normalized.ogg"
             ok, error = _run_ffmpeg(["-i", str(source), "-af", "loudnorm", "-c:a", "libopus", "-b:a", "64k", str(output)])
             if not ok:
                 return False, error
-            _send_tool_voice(chat_id, output, "🔊 Громкость нормализована · HolyGram")
+            _send_tool_voice(chat_id, output, "🔊 Громкость нормализована · HunterGram")
             return True, "Готово"
 
         if action == "voice_speed":
@@ -4160,31 +4169,31 @@ def process_media_quick_action(user_id: int, chat_id: int, action: str, token: s
                 return False, "Неверная скорость."
             if speed not in {0.75, 1.25, 1.5, 2.0}:
                 return False, "Недоступная скорость."
-            output = work / f"HolyGram_{str(speed).replace('.', '_')}x.ogg"
+            output = work / f"HunterGram_{str(speed).replace('.', '_')}x.ogg"
             ok, error = _run_ffmpeg(["-i", str(source), "-filter:a", f"atempo={speed}", "-c:a", "libopus", "-b:a", "64k", str(output)])
             if not ok:
                 return False, error
-            _send_tool_voice(chat_id, output, f"🎚 Скорость {speed:g}× · HolyGram")
+            _send_tool_voice(chat_id, output, f"🎚 Скорость {speed:g}× · HunterGram")
             return True, "Готово"
 
         if action in {"circle_audio", "video_audio"}:
-            output = work / "HolyGram_audio.mp3"
+            output = work / "HunterGram_audio.mp3"
             ok, error = _run_ffmpeg(["-i", str(source), "-vn", "-codec:a", "libmp3lame", "-q:a", "2", str(output)])
             if not ok:
                 return False, error
-            _send_tool_audio(chat_id, output, "Extracted audio", "HolyGram", "🎵 Звук извлечён через HolyGram")
+            _send_tool_audio(chat_id, output, "Extracted audio", "HunterGram", "🎵 Звук извлечён через HunterGram")
             return True, "Аудио отправлено"
 
         if action == "circle_video":
-            output = work / "HolyGram_circle.mp4"
+            output = work / "HunterGram_circle.mp4"
             ok, error = _run_ffmpeg(["-i", str(source), "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "aac", "-movflags", "+faststart", str(output)])
             if not ok:
                 return False, error
-            _send_tool_video(chat_id, output, "⭕ Кружок как обычное видео · HolyGram")
+            _send_tool_video(chat_id, output, "⭕ Кружок как обычное видео · HunterGram")
             return True, "Видео отправлено"
 
         if action == "video_compress":
-            output = work / "HolyGram_compressed.mp4"
+            output = work / "HunterGram_compressed.mp4"
             ok, error = _run_ffmpeg([
                 "-i", str(source),
                 "-vf", "scale='trunc(min(1280,iw)/2)*2':-2",
@@ -4193,11 +4202,11 @@ def process_media_quick_action(user_id: int, chat_id: int, action: str, token: s
             ])
             if not ok:
                 return False, error
-            _send_tool_video(chat_id, output, "🗜 Сжато через HolyGram")
+            _send_tool_video(chat_id, output, "🗜 Сжато через HunterGram")
             return True, "Сжатое видео отправлено"
 
         if action == "video_circle":
-            output = work / "HolyGram_video_note.mp4"
+            output = work / "HunterGram_video_note.mp4"
             ok, error = _run_ffmpeg([
                 "-i", str(source),
                 "-t", "60",
@@ -4272,12 +4281,13 @@ def page_home(user_id: int) -> tuple[str, dict]:
             btn("🎲 Развлечения", "hub:fun"),
         ],
         [btn("⚙️ Настройки", "hub:settings")],
+        [btn("🚀 Открыть HunterGram", url=MINI_APP_PUBLIC_URL, style="primary")],
     ]
     if is_admin_user(user_id):
         rows.append([btn("🛡 Админ-панель", "panel", emoji="admin", style="success")])
 
     text = (
-        "✨ <b>HolyGram</b>\n\n"
+        "✨ <b>HunterGram</b>\n\n"
         "Одна экосистема внутри Telegram: музыка, полезные инструменты, "
         "личные функции, развлечения и настройки.\n\n"
         "Выбери раздел:"
@@ -4293,7 +4303,7 @@ def page_hub_music(user_id: int) -> tuple[str, dict]:
     )
     text = (
         "🎵 <b>Музыка</b>\n\n"
-        "Ищи треки по названию или исполнителю. HolyGram покажет результаты страницами "
+        "Ищи треки по названию или исполнителю. HunterGram покажет результаты страницами "
         "и отправит выбранное аудио прямо в Telegram.\n\n"
         f"<b>Недавние запросы:</b>\n{history_text}"
     )
@@ -4307,8 +4317,8 @@ def page_hub_music(user_id: int) -> tuple[str, dict]:
 
 def page_hub_tools(user_id: int) -> tuple[str, dict]:
     text = (
-        "🧰 <b>Инструменты HolyGram</b>\n\n"
-        "Отправляй контент прямо боту — HolyGram сам определит тип и покажет быстрые действия.\n\n"
+        "🧰 <b>Инструменты HunterGram</b>\n\n"
+        "Отправляй контент прямо боту — HunterGram сам определит тип и покажет быстрые действия.\n\n"
         "Выбери раздел:"
     )
     rows = [
@@ -4336,7 +4346,7 @@ def page_tools_voice() -> tuple[str, dict]:
         available[:0] = ["• скорость 0.75× / 1.25× / 1.5× / 2×", "• нормализация громкости", "• MP3"]
     text = (
         "🎙 <b>Голосовые</b>\n\n"
-        "Отправь голосовое — HolyGram покажет только те действия, которые реально доступны на сервере.\n\n"
+        "Отправь голосовое — HunterGram покажет только те действия, которые реально доступны на сервере.\n\n"
         + "\n".join(available)
     )
     return text, kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]])
@@ -4351,7 +4361,7 @@ def page_tools_circles() -> tuple[str, dict]:
         )
     else:
         body = (
-            "На сервере сейчас недоступна обработка видео, поэтому HolyGram не показывает неработающие кнопки.\n\n"
+            "На сервере сейчас недоступна обработка видео, поэтому HunterGram не показывает неработающие кнопки.\n\n"
             "Кружки и видео можно скачать исходным файлом."
         )
     return (
@@ -4380,7 +4390,7 @@ def page_tools_text() -> tuple[str, dict]:
 def page_tools_links() -> tuple[str, dict]:
     text = (
         "🔗 <b>Инструменты для ссылок</b>\n\n"
-        "Выбери действие и отправь ссылку. Если просто скинуть ссылку в HolyGram, "
+        "Выбери действие и отправь ссылку. Если просто скинуть ссылку в HunterGram, "
         "быстрые кнопки появятся автоматически."
     )
     rows = [
@@ -4407,7 +4417,7 @@ def page_tools_quick() -> tuple[str, dict]:
         lines[3] = "🎬 Видео → Звук / Сжать / В кружок / Скачать"
     return (
         "🔥 <b>Быстрые действия</b>\n\n"
-        "HolyGram автоматически показывает только рабочие действия — кнопок, которым нужна ненастроенная интеграция, больше нет.\n\n"
+        "HunterGram автоматически показывает только рабочие действия — кнопок, которым нужна ненастроенная интеграция, больше нет.\n\n"
         + "\n".join(lines),
         kb([[btn("Назад в инструменты", "hub:tools", emoji="back")]]),
     )
@@ -4430,7 +4440,7 @@ def page_hub_mine(user_id: int) -> tuple[str, dict]:
         f"🆔 <code>{user_id}</code>\n"
         f"🎵 Запросов в истории: <b>{history_count}</b>\n"
         f"👥 Приглашено друзей: <b>{ref_count(user_id)}</b>\n\n"
-        "Здесь собраны твои личные разделы HolyGram."
+        "Здесь собраны твои личные разделы HunterGram."
     )
     rows = [
         [btn("🎵 История музыки", "mine:music", emoji="history")],
@@ -4456,7 +4466,7 @@ def page_my_music_history(user_id: int) -> tuple[str, dict]:
 def page_hub_fun(user_id: int, result: str | None = None) -> tuple[str, dict]:
     text = (
         "🎲 <b>Развлечения</b>\n\n"
-        "Быстрые штуки, когда хочется просто потыкать HolyGram."
+        "Быстрые штуки, когда хочется просто потыкать HunterGram."
     )
     if result:
         text += f"\n\n{result}"
@@ -4484,7 +4494,7 @@ def page_hub_settings(user_id: int) -> tuple[str, dict]:
         f"Автоответчик: <b>{autoreply_status}</b>\n"
         f"Автозамен: <b>{len(list_auto_replacements(user_id))}</b>\n"
         f"Команд: <b>{len(list_custom_commands(user_id))}</b>\n\n"
-        "Настрой HolyGram под себя."
+        "Настрой HunterGram под себя."
     )
     rows = [
         [
@@ -4520,7 +4530,7 @@ def page_music_help(user_id: int) -> tuple[str, dict]:
 
 def page_buy(user_id: int) -> tuple[str, dict]:
     text = (
-        f"{pe('check')} <b>HolyGram бесплатный</b>\n\n"
+        f"{pe('check')} <b>HunterGram бесплатный</b>\n\n"
         "Подписка больше не нужна. Покупки, продления, подарочные подписки, "
         "промокоды на оплату и платные тарифы отключены.\n\n"
         "Все доступные функции работают бесплатно."
@@ -4601,7 +4611,7 @@ def page_autoreply(user_id: int) -> tuple[str, dict]:
         f"Вариантов ответа: <b>{len(messages)}/{MAX_AUTOREPLY_MESSAGES}</b>\n"
         f"Картинка: <b>{'добавлена' if has_photo else 'нет'}</b>\n\n"
         "Когда другой пользователь пишет в подключённый Telegram Business-чат, "
-        "HolyGram автоматически отправляет один из сохранённых вариантов. "
+        "HunterGram автоматически отправляет один из сохранённых вариантов. "
         "Если добавлена картинка, она отправляется вместе с выбранным текстом.\n\n"
         f"<b>Пример вариантов:</b>\n{preview}"
     )
@@ -4623,7 +4633,7 @@ def page_auto_replacements(user_id: int) -> tuple[str, dict]:
     ])
     text = (
         "🔁 <b>Автозамена</b>\n\n"
-        "Добавь слово или фразу и текст, на который HolyGram должен её менять. "
+        "Добавь слово или фразу и текст, на который HunterGram должен её менять. "
         "Правила личные — у каждого пользователя свой список.\n\n"
         f"Создано: <b>{len(rules)}/{MAX_USER_AUTOREPLACE_RULES}</b>"
     )
@@ -4661,7 +4671,7 @@ def page_custom_commands(user_id: int) -> tuple[str, dict]:
         "⌨️ <b>Мои команды</b>\n\n"
         "Команды работают в подключённых Telegram Business-чатах. "
         "Например, создай <code>.привет</code>, а затем просто отправь <code>.привет</code> в нужном диалоге — "
-        "HolyGram отправит настроенную последовательность сообщений.\n\n"
+        "HunterGram отправит настроенную последовательность сообщений.\n\n"
         f"Создано: <b>{len(commands)}/{MAX_USER_COMMANDS}</b>"
     )
     return text, kb(rows)
@@ -4772,7 +4782,7 @@ def page_rooster_settings(user_id: int) -> tuple[str, dict]:
         + f"{tg_icon('design')} <b>Настройка стиля «Петух»</b>\n\n"
         f"{tg_icon('brush')} Стиль: <b>Петух</b>\n"
         f"{tg_icon('settings')} Уровень: <b>{current}%</b>\n\n"
-        "Чем выше процент, тем чаще HolyGram заменяет обычные слова обсценными вариантами "
+        "Чем выше процент, тем чаще HunterGram заменяет обычные слова обсценными вариантами "
         "и добавляет матерные вставки. На 100% стиль специально становится максимально насыщенным."
     )
     return text, kb(rows)
@@ -4785,14 +4795,14 @@ def page_ref(user_id: int) -> tuple[str, dict]:
         f"{pe('invite')} <b>Пригласить друзей</b>\n\n"
         f"Приглашено: <b>{count}</b>\n\n"
         f"Твоя ссылка:\n<code>{link}</code>\n\n"
-        "HolyGram бесплатный — просто отправь ссылку другу."
+        "HunterGram бесплатный — просто отправь ссылку другу."
     )
     rows = [
         [
             btn("Скопировать", copy=link, emoji="view", style="primary"),
             btn(
                 "Поделиться",
-                url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Попробуй%20HolyGram%20—%20он%20бесплатный",
+                url=f"https://t.me/share/url?url={quote(link, safe='')}&text=Попробуй%20HunterGram%20—%20он%20бесплатный",
                 emoji="invite",
             ),
         ],
@@ -4804,7 +4814,7 @@ def page_help(user_id: int) -> tuple[str, dict]:
     username = bot_username()
     text = (
         f"{pe('support')} <b>Настроить за минуту</b>\n\n"
-        "На картинке показано, куда нажать, чтобы подключить HolyGram.\n\n"
+        "На картинке показано, куда нажать, чтобы подключить HunterGram.\n\n"
         f"Найди <code>@{username}</code>, добавь бота и выбери нужные чаты.\n"
         f"{pe('check')} Telegram Premium для подключения не нужен."
     )
@@ -4910,7 +4920,7 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     else:
         text = (
             f"{pe('view')} <b>Подключённые чаты</b>\n\n"
-            "Пока ничего не подключено. Добавь HolyGram в Telegram Business."
+            "Пока ничего не подключено. Добавь HunterGram в Telegram Business."
         )
 
     rows: list[list[dict]] = []
@@ -5896,7 +5906,7 @@ def page_stats(user_id: int) -> tuple[str, dict]:
 
 def page_promos(user_id: int) -> tuple[str, dict]:
     return (
-        f"{pe('check')} <b>HolyGram бесплатный</b>\n\nПромокоды на подписку больше не используются.",
+        f"{pe('check')} <b>HunterGram бесплатный</b>\n\nПромокоды на подписку больше не используются.",
         kb([BACK_PANEL]),
     )
 
@@ -6131,7 +6141,7 @@ def page_panel(user_id: int) -> tuple[str, dict]:
     viewing = "включён" if chat_viewing_enabled() else "выключен"
 
     text = (
-        f"{pe('admin')} <b>HolyGram · Админ-панель</b>\n\n"
+        f"{pe('admin')} <b>HunterGram · Админ-панель</b>\n\n"
         f"Роль: <b>{role}</b>\n"
         f"Пользователей: <b>{users}</b>\n"
         f"Открытых обращений: <b>{open_tickets}</b>\n"
@@ -6255,13 +6265,13 @@ def page_support_tickets(user_id: int) -> tuple[str, dict]:
 
 def page_expiring_subscriptions(user_id: int) -> tuple[str, dict]:
     return (
-        f"{pe('check')} <b>HolyGram бесплатный</b>\n\nСроков подписки больше нет.",
+        f"{pe('check')} <b>HunterGram бесплатный</b>\n\nСроков подписки больше нет.",
         kb([BACK_PANEL]),
     )
 
 def page_prices(user_id: int) -> tuple[str, dict]:
     return (
-        f"{pe('check')} <b>HolyGram бесплатный</b>\n\nТарифы и цены отключены.",
+        f"{pe('check')} <b>HunterGram бесплатный</b>\n\nТарифы и цены отключены.",
         kb([BACK_PANEL]),
     )
 
@@ -6311,7 +6321,7 @@ def edit_page(chat_id: int, message_id: int, text: str, markup: dict) -> None:
             if "message is not modified" in str(exc):
                 return
             log(f"edit menu page failed: {exc}")
-    send_menu_page(user_id, chat_id, text, markup, use_photo="<b>HolyGram</b>" in text and len(text) <= 1000)
+    send_menu_page(user_id, chat_id, text, markup, use_photo="<b>HunterGram</b>" in text and len(text) <= 1000)
 
 
 # --- оплата СБП и звёздами ----------------------------------------------------
@@ -6347,7 +6357,7 @@ def send_sbp_payment(user_id: int, chat_id: int, days: int, target_id: int | Non
         "amount": f"{rub:.2f}",
         "payment_currency": "RUB",
         "order_id": order_id,
-        "description": f"Подписка HolyGram на {days} дней" + (" в подарок" if beneficiary_id != user_id else ""),
+        "description": f"Подписка HunterGram на {days} дней" + (" в подарок" if beneficiary_id != user_id else ""),
         "customer_id": str(user_id),
         "metadata": {"telegram_user_id": str(user_id), "beneficiary_id": str(beneficiary_id), "days": str(days), "promo_code": promo_code or ""},
         "test": ROLLYPAY_TEST_MODE,
@@ -6446,7 +6456,7 @@ def send_subscription_invoice(user_id: int, chat_id: int, days: int, target_id: 
             "sendInvoice",
             {
                 "chat_id": chat_id,
-                "title": f"{'Подарочная подписка' if beneficiary_id != user_id else 'Подписка HolyGram'} — {days} дней",
+                "title": f"{'Подарочная подписка' if beneficiary_id != user_id else 'Подписка HunterGram'} — {days} дней",
                 "description": "Доступ ко всем функциям бота. Остаток суммируется при продлении.",
                 "payload": f"sub:{user_id}:{beneficiary_id}:{days}:{stars}:{promo_code or '-'}",
                 "provider_token": "",
@@ -6494,7 +6504,7 @@ def handle_pre_checkout_query(query: dict) -> None:
         {
             "pre_checkout_query_id": qid,
             "ok": False,
-            "error_message": "HolyGram теперь бесплатный — оплата больше не требуется.",
+            "error_message": "HunterGram теперь бесплатный — оплата больше не требуется.",
         },
     )
 
@@ -6694,7 +6704,7 @@ def broadcast_recipient_button(preview: dict[str, object]) -> dict | None:
     if kind == "help":
         return kb([[btn(text or "Настроить за минуту", "help", emoji="support", style="primary")]])
     if kind == "home":
-        return kb([[btn(text or "Открыть HolyGram", "home", emoji="home", style="primary")]])
+        return kb([[btn(text or "Открыть HunterGram", "home", emoji="home", style="primary")]])
     if kind == "custom" and value.startswith(("https://", "http://", "tg://")):
         return kb([[btn(text or "Открыть", url=value, style="primary")]])
     return None
@@ -7038,7 +7048,7 @@ def create_backup(admin_id: int | None = None, send_to_admins: bool = True) -> P
     if send_to_admins:
         for target in sorted(ADMIN_USER_IDS):
             try:
-                send_document(target, path, "Резервная копия базы HolyGram")
+                send_document(target, path, "Резервная копия базы HunterGram")
             except TelegramApiError as exc:
                 log(f"Backup delivery failed for {target}: {exc}")
     if admin_id:
@@ -7495,7 +7505,7 @@ def handle_callback_query(query: dict) -> None:
         return
     elif data == "buy" or data in {"grant", "prices", "promos", "expiring"} or data.startswith(("buy:", "gift:", "promo:", "sbp:check:", "price:", "useradd:")):
         page = page_buy(user_id)
-        alert = "HolyGram бесплатный — подписки и оплаты отключены"
+        alert = "HunterGram бесплатный — подписки и оплаты отключены"
     elif data == "functions":
         page = page_hub_tools(user_id)
     elif data == "autoreply":
@@ -7544,11 +7554,11 @@ def handle_callback_query(query: dict) -> None:
             page = page_communication_style(user_id)
         else:
             page = page_buy(user_id)
-            alert = "Нужна активная подписка HolyGram"
+            alert = "Нужна активная подписка HunterGram"
     elif data.startswith("style:"):
         if not sub_active(user_id):
             page = page_buy(user_id)
-            alert = "Нужна активная подписка HolyGram"
+            alert = "Нужна активная подписка HunterGram"
         else:
             value = data.split(":", 1)[1]
             style = "" if value == "off" else value
@@ -7700,7 +7710,7 @@ def handle_callback_query(query: dict) -> None:
         alert = "Команда удалена" if deleted else "Команда уже удалена"
     elif data == "promo:activate" or data == "gift:start" or data.startswith(("gift:", "buy:", "sbp:check:")):
         page = page_buy(user_id)
-        alert = "HolyGram бесплатный — подписки и оплаты отключены"
+        alert = "HunterGram бесплатный — подписки и оплаты отключены"
     elif data == "ref":
         page = page_ref(user_id)
     elif data == "help":
@@ -8224,7 +8234,7 @@ def handle_callback_query(query: dict) -> None:
                 chat_id,
                 "Отправь кнопку в формате:\n"
                 "<code>Текст кнопки | https://ссылка</code>\n\n"
-                "Например:\n<code>Открыть поддержку | https://t.me/holy_gram_bot</code>",
+                "Например:\n<code>Открыть поддержку | https://t.me/Hunterchatbbot</code>",
                 parse_mode="HTML",
             )
             alert = "Жду текст кнопки и ссылку"
@@ -8287,7 +8297,7 @@ def handle_callback_query(query: dict) -> None:
             return
         path = export_users_csv(user_id)
         try:
-            send_document(chat_id, path, "Экспорт пользователей HolyGram")
+            send_document(chat_id, path, "Экспорт пользователей HunterGram")
             alert = "CSV отправлен"
         except TelegramApiError as exc:
             alert = f"Ошибка экспорта: {exc}"[:180]
@@ -9492,7 +9502,7 @@ def handle_regular_message(message: dict) -> None:
             PENDING_SUPPORT[chat_id] = time.time() + 600
             send_message(chat_id, "Напиши вопрос одним сообщением. Отмена — /cancel")
         elif name in {"/gift", "/promo", "/sub"}:
-            send_message(chat_id, "HolyGram теперь бесплатный для всех. Подписки, промокоды и оплаты отключены.")
+            send_message(chat_id, "HunterGram теперь бесплатный для всех. Подписки, промокоды и оплаты отключены.")
         elif name == "/admins" and is_private_chat(message):
             page_text, page_markup = page_admins(user_id)
             send_menu_page(user_id, chat_id, page_text, page_markup)
@@ -9832,7 +9842,7 @@ def handle_update(update: dict) -> None:
 
 def configure_bot() -> None:
     user_commands = [
-        {"command": "start", "description": "HolyGram — главное меню"},
+        {"command": "start", "description": "HunterGram — главное меню"},
         {"command": "music", "description": "Найти музыку"},
         {"command": "search", "description": "Поиск музыки"},
         {"command": "help", "description": "Помощь"},
