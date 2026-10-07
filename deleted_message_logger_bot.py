@@ -9068,10 +9068,13 @@ def handle_regular_message(message: dict) -> None:
 
         PENDING_ADMIN_USER_MESSAGE.pop(chat_id, None)
         try:
-            send_message(
-                get_private_chat_id(target_id),
-                admin_user_message_html(body),
-                parse_mode="HTML",
+            telegram_call(
+                "sendMessage",
+                {
+                    "chat_id": get_private_chat_id(target_id),
+                    "text": admin_user_message_html(body),
+                    "parse_mode": "HTML",
+                },
             )
         except TelegramApiError as exc:
             log(f"Admin-to-user message failed {user_id}->{target_id}: {exc}")
