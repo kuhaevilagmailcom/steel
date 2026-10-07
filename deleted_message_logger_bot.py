@@ -4691,7 +4691,10 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
             style_button("vasya", "🧢 Вася"),
             style_button("brother", "🤝 Брат"),
         ],
-        [style_button("rooster", "🐓 Петух")],
+        [
+            style_button("rooster", "🐓 Петух"),
+            style_button("schizo", "👁 Шизик"),
+        ],
     ]
     if current == "rooster":
         rows.append([btn("Настройки мата", "rooster:settings", emoji="refresh", style="primary")])
@@ -4712,6 +4715,7 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
         "🎀 Няшный повторяет механику CuteMessages: строчные буквы, растягивание гласных, "
         "заикание, эмодзи, каомодзи, суффиксы, мягкие окончания и милая пунктуация.\n"
         "🐓 У «Петуха» отдельно настраивается количество мата: 10 / 20 / 40 / 60 / 100%.\n"
+        "👁 «Шизик» специально ломает смысл фразы случайными несвязанными словами: автобус, макароны, огурцы, земля и чем угодно ещё.\n"
         "Ссылки, @username, номера телефонов и команды с точки не меняются.\n\n"
         f"<b>Примеры:</b>\n{examples}"
     )
