@@ -650,6 +650,67 @@ def business_connection_notification_html(user: dict | None, enabled: bool) -> s
     )
 
 
+def style_changed_notification_html(old_label: str, new_label: str) -> str:
+    return (
+        f"{tg_icon('design')} <b>Стиль изменён</b>\n\n"
+        f"{tg_icon('replace')} Было: <b>{html_text(old_label)}</b>\n"
+        f"{tg_icon('brush')} Стало: <b>{html_text(new_label)}</b>"
+    )
+
+
+def style_level_notification_html(style_label: str, old_percent: int, new_percent: int) -> str:
+    return (
+        f"{tg_icon('design')} <b>Настройка стиля изменена</b>\n\n"
+        f"{tg_icon('brush')} Стиль: <b>{html_text(style_label)}</b>\n"
+        f"{tg_icon('replace')} Было: <b>{int(old_percent)}%</b>\n"
+        f"{tg_icon('settings')} Стало: <b>{int(new_percent)}%</b>"
+    )
+
+
+def autoreplace_saved_notification_html(trigger: str, replacement: str, edited: bool = False) -> str:
+    title = "Автозамена обновлена" if edited else "Автозамена сохранена"
+    return (
+        f"{tg_icon('replace')} <b>{title}</b>\n\n"
+        f"{tg_icon('document')} <b>Было:</b>\n{html_quote(trigger)}\n\n"
+        f"{tg_icon('new')} <b>Стало:</b>\n{html_quote(replacement)}"
+    )
+
+
+def admin_action_notification_html(user_label: str, action: str, detail: str = "", action_icon: str = "add") -> str:
+    result = (
+        f"{tg_icon('shield')} <b>Администратор изменил пользователя</b>\n\n"
+        f"{tg_icon('user')} {user_label}\n"
+        f"{tg_icon(action_icon)} <b>{html_text(action)}</b>"
+    )
+    if detail:
+        result += f"\n{tg_icon('info')} {html_text(detail)}"
+    return result
+
+
+def support_new_notification_html(ticket_id: int, user_label: str, body: str) -> str:
+    return (
+        f"{tg_icon('chat')} <b>Новое обращение #{int(ticket_id)}</b>\n\n"
+        f"{tg_icon('user')} {user_label}\n\n"
+        f"{tg_icon('memo')} <b>Текст:</b>\n{html_quote(body)}"
+    )
+
+
+def support_answer_notification_html(ticket_id: int, body: str) -> str:
+    return (
+        f"{tg_icon('check')} <b>Ответ поддержки #{int(ticket_id)}</b>\n\n"
+        f"{tg_icon('memo')} {html_quote(body)}"
+    )
+
+
+def broadcast_done_notification_html(sent: int, failed: int) -> str:
+    return (
+        f"{tg_icon('announcement')} <b>Рассылка готова</b>\n\n"
+        f"{tg_icon('group')} Получателей: <b>{int(sent) + int(failed)}</b>\n"
+        f"{tg_icon('success')} Отправлено: <b>{int(sent)}</b>\n"
+        f"{tg_icon('error')} Ошибок: <b>{int(failed)}</b>"
+    )
+
+
 def unknown_deleted_notification_html(message_id: int, chat_info: str | None = None) -> str:
     header = "Неизвестный пользователь удалил(а) сообщение"
     if chat_info:
