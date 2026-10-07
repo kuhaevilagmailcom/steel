@@ -7233,9 +7233,9 @@ def handle_callback_query(query: dict) -> None:
         answer_callback(query_id)
         return
     elif data == "hub:music":
-        page = page_hub_music(user_id)
+        page = page_home(user_id)
     elif data == "hub:tools":
-        page = page_hub_tools(user_id)
+        page = page_functions(user_id)
     elif data == "tools:voice":
         page = page_tools_voice()
     elif data == "tools:circles":
@@ -7330,13 +7330,13 @@ def handle_callback_query(query: dict) -> None:
             send_message(chat_id, "⚠️ " + result_text)
         return
     elif data == "hub:mine":
-        page = page_hub_mine(user_id)
+        page = page_home(user_id)
     elif data == "mine:music":
-        page = page_my_music_history(user_id)
+        page = page_home(user_id)
     elif data == "hub:fun":
-        page = page_hub_fun(user_id)
+        page = page_home(user_id)
     elif data == "functions":
-        page = page_hub_settings(user_id)
+        page = page_functions(user_id)
     elif data == "fun:coin":
         side = "Орёл 🦅" if uuid.uuid4().int % 2 == 0 else "Решка 🪙"
         page = page_hub_fun(user_id, f"🪙 Выпало: <b>{side}</b>")
@@ -7402,8 +7402,6 @@ def handle_callback_query(query: dict) -> None:
     elif data == "buy" or data in {"grant", "prices", "promos", "expiring"} or data.startswith(("buy:", "gift:", "promo:", "sbp:check:", "price:", "useradd:")):
         page = page_buy(user_id)
         alert = "HunterGram бесплатный — подписки и оплаты отключены"
-    elif data == "functions":
-        page = page_functions(user_id)
     elif data == "autoreply":
         page = page_autoreply(user_id)
     elif data == "autoreply:toggle":
