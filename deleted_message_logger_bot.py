@@ -8998,7 +8998,7 @@ def handle_regular_message(message: dict) -> None:
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
         PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_VIEW_ACCESS, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
         PENDING_USER_LABEL, PENDING_HIDE_CHAT_USER, PENDING_AUTOREPLACE, PENDING_CUSTOM_COMMAND,
-        PENDING_TEXT_TOOL, PENDING_LINK_TOOL,
+        PENDING_AUTOREPLY_MESSAGES, PENDING_AUTOREPLY_PHOTO, PENDING_TEXT_TOOL, PENDING_LINK_TOOL,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
         for pending in pending_maps:
@@ -9006,6 +9006,60 @@ def handle_regular_message(message: dict) -> None:
         BROADCAST_PREVIEWS.pop(chat_id, None)
         PENDING_BROADCAST_BUTTON.pop(chat_id, None)
         send_message(chat_id, "Отменено.")
+        return
+
+    if chat_id in PENDING_AUTOREPLY_PHOTO:
+        deadline = PENDING_AUTOREPLY_PHOTO[chat_id]
+        if deadline < time.time():
+            PENDING_AUTOREPLY_PHOTO.pop(chat_id, None)
+            send_message(chat_id, "Время добавления картинки истекло.")
+            return
+        photos = message.get("photo") or []
+        if not photos:
+            send_message(chat_id, "Отправь именно фотографию или нажми /cancel.")
+            return
+        photo = max(
+            photos,
+            key=lambda item: (
+                item.get("file_size") or 0,
+                item.get("width") or 0,
+                item.get("height") or 0,
+            ),
+        )
+        file_id = str(photo.get("file_id") or "")
+        if not file_id:
+            send_message(chat_id, "Не удалось получить фотографию. Попробуй другую.")
+            return
+        set_autoreply_photo(user_id, file_id)
+        PENDING_AUTOREPLY_PHOTO.pop(chat_id, None)
+        send_message(
+            chat_id,
+            "🖼 <b>Картинка автоответчика сохранена</b>",
+            parse_mode="HTML",
+        )
+        page_text, page_markup = page_autoreply(user_id)
+        send_menu_page(user_id, chat_id, page_text, page_markup)
+        return
+
+    if text and not text.startswith("/") and chat_id in PENDING_AUTOREPLY_MESSAGES:
+        deadline = PENDING_AUTOREPLY_MESSAGES[chat_id]
+        if deadline < time.time():
+            PENDING_AUTOREPLY_MESSAGES.pop(chat_id, None)
+            send_message(chat_id, "Время настройки автоответчика истекло.")
+            return
+        messages = parse_autoreply_messages(text)
+        ok, result = set_autoreply_messages(user_id, messages)
+        if not ok:
+            send_message(chat_id, result + " Попробуй ещё раз или /cancel.")
+            return
+        PENDING_AUTOREPLY_MESSAGES.pop(chat_id, None)
+        send_message(
+            chat_id,
+            f"🤖 <b>{html_text(result)}</b>",
+            parse_mode="HTML",
+        )
+        page_text, page_markup = page_autoreply(user_id)
+        send_menu_page(user_id, chat_id, page_text, page_markup)
         return
 
     if text and not text.startswith("/") and chat_id in PENDING_AUTOREPLACE:
