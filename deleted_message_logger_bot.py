@@ -2838,6 +2838,19 @@ def _schizo_transform_segment(text: str) -> str:
     )
     output = list(tokens)
 
+    # Keep the message usable, but deliberately break its logic:
+    # replace a small part of the original words and shuffle one pair.
+    if len(output) >= 3:
+        replace_count = 1 if len(output) < 8 else 2
+        for _ in range(replace_count):
+            position = uuid.uuid4().int % len(output)
+            output[position] = _schizo_pick(SCHIZO_WORDS)
+    if len(output) >= 4 and uuid.uuid4().int % 100 < 70:
+        left = uuid.uuid4().int % len(output)
+        right = uuid.uuid4().int % len(output)
+        if left != right:
+            output[left], output[right] = output[right], output[left]
+
     for _ in range(insertion_count):
         word = _schizo_pick(SCHIZO_WORDS)
         position = uuid.uuid4().int % (len(output) + 1)
