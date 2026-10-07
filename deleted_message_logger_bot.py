@@ -2173,6 +2173,7 @@ PENDING_CHAT_VIEW_ACCESS: dict[int, tuple[str, float]] = {}
 PENDING_CHAT_SEARCH: dict[int, tuple[int, int, float]] = {}
 PENDING_CHAT_DATE: dict[int, tuple[int, int, int, int, float]] = {}
 PENDING_USER_LABEL: dict[int, tuple[int, int, float]] = {}
+PENDING_ADMIN_USER_MESSAGE: dict[int, tuple[int, int, float]] = {}
 PENDING_HIDE_CHAT_USER: dict[int, float] = {}
 # chat_id -> (stage, item_id, temporary_value, deadline)
 PENDING_AUTOREPLACE: dict[int, tuple[str, int | None, str | None, float]] = {}
