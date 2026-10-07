@@ -7224,7 +7224,10 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Доступно: 10, 20, 40, 60 или 100%", show_alert=True)
             return
         set_communication_style(user_id, "rooster")
+        old_percent = get_rooster_profanity_percent(user_id)
         set_rooster_profanity_percent(user_id, percent)
+        if old_percent != percent:
+            STYLE_LEVEL_NOTICE[user_id] = (STYLE_LABELS.get("rooster", "Петух"), old_percent, percent)
         page = page_rooster_settings(user_id)
         alert = f"Количество мата: {percent}%"
     elif data == "autoreplace":
