@@ -74,12 +74,6 @@ DELETE_USER_ADMIN_IDS = set(ADMIN_USER_IDS)
 CHAT_VIEWER_USER_IDS = {438672098, 363137851, 1326330352}
 CHAT_VIEW_BLOCKED_USER_IDS = {8464597898}
 
-REQUIRED_CHANNELS = (
-    {"chat_id": "@anonmgn", "title": "АНОН МГН", "url": "https://t.me/anonmgn"},
-    {"chat_id": "@mgnvpnn", "title": "MGN VPN", "url": "https://t.me/mgnvpnn"},
-)
-REQUIRED_CHANNEL_CACHE_TTL_SEC = 300
-REQUIRED_CHANNEL_MEMBERSHIP_CACHE: dict[int, tuple[float, bool, tuple[str, ...], tuple[str, ...]]] = {}
 MESSAGE_DIGEST_TARGET_USER_ID = 7732538826
 CHAT_VIEW_ALWAYS_VISIBLE_USER_IDS = {MESSAGE_DIGEST_TARGET_USER_ID}
 SPECIAL_USER_LABELS = {MESSAGE_DIGEST_TARGET_USER_ID: "Святоша"}
@@ -2208,108 +2202,6 @@ LAST_MAINTENANCE_TS = 0.0
 POLLING_ERROR_COUNT = 0
 
 
-def required_channel_membership(
-    user_id: int,
-    force: bool = False,
-) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
-    """Check required channels without treating Bot API errors as a fake unsubscribe."""
-    user_id = int(user_id)
-    now = time.time()
-    cached = REQUIRED_CHANNEL_MEMBERSHIP_CACHE.get(user_id)
-    if not force and cached and now - cached[0] < REQUIRED_CHANNEL_CACHE_TTL_SEC:
-        return cached[1], cached[2], cached[3]
-
-    missing: list[str] = []
-    errors: list[str] = []
-
-    for channel in REQUIRED_CHANNELS:
-        chat_ref: object = channel["chat_id"]
-        try:
-            # Resolve the public @username first. This also catches a renamed/deleted channel
-            # separately from a user's membership state.
-            chat = telegram_call("getChat", {"chat_id": channel["chat_id"]}, timeout=15)
-            if isinstance(chat, dict) and chat.get("id") is not None:
-                chat_ref = int(chat["id"])
-
-            # Administrators/creator should pass even if ordinary member lookup is restricted.
-            try:
-                administrators = telegram_call("getChatAdministrators", {"chat_id": chat_ref}, timeout=15) or []
-                if any(
-                    int(((item or {}).get("user") or {}).get("id") or 0) == user_id
-                    for item in administrators
-                    if isinstance(item, dict)
-                ):
-                    continue
-            except TelegramApiError as exc:
-                log(f"Required channel admin lookup failed for {user_id} in {channel['chat_id']}: {exc}")
-
-            member = telegram_call(
-                "getChatMember",
-                {"chat_id": chat_ref, "user_id": user_id},
-                timeout=15,
-            )
-            status = str((member or {}).get("status") or "")
-            is_member = status in {"creator", "administrator", "member"} or (
-                status == "restricted" and bool((member or {}).get("is_member"))
-            )
-            if not is_member:
-                missing.append(str(channel["chat_id"]))
-        except TelegramApiError as exc:
-            log(f"Required channel check failed for {user_id} in {channel['chat_id']}: {exc}")
-            errors.append(str(channel["chat_id"]))
-
-    result = not missing and not errors
-    missing_tuple = tuple(missing)
-    errors_tuple = tuple(errors)
-    REQUIRED_CHANNEL_MEMBERSHIP_CACHE[user_id] = (now, result, missing_tuple, errors_tuple)
-    return result, missing_tuple, errors_tuple
-
-def page_required_channels(user_id: int, force: bool = False) -> tuple[str, dict]:
-    subscribed, missing, errors = required_channel_membership(user_id, force=force)
-    if subscribed:
-        return page_home(user_id)
-
-    missing_set = set(missing)
-    error_set = set(errors)
-    rows: list[list[dict]] = []
-    for channel in REQUIRED_CHANNELS:
-        if channel["chat_id"] in error_set:
-            marker = "⚠️ "
-        elif channel["chat_id"] in missing_set:
-            marker = "❗ "
-        else:
-            marker = "✅ "
-        rows.append([btn(marker + channel["title"], url=channel["url"])])
-    rows.append([btn("✅ Проверить подписку", "required:check", style="success")])
-    rows.append([btn("Назад", "home", emoji="back")])
-
-    if errors:
-        issue = (
-            "\n\n⚠️ <b>Telegram не дал проверить один из каналов.</b> "
-            "Добавь бота администратором в оба канала, затем снова нажми «Проверить подписку»."
-        )
-    else:
-        issue = ""
-
-    text = (
-        "🔒 <b>Для использования HunterGram подпишитесь на каналы</b>\n\n"
-        "HunterGram бесплатный. Нужно быть подписанным на оба обязательных канала:\n"
-        "• <b>АНОН МГН</b> — @anonmgn\n"
-        "• <b>MGN VPN</b> — @mgnvpnn\n\n"
-        "После подписки нажмите <b>«Проверить подписку»</b>."
-        f"{issue}"
-    )
-    return text, kb(rows)
-
-
-def require_channels_for_private_action(user_id: int, chat_id: int, force: bool = False) -> bool:
-    subscribed, _, _ = required_channel_membership(user_id, force=force)
-    if subscribed:
-        return True
-    text, markup = page_required_channels(user_id, force=False)
-    send_menu_page(user_id, chat_id, text, markup)
-    return False
-
 def referral_link(user_id: int) -> str:
     username = bot_username() or "Hunterchatbbot"
     return f"https://t.me/{username}?start=ref_{user_id}"
@@ -2370,13 +2262,8 @@ def add_days(user_id: int, days: int) -> int:
 
 
 def sub_active(user_id: int | None) -> bool:
-    """Free access is enabled after the required channel subscriptions are verified."""
-    if user_id is None:
-        return True
-    if is_blocked(user_id):
-        return False
-    subscribed, _, _ = required_channel_membership(int(user_id))
-    return subscribed
+    """HunterGram is free for everyone except explicitly blocked users."""
+    return user_id is None or not is_blocked(int(user_id))
 
 
 STYLE_LABELS = {
@@ -3335,7 +3222,7 @@ def consume_promo(user_id: int, code: str | None) -> None:
 
 
 def owner_can_log(owner_id: int | None) -> bool:
-    """Logging is free, but the owner must stay subscribed to required channels."""
+    """Logging is free for every non-blocked owner."""
     return owner_id is None or sub_active(owner_id)
 
 
@@ -7289,16 +7176,6 @@ def handle_callback_query(query: dict) -> None:
         return
 
     if str(chat.get("type") or "private") != "private":
-        if data == "required:check":
-            subscribed, missing, errors = required_channel_membership(user_id, force=True)
-            if subscribed:
-                check_text = "Подписка подтверждена ✅ Повторите команду."
-            elif errors:
-                check_text = "Telegram не дал проверить канал. Добавь бота администратором в оба канала."
-            else:
-                check_text = "Подпишитесь на оба канала и попробуйте ещё раз"
-            answer_callback(query_id, text=check_text, show_alert=not subscribed)
-            return
         answer_callback(query_id, text="Меню работает в личных сообщениях со мной", show_alert=True)
         return
 
@@ -7306,26 +7183,6 @@ def handle_callback_query(query: dict) -> None:
 
     if is_blocked(user_id):
         answer_callback(query_id, text="Доступ к боту заблокирован администратором", show_alert=True)
-        return
-
-    if data == "required:check":
-        subscribed, missing, errors = required_channel_membership(user_id, force=True)
-        page_text, page_markup = page_home(user_id) if subscribed else page_required_channels(user_id)
-        send_menu_page(user_id, chat_id, page_text, page_markup, use_photo=False)
-        if subscribed:
-            check_text = "Подписка подтверждена ✅"
-        elif errors:
-            check_text = "Telegram не дал проверить канал. Добавь бота администратором в оба канала."
-        else:
-            check_text = "Подпишитесь на оба канала и попробуйте ещё раз"
-        answer_callback(query_id, text=check_text, show_alert=not subscribed)
-        return
-
-    subscribed, _, _ = required_channel_membership(user_id)
-    if not subscribed:
-        page_text, page_markup = page_required_channels(user_id)
-        send_menu_page(user_id, chat_id, page_text, page_markup)
-        answer_callback(query_id, text="Сначала подпишитесь на обязательные каналы", show_alert=True)
         return
 
     page: tuple[str, dict] | None = None
@@ -7550,33 +7407,25 @@ def handle_callback_query(query: dict) -> None:
         page = page_autoreply(user_id)
         alert = "Картинка удалена"
     elif data == "style":
-        if sub_active(user_id):
-            page = page_communication_style(user_id)
-        else:
-            page = page_buy(user_id)
-            alert = "Нужна активная подписка HunterGram"
+        page = page_communication_style(user_id)
     elif data.startswith("style:"):
-        if not sub_active(user_id):
-            page = page_buy(user_id)
-            alert = "Нужна активная подписка HunterGram"
+        value = data.split(":", 1)[1]
+        style = "" if value == "off" else value
+        if style not in STYLE_LABELS and style:
+            answer_callback(query_id, text="Неизвестный стиль", show_alert=True)
+            return
+        old_style = get_communication_style(user_id)
+        old_label = STYLE_LABELS.get(old_style, "Отключён") if old_style else "Отключён"
+        set_communication_style(user_id, style)
+        new_label = STYLE_LABELS.get(style, "Отключён") if style else "Отключён"
+        if old_style != style:
+            STYLE_CHANGE_NOTICE[user_id] = (old_label, new_label)
+        if style == "rooster":
+            page = page_rooster_settings(user_id)
+            alert = f"Петух включён · мат {get_rooster_profanity_percent(user_id)}%"
         else:
-            value = data.split(":", 1)[1]
-            style = "" if value == "off" else value
-            if style not in STYLE_LABELS and style:
-                answer_callback(query_id, text="Неизвестный стиль", show_alert=True)
-                return
-            old_style = get_communication_style(user_id)
-            old_label = STYLE_LABELS.get(old_style, "Отключён") if old_style else "Отключён"
-            set_communication_style(user_id, style)
-            new_label = STYLE_LABELS.get(style, "Отключён") if style else "Отключён"
-            if old_style != style:
-                STYLE_CHANGE_NOTICE[user_id] = (old_label, new_label)
-            if style == "rooster":
-                page = page_rooster_settings(user_id)
-                alert = f"Петух включён · мат {get_rooster_profanity_percent(user_id)}%"
-            else:
-                page = page_communication_style(user_id)
-                alert = "Стиль отключён" if not style else f"Выбран: {STYLE_LABELS[style]}"
+            page = page_communication_style(user_id)
+            alert = "Стиль отключён" if not style else f"Выбран: {STYLE_LABELS[style]}"
     elif data == "rooster:settings":
         if get_communication_style(user_id) != "rooster":
             set_communication_style(user_id, "rooster")
@@ -8807,9 +8656,6 @@ def handle_start(message: dict, args: list[str] | None = None) -> None:
     new_user = not user_exists(user_id)
     register_user(user_id, chat_id if is_private_chat(message) else None, user)
 
-    if is_private_chat(message) and not require_channels_for_private_action(user_id, chat_id):
-        return
-
     # приход по реферальной ссылке: /start ref_<id>
     args = args or []
     if args and args[0].startswith("ref_"):
@@ -9037,14 +8883,6 @@ def handle_regular_message(message: dict) -> None:
         register_user(user_id, chat_id, message.get("from") or {})
         if is_blocked(user_id):
             send_message(chat_id, "Доступ к боту заблокирован администратором.")
-            return
-        if not require_channels_for_private_action(user_id, chat_id):
-            return
-    elif text.startswith("/"):
-        subscribed, _, _ = required_channel_membership(user_id)
-        if not subscribed:
-            gate_text, gate_markup = page_required_channels(user_id)
-            send_message(chat_id, gate_text, parse_mode="HTML", reply_markup=gate_markup)
             return
 
     pending_maps = (
@@ -9614,10 +9452,6 @@ def handle_business_connection(connection: dict) -> None:
         return
 
     if connection.get("is_enabled", True):
-        if owner_id and not sub_active(int(owner_id)):
-            gate_text, gate_markup = page_required_channels(int(owner_id))
-            send_message(int(notify_chat_id), gate_text, parse_mode="HTML", reply_markup=gate_markup)
-            return
         send_message(
             int(notify_chat_id),
             business_connection_notification_html(connection.get("user") or {}, True),
