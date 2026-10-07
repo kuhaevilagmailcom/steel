@@ -8574,16 +8574,18 @@ def send_immediate_timer_media(notify_chat_id: int, saved_message: dict) -> None
         send_message(notify_chat_id, media_send_failed_html(), parse_mode="HTML")
 
 
-def send_immediate_reply_media(notify_chat_id: int, saved_message: dict) -> None:
+def send_immediate_reply_media(
+    notify_chat_id: int,
+    saved_message: dict,
+    reply_author: str = "",
+    new_content: str = "",
+) -> None:
     send_message(
         notify_chat_id,
-        media_notification_html(
-            saved_message.get("author") or "Неизвестный пользователь",
+        reply_notification_html(
+            reply_author or "Собеседник",
             saved_message.get("content") or "",
-            saved_message.get("media_type") or "media",
-            saved_message.get("ttl_seconds"),
-            source="reply",
-            saved_locally=bool(saved_message.get("local_media_path")),
+            new_content or "[медиа]",
         ),
         parse_mode="HTML",
     )
@@ -8617,7 +8619,12 @@ def handle_reply_to_message_media(
 
     already_forwarded = bool(old and (old.get("local_media_path") or old.get("media_file_id")))
     if not already_forwarded:
-        send_immediate_reply_media(notify_chat_id, saved)
+        send_immediate_reply_media(
+            notify_chat_id,
+            saved,
+            reply_author=message_author(message),
+            new_content=message_content(message),
+        )
 
 
 def handle_regular_message(message: dict) -> None:
