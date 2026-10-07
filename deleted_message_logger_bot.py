@@ -2175,6 +2175,8 @@ PENDING_HIDE_CHAT_USER: dict[int, float] = {}
 # chat_id -> (stage, item_id, temporary_value, deadline)
 PENDING_AUTOREPLACE: dict[int, tuple[str, int | None, str | None, float]] = {}
 PENDING_CUSTOM_COMMAND: dict[int, tuple[str, int | None, str | None, float]] = {}
+PENDING_AUTOREPLY_MESSAGES: dict[int, float] = {}
+PENDING_AUTOREPLY_PHOTO: dict[int, float] = {}
 # chat_id -> (mode, deadline)
 PENDING_TEXT_TOOL: dict[int, tuple[str, float]] = {}
 PENDING_LINK_TOOL: dict[int, tuple[str, float]] = {}
