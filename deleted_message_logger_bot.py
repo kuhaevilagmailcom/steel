@@ -8651,7 +8651,15 @@ def handle_regular_message(message: dict) -> None:
                 send_message(chat_id, result + " Попробуй ещё раз или /cancel.")
                 return
             PENDING_AUTOREPLACE.pop(chat_id, None)
-            send_message(chat_id, result)
+            send_message(
+                chat_id,
+                autoreplace_saved_notification_html(
+                    trigger,
+                    text,
+                    edited=stage == "edit_replacement",
+                ),
+                parse_mode="HTML",
+            )
             page_text, page_markup = page_auto_replacements(user_id)
             send_menu_page(user_id, chat_id, page_text, page_markup)
             return
