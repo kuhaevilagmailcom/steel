@@ -2255,6 +2255,7 @@ PENDING_AUTOREPLACE: dict[int, tuple[str, int | None, str | None, float]] = {}
 PENDING_CUSTOM_COMMAND: dict[int, tuple[str, int | None, str | None, float]] = {}
 PENDING_AUTOREPLY_MESSAGES: dict[int, float] = {}
 PENDING_AUTOREPLY_PHOTO: dict[int, float] = {}
+PENDING_SETUP_GUIDE_PHOTO: dict[int, float] = {}
 # chat_id -> (mode, deadline)
 PENDING_TEXT_TOOL: dict[int, tuple[str, float]] = {}
 PENDING_LINK_TOOL: dict[int, tuple[str, float]] = {}
@@ -8929,7 +8930,7 @@ def handle_regular_message(message: dict) -> None:
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
         PENDING_BLOCK_REASON, PENDING_ADMIN_ADD, PENDING_CHAT_VIEW_ACCESS, PENDING_CHAT_SEARCH, PENDING_CHAT_DATE,
         PENDING_USER_LABEL, PENDING_ADMIN_USER_MESSAGE, PENDING_HIDE_CHAT_USER, PENDING_AUTOREPLACE, PENDING_CUSTOM_COMMAND,
-        PENDING_AUTOREPLY_MESSAGES, PENDING_AUTOREPLY_PHOTO, PENDING_TEXT_TOOL, PENDING_LINK_TOOL,
+        PENDING_AUTOREPLY_MESSAGES, PENDING_AUTOREPLY_PHOTO, PENDING_SETUP_GUIDE_PHOTO, PENDING_TEXT_TOOL, PENDING_LINK_TOOL,
     )
     if text.strip() == "/cancel" and any(chat_id in pending for pending in pending_maps):
         for pending in pending_maps:
@@ -8983,6 +8984,49 @@ def handle_regular_message(message: dict) -> None:
         )
         page_text, page_markup = page_user_card(user_id, target_id, return_page)
         send_menu_page(user_id, chat_id, page_text, page_markup)
+        return
+
+    if chat_id in PENDING_SETUP_GUIDE_PHOTO:
+        if not is_admin_user(user_id):
+            PENDING_SETUP_GUIDE_PHOTO.pop(chat_id, None)
+            send_message(chat_id, "Команда доступна только администраторам.")
+            return
+
+        deadline = PENDING_SETUP_GUIDE_PHOTO[chat_id]
+        if deadline < time.time():
+            PENDING_SETUP_GUIDE_PHOTO.pop(chat_id, None)
+            send_message(chat_id, "Время ожидания фото истекло. Отправь /setphoto ещё раз.")
+            return
+
+        photos = message.get("photo") or []
+        if not photos:
+            send_message(
+                chat_id,
+                "🖼 Отправь именно фотографию для раздела «Как подключить» или /cancel."
+            )
+            return
+
+        photo = max(
+            photos,
+            key=lambda item: (
+                item.get("file_size") or 0,
+                item.get("width") or 0,
+                item.get("height") or 0,
+            ),
+        )
+        file_id = str(photo.get("file_id") or "")
+        if not file_id:
+            send_message(chat_id, "Не удалось получить file_id. Попробуй отправить фото ещё раз.")
+            return
+
+        maintenance_set(SETUP_GUIDE_FILE_ID_KEY, file_id)
+        PENDING_SETUP_GUIDE_PHOTO.pop(chat_id, None)
+        audit_admin(user_id, "фото «Как подключить»", None, "Обновлено через /setphoto")
+        send_message(
+            chat_id,
+            "✅ <b>Фото сохранено</b>\n\nТеперь оно используется в разделе «Как подключить».",
+            parse_mode="HTML",
+        )
         return
 
     if chat_id in PENDING_AUTOREPLY_PHOTO:
@@ -9371,6 +9415,19 @@ def handle_regular_message(message: dict) -> None:
         elif name == "/support" and is_private_chat(message):
             PENDING_SUPPORT[chat_id] = time.time() + 600
             send_message(chat_id, "Напиши вопрос одним сообщением. Отмена — /cancel")
+        elif name == "/setphoto" and is_private_chat(message):
+            if not is_admin_user(user_id):
+                deny_admin_command(chat_id)
+            else:
+                PENDING_SETUP_GUIDE_PHOTO[chat_id] = time.time() + 600
+                send_message(
+                    chat_id,
+                    "🖼 <b>Фото для «Как подключить»</b>\n\n"
+                    "Отправь фотографию одним сообщением. Бот сохранит её через Telegram file_id "
+                    "и будет показывать в разделе «Как подключить».\n\n"
+                    "Отмена — /cancel",
+                    parse_mode="HTML",
+                )
         elif name in {"/gift", "/promo", "/sub"}:
             send_message(chat_id, "HunterGram теперь бесплатный для всех. Подписки, промокоды и оплаты отключены.")
         elif name == "/admins" and is_private_chat(message):
@@ -9720,6 +9777,7 @@ def configure_bot() -> None:
     for admin_id in list_admin_ids():
         admin_commands = list(user_commands) + [
             {"command": "admins", "description": "Администраторы"},
+            {"command": "setphoto", "description": "Фото «Как подключить»"},
         ]
         if is_owner_admin(admin_id):
             admin_commands.extend(
