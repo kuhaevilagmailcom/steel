@@ -6278,8 +6278,12 @@ def grant_subscription(admin_id: int, chat_id: int, target_id: int, days: int) -
     audit_admin(admin_id, "выдача подписки", target_id, f"{days} дней")
     send_message(
         chat_id,
-        f"{pe('check')} Выдал <b>{days} дн.</b> пользователю <code>{target_id}</code> "
-        f"(до {format_until(until)}).",
+        admin_action_notification_html(
+            stored_user_notification_label(target_id),
+            f"Добавлено {days} дн.",
+            f"Активно до {format_until(until)}",
+            action_icon="calendar",
+        ),
         parse_mode="HTML",
     )
     if target_id != admin_id:
@@ -6672,7 +6676,17 @@ def handle_block_reason_input(admin_id: int, chat_id: int, text: str) -> bool:
         )
     audit_admin(admin_id, "блокировка", target_id, reason)
     page_text, markup = page_user_card(admin_id, target_id, return_page)
-    send_message(chat_id, page_text, parse_mode="HTML", reply_markup=markup)
+    send_message(
+        chat_id,
+        admin_action_notification_html(
+            stored_user_notification_label(target_id),
+            "Пользователь заблокирован",
+            reason,
+            action_icon="block",
+        ) + "\n\n" + page_text,
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
     return True
 
 
