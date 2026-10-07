@@ -7970,6 +7970,26 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Администраторский аккаунт удалить нельзя", show_alert=True)
             return
         page = page_delete_user_confirm(user_id, target_id, return_page)
+    elif data.startswith("adminmsg:"):
+        if not is_admin_user(user_id):
+            answer_callback(query_id, text="Только для админов", show_alert=True)
+            return
+        parts = data.split(":")
+        if len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
+            target_id, return_page = int(parts[1]), int(parts[2])
+            if not user_exists(target_id):
+                answer_callback(query_id, text="Пользователь не найден", show_alert=True)
+                return
+            PENDING_ADMIN_USER_MESSAGE[chat_id] = (target_id, return_page, time.time() + 600)
+            send_message(
+                chat_id,
+                f"{tg_icon('message')} <b>Сообщение пользователю</b>\n\n"
+                f"{tg_icon('user')} {stored_user_notification_label(target_id)}\n\n"
+                "Отправь текст, который нужно доставить пользователю.\n"
+                "Отмена — /cancel",
+                parse_mode="HTML",
+            )
+            alert = "Жду сообщение"
     elif data.startswith("ulabel:"):
         if not is_admin_user(user_id):
             answer_callback(query_id, text="Только для админов", show_alert=True)
