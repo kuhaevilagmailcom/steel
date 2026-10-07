@@ -7234,6 +7234,8 @@ def handle_callback_query(query: dict) -> None:
         return
     elif data == "hub:music":
         page = page_home(user_id)
+    elif data.startswith("music:"):
+        page = page_home(user_id)
     elif data == "hub:tools":
         page = page_functions(user_id)
     elif data == "tools:voice":
