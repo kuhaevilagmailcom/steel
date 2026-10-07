@@ -6421,7 +6421,7 @@ def broadcast_preview_page(chat_id: int) -> tuple[str, dict]:
         ],
     ]
     return (
-        f"{pe('support')} <b>Предпросмотр рассылки</b>\n\n"
+        f"{tg_icon('announcement')} <b>Предпросмотр рассылки</b>\n\n"
         f"{html_quote(text)}\n\n"
         f"Кнопка снизу: <b>{html_text(names.get(selected, 'без кнопки'))}</b>\n"
         "Выбери кнопку и только потом отправляй.",
@@ -7818,7 +7818,7 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
         page = (
-            f"{pe('support')} <b>Рассылка</b>\n\n"
+            f"{tg_icon('announcement')} <b>Рассылка</b>\n\n"
             "1. Отправь текст рассылки.\n"
             "2. Выбери кнопку снизу или оставь без кнопки.\n"
             "3. Проверь предпросмотр и отправь.",
