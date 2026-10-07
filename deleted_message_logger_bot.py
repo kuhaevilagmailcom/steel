@@ -687,6 +687,13 @@ def admin_action_notification_html(user_label: str, action: str, detail: str = "
     return result
 
 
+def admin_user_message_html(body: str) -> str:
+    return (
+        f"{tg_icon('shield')} <b>Вам сообщение от администратора</b>\n\n"
+        f"{tg_icon('message')} {html_quote(body)}"
+    )
+
+
 def support_new_notification_html(ticket_id: int, user_label: str, body: str) -> str:
     return (
         f"{tg_icon('chat')} <b>Новое обращение #{int(ticket_id)}</b>\n\n"
