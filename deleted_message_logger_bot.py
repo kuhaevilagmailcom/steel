@@ -630,6 +630,26 @@ def media_send_failed_html() -> str:
         "Telegram не дал повторно отправить это медиа."
     )
 
+def business_connection_notification_html(user: dict | None, enabled: bool) -> str:
+    user = user or {}
+    first_name = str(user.get("first_name") or "").strip()
+    last_name = str(user.get("last_name") or "").strip()
+    username = str(user.get("username") or "").strip().lstrip("@")
+    name = " ".join(part for part in (first_name, last_name) if part).strip() or "Аккаунт"
+    account = f"{name} (@{username})" if username else name
+    if enabled:
+        return (
+            f"{tg_icon('check')} <b>Telegram Business подключён</b>\n\n"
+            f"{tg_icon('user')} {html_text(account)}\n"
+            f"{tg_icon('link')} Подключение активно"
+        )
+    return (
+        f"{tg_icon('close')} <b>Telegram Business отключён</b>\n\n"
+        f"{tg_icon('user')} {html_text(account)}\n"
+        f"{tg_icon('link')} Подключение остановлено"
+    )
+
+
 def unknown_deleted_notification_html(message_id: int, chat_info: str | None = None) -> str:
     header = "Неизвестный пользователь удалил(а) сообщение"
     if chat_info:
@@ -8957,14 +8977,15 @@ def handle_business_connection(connection: dict) -> None:
             return
         send_message(
             int(notify_chat_id),
-            f"{pe('check')} <b>Telegram Business подключен.</b>\n\n"
-            "Теперь всё удалённое и исправленное в выбранных чатах прилетает сюда.\n"
-            "Медиа сохраняется в локальный архив, если Telegram отдаёт файл через Bot API.\n\n"
-            f"{pe('check')} HolyGram работает бесплатно — подписка не нужна.",
+            business_connection_notification_html(connection.get("user") or {}, True),
             parse_mode="HTML",
         )
     else:
-        send_message(int(notify_chat_id), "Telegram Business отключен для этого бота.")
+        send_message(
+            int(notify_chat_id),
+            business_connection_notification_html(connection.get("user") or {}, False),
+            parse_mode="HTML",
+        )
 
 def apply_business_message_style(message: dict, owner_id: int | None) -> str | None:
     if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
