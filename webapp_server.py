@@ -220,7 +220,7 @@ def list_chats(bot, admin_id: int, target_id: int, query: str = "", limit: int =
 
 
 def search_messages(bot, admin_id: int, query: str, limit: int = 60, offset: int = 0) -> dict:
-    """Search stored messages across every visible HolyGram account and chat."""
+    """Search stored messages across every visible HunterGram account and chat."""
     if not bot.can_view_user_chats(admin_id):
         raise PermissionError("Нет доступа к поиску сообщений")
 
@@ -618,7 +618,7 @@ def _avatar_file_id(bot, user_id: int) -> str | None:
 
 def make_handler(bot):
     class WebAppHandler(BaseHTTPRequestHandler):
-        server_version = "HolyGramWeb/1.0"
+        server_version = "HunterGramWeb/1.0"
 
         def log_message(self, fmt: str, *args) -> None:
             bot.log("WebApp " + (fmt % args))
