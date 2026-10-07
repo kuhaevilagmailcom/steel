@@ -6612,11 +6612,19 @@ def handle_support_input(user_id: int, chat_id: int, text: str) -> bool:
     for admin_id in list_admin_ids():
         send_message(
             admin_id,
-            f"{pe('support')} <b>Обращение #{ticket_id}</b>\n{stored_user_payment_label(user_id)}\n\n{html_quote(text)}",
+            support_new_notification_html(
+                ticket_id,
+                stored_user_notification_label(user_id),
+                text,
+            ),
             parse_mode="HTML",
             reply_markup=kb([[btn("Ответить", f"support:reply:{ticket_id}:{user_id}", emoji="support")]]),
         )
-    send_message(chat_id, f"Обращение #{ticket_id} отправлено. Ответ придёт сюда.")
+    send_message(
+        chat_id,
+        f"{tg_icon('check')} <b>Обращение #{ticket_id} отправлено</b>\n\nОтвет поддержки придёт сюда.",
+        parse_mode="HTML",
+    )
     return True
 
 
@@ -6633,9 +6641,17 @@ def handle_support_reply_input(admin_id: int, chat_id: int, text: str) -> bool:
             "UPDATE support_tickets SET admin_id=?, admin_reply=?, status='closed', replied_at=? WHERE id=?",
             (admin_id, text[:3900], int(time.time()), ticket_id),
         )
-    send_message(get_private_chat_id(target_id), f"{pe('support')} <b>Ответ поддержки на обращение #{ticket_id}</b>\n\n{html_quote(text)}", parse_mode="HTML")
+    send_message(
+        get_private_chat_id(target_id),
+        support_answer_notification_html(ticket_id, text),
+        parse_mode="HTML",
+    )
     audit_admin(admin_id, "ответ поддержки", target_id, f"обращение #{ticket_id}")
-    send_message(chat_id, "Ответ отправлен пользователю.")
+    send_message(
+        chat_id,
+        f"{tg_icon('check')} <b>Ответ отправлен</b>\n\n{tg_icon('user')} {stored_user_notification_label(target_id)}",
+        parse_mode="HTML",
+    )
     return True
 
 
