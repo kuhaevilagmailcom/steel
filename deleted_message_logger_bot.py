@@ -4234,7 +4234,7 @@ def page_home(user_id: int) -> tuple[str, dict]:
         rows.append([btn("🛡️ Админ-панель", "panel", style="success")])
 
     text = (
-        "💬 <b>HunterGram</b>\n\n"
+        "💬 <b>HunterMod</b>\n\n"
         "✔️ удалённые сообщения — сохраним и пришлём\n"
         "✔️ правки сообщений — покажем «было / стало»\n"
         "✔️ сгоревшие фото и видео — в архив\n"
