@@ -5074,6 +5074,7 @@ def page_user_card(admin_id: int, target_id: int, return_page: int = 0) -> tuple
     )
     block_button = btn("Разблокировать", f"unblock:{target_id}:{return_page}", emoji="check", style="success") if blocked else btn("Заблокировать", f"block:{target_id}:{return_page}", emoji="warning", style="danger")
     rows = [
+        [btn("Написать пользователю", f"adminmsg:{target_id}:{return_page}", emoji="support", style="primary")],
         [btn("Изменить метку", f"ulabel:{target_id}:{return_page}", emoji="profile")],
         [block_button],
         [btn("Назад к пользователям", f"users:{return_page}", emoji="home")],
