@@ -8914,11 +8914,26 @@ def handle_regular_message(message: dict) -> None:
             send_message(chat_id, "Нужен Telegram ID числом.")
             return
         if mode == "grant":
-            _, result = grant_chat_view_access(user_id, target_id)
+            ok, result = grant_chat_view_access(user_id, target_id)
+            action_text = "Выдан доступ к чатам"
+            action_icon = "add"
         else:
-            _, result = revoke_chat_view_access(user_id, target_id)
+            ok, result = revoke_chat_view_access(user_id, target_id)
+            action_text = "Доступ к чатам снят"
+            action_icon = "close"
         page_text, page_markup = page_admins(user_id)
-        send_message(chat_id, result)
+        if ok:
+            send_message(
+                chat_id,
+                admin_action_notification_html(
+                    stored_user_notification_label(target_id),
+                    action_text,
+                    action_icon=action_icon,
+                ),
+                parse_mode="HTML",
+            )
+        else:
+            send_message(chat_id, result)
         send_menu_page(user_id, chat_id, page_text, page_markup)
         return
 
@@ -8933,7 +8948,18 @@ def handle_regular_message(message: dict) -> None:
             send_message(chat_id, "Нужен Telegram ID числом.")
             return
         ok, result = add_bot_admin(user_id, target_id)
-        send_message(chat_id, result)
+        if ok:
+            send_message(
+                chat_id,
+                admin_action_notification_html(
+                    stored_user_notification_label(target_id),
+                    "Выдан доступ администратора",
+                    action_icon="add",
+                ),
+                parse_mode="HTML",
+            )
+        else:
+            send_message(chat_id, result)
         return
 
     if text and not text.startswith("/") and chat_id in PENDING_SUPPORT_REPLY and is_admin_user(user_id):
