@@ -487,13 +487,11 @@ def deleted_notification_html(
     chat_info: str | None = None,
     user_id: int | None = None,
 ) -> str:
-    header = f"{html_text(author_with_id(author, user_id))} удалил(а) сообщение"
-    if chat_info:
-        header += f" в чате {html_text(chat_info)}"
     return (
-        f"{header}:\n\n"
+        f'<tg-emoji emoji-id="5879896690210639947">🗑</tg-emoji> <b>Собеседник удалил сообщение</b>\n\n'
+        f'<tg-emoji emoji-id="5814247475141153332">👤</tg-emoji> {html_text(author)}\n\n'
+        f'<tg-emoji emoji-id="5884179047482659474">💬</tg-emoji> <b>Сообщение:</b>\n'
         f"{html_quote(content)}"
-        f"{bot_signature_html()}"
     )
 
 
