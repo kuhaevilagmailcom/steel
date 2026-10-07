@@ -9278,7 +9278,8 @@ def handle_deleted_business_messages(deleted: dict) -> None:
                 if not send_saved_media(notify_chat_id, old):
                     send_message(
                         notify_chat_id,
-                        f"Медиа было найдено ({old.get('media_type')}), но Telegram не дал повторно отправить файл.",
+                        media_send_failed_html(),
+                        parse_mode="HTML",
                     )
             mark_message_deleted(context, int(chat_id), int(message_id))
         else:
