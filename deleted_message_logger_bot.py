@@ -4394,6 +4394,7 @@ def page_custom_command_item(user_id: int, command_id: int) -> tuple[str, dict]:
 def page_communication_style(user_id: int) -> tuple[str, dict]:
     current = get_communication_style(user_id)
     current_label = STYLE_LABELS.get(current, "🚫 Отключён")
+    change_notice = STYLE_CHANGE_NOTICE.pop(user_id, None)
 
     def style_button(key: str, label: str) -> dict:
         return btn(
@@ -4423,8 +4424,10 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
         for key, label in STYLE_LABELS.items()
     )
+    change_text = style_changed_notification_html(*change_notice) + "\n\n" if change_notice else ""
     text = (
-        f"{tg_icon('design')} <b>Стиль общения</b>\n"
+        change_text
+        + f"{tg_icon('design')} <b>Стиль общения</b>\n"
         f"{tg_icon('brush')} Сейчас: <b>{current_label}</b>\n\n"
         "Выбери стиль — он будет применяться автоматически к исходящим Business-сообщениям.\n"
         "🎀 Няшный повторяет механику CuteMessages: строчные буквы, растягивание гласных, "
