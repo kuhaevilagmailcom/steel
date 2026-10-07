@@ -7841,7 +7841,11 @@ def handle_callback_query(query: dict) -> None:
             answer_callback(query_id, text="Только для админов", show_alert=True)
             return
         sent, failed = execute_broadcast(user_id, chat_id)
-        send_message(chat_id, f"Рассылка завершена: отправлено {sent}, ошибок {failed}.")
+        send_message(
+            chat_id,
+            broadcast_done_notification_html(sent, failed),
+            parse_mode="HTML",
+        )
         page = page_panel(user_id)
     elif data == "broadcast:cancel":
         BROADCAST_PREVIEWS.pop(chat_id, None)
