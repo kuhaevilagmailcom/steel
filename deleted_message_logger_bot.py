@@ -4390,9 +4390,12 @@ def page_hub_fun(user_id: int, result: str | None = None) -> tuple[str, dict]:
 
 def page_hub_settings(user_id: int) -> tuple[str, dict]:
     style = STYLE_LABELS.get(get_communication_style(user_id), "Отключён")
+    autoreply = get_autoreply_settings(user_id)
+    autoreply_status = "включён" if autoreply["enabled"] else "выключен"
     text = (
         "⚙️ <b>Настройки</b>\n\n"
         f"Стиль общения: <b>{html_text(style)}</b>\n"
+        f"Автоответчик: <b>{autoreply_status}</b>\n"
         f"Автозамен: <b>{len(list_auto_replacements(user_id))}</b>\n"
         f"Команд: <b>{len(list_custom_commands(user_id))}</b>\n\n"
         "Настрой HolyGram под себя."
@@ -4400,12 +4403,13 @@ def page_hub_settings(user_id: int) -> tuple[str, dict]:
     rows = [
         [
             btn("🎭 Стиль", "style", emoji="profile"),
-            btn("🔁 Автозамена", "autoreplace", emoji="refresh"),
+            btn("🤖 Автоответчик", "autoreply", emoji="refresh"),
         ],
         [
+            btn("🔁 Автозамена", "autoreplace", emoji="refresh"),
             btn("⚡ Команды", "commands", emoji="history"),
-            btn("💬 Чаты", "conns", emoji="view"),
         ],
+        [btn("💬 Чаты", "conns", emoji="view")],
         [btn("Как подключить", "help", emoji="support")],
         [btn("Назад", "home", emoji="back")],
     ]
@@ -4445,24 +4449,75 @@ def page_functions(user_id: int) -> tuple[str, dict]:
     replacements_count = len(list_auto_replacements(user_id))
     commands_count = len(list_custom_commands(user_id))
     current_style = STYLE_LABELS.get(get_communication_style(user_id), "Отключён")
+    autoreply = get_autoreply_settings(user_id)
     rows = [
         [
             btn("Подключённые чаты", "conns", emoji="view"),
             btn("Стили общения", "style", emoji="profile"),
         ],
         [
+            btn("Автоответчик", "autoreply", emoji="refresh"),
             btn("Автозамена", "autoreplace", emoji="refresh"),
-            btn("Мои команды", "commands", emoji="history"),
         ],
+        [btn("Мои команды", "commands", emoji="history")],
         [btn("Назад", "home", emoji="back")],
     ]
     text = (
         "⚙️ <b>Функции бота</b>\n\n"
         f"Подключено чатов: <b>{enabled_count}</b>\n"
         f"Стиль: <b>{html_text(current_style)}</b>\n"
+        f"Автоответчик: <b>{'включён' if autoreply['enabled'] else 'выключен'}</b>\n"
         f"Автозамен: <b>{replacements_count}</b>\n"
         f"Команд: <b>{commands_count}</b>\n\n"
         "Здесь собраны функции, которые меняют и автоматизируют исходящие сообщения."
+    )
+    return text, kb(rows)
+
+
+def page_autoreply(user_id: int) -> tuple[str, dict]:
+    settings = get_autoreply_settings(user_id)
+    messages = list(settings["messages"])
+    enabled = bool(settings["enabled"])
+    has_photo = bool(settings["photo_file_id"])
+    preview_lines = []
+    for index, message in enumerate(messages[:3], start=1):
+        compact = re.sub(r"\s+", " ", message)
+        if len(compact) > 90:
+            compact = compact[:87] + "…"
+        preview_lines.append(f"{index}. {html_text(compact)}")
+    preview = "\n".join(preview_lines) if preview_lines else "Сообщения пока не добавлены."
+    status_icon = "✅" if enabled else "❌"
+    rows = [
+        [
+            btn(
+                "Выключить" if enabled else "Включить",
+                "autoreply:toggle",
+                emoji="warning" if enabled else "check",
+                style="danger" if enabled else "success",
+            )
+        ],
+        [
+            btn("Сообщения", "autoreply:messages", emoji="refresh"),
+            btn("Картинка", "autoreply:photo", emoji="view"),
+        ],
+    ]
+    if messages or has_photo:
+        cleanup = []
+        if messages:
+            cleanup.append(btn("Очистить сообщения", "autoreply:messages:clear", emoji="warning"))
+        if has_photo:
+            cleanup.append(btn("Удалить картинку", "autoreply:photo:clear", emoji="warning"))
+        rows.append(cleanup)
+    rows.append([btn("Назад в настройки", "hub:settings", emoji="back")])
+    text = (
+        f"🤖 <b>Автоответчик</b>\n\n"
+        f"Статус: <b>{status_icon} {'включён' if enabled else 'выключен'}</b>\n"
+        f"Вариантов ответа: <b>{len(messages)}/{MAX_AUTOREPLY_MESSAGES}</b>\n"
+        f"Картинка: <b>{'добавлена' if has_photo else 'нет'}</b>\n\n"
+        "Когда другой пользователь пишет в подключённый Telegram Business-чат, "
+        "HolyGram автоматически отправляет один из сохранённых вариантов. "
+        "Если добавлена картинка, она отправляется вместе с выбранным текстом.\n\n"
+        f"<b>Пример вариантов:</b>\n{preview}"
     )
     return text, kb(rows)
 
