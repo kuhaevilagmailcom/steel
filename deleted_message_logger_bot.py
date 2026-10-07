@@ -9631,6 +9631,7 @@ def handle_business_message(message: dict) -> None:
         return
     if not owner_can_log(owner_id):
         return
+    maybe_send_business_autoreply(message, owner_id)
     handle_reply_to_message_media(context, message, notify_chat_id, ignored_user_id=owner_id)
     if notify_chat_id and should_forward_media_immediately(saved):
         send_immediate_timer_media(notify_chat_id, saved)
