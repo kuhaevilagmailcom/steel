@@ -2585,6 +2585,159 @@ def delete_custom_command(user_id: int, command_id: int) -> bool:
     return cur.rowcount > 0
 
 
+MAX_AUTOREPLY_MESSAGES = 10
+MAX_AUTOREPLY_MESSAGE_LENGTH = 900
+
+
+def get_autoreply_settings(user_id: int) -> dict:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT enabled,messages_json,photo_file_id FROM user_autoreply_settings WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return {"enabled": False, "messages": [], "photo_file_id": ""}
+    try:
+        messages = json.loads(str(row[1] or "[]"))
+    except json.JSONDecodeError:
+        messages = []
+    if not isinstance(messages, list):
+        messages = []
+    clean_messages = [
+        str(item).strip()
+        for item in messages
+        if str(item).strip()
+    ][:MAX_AUTOREPLY_MESSAGES]
+    return {
+        "enabled": bool(row[0]),
+        "messages": clean_messages,
+        "photo_file_id": str(row[2] or ""),
+    }
+
+
+def _save_autoreply_settings(user_id: int, enabled: bool, messages: list[str], photo_file_id: str) -> None:
+    clean_messages = [str(item).strip()[:MAX_AUTOREPLY_MESSAGE_LENGTH] for item in messages if str(item).strip()]
+    clean_messages = clean_messages[:MAX_AUTOREPLY_MESSAGES]
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_autoreply_settings (user_id,enabled,messages_json,photo_file_id,updated_at)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled=excluded.enabled,
+                messages_json=excluded.messages_json,
+                photo_file_id=excluded.photo_file_id,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, 1 if enabled else 0, json.dumps(clean_messages, ensure_ascii=False), photo_file_id or None, now),
+        )
+
+
+def set_autoreply_enabled(user_id: int, enabled: bool) -> tuple[bool, str]:
+    settings = get_autoreply_settings(user_id)
+    if enabled and not settings["messages"] and not settings["photo_file_id"]:
+        return False, "Сначала добавь хотя бы одно сообщение или картинку."
+    _save_autoreply_settings(user_id, enabled, settings["messages"], settings["photo_file_id"])
+    return True, "Автоответчик включён." if enabled else "Автоответчик выключен."
+
+
+def set_autoreply_messages(user_id: int, messages: list[str]) -> tuple[bool, str]:
+    cleaned = [re.sub(r"\s+$", "", str(item)).strip() for item in messages if str(item).strip()]
+    if not cleaned:
+        return False, "Добавь хотя бы одно сообщение."
+    if len(cleaned) > MAX_AUTOREPLY_MESSAGES:
+        return False, f"Можно сохранить максимум {MAX_AUTOREPLY_MESSAGES} вариантов."
+    if any(len(item) > MAX_AUTOREPLY_MESSAGE_LENGTH for item in cleaned):
+        return False, f"Каждый вариант — максимум {MAX_AUTOREPLY_MESSAGE_LENGTH} символов."
+    settings = get_autoreply_settings(user_id)
+    _save_autoreply_settings(user_id, settings["enabled"], cleaned, settings["photo_file_id"])
+    return True, f"Сохранено вариантов: {len(cleaned)}."
+
+
+def clear_autoreply_messages(user_id: int) -> None:
+    settings = get_autoreply_settings(user_id)
+    enabled = settings["enabled"] and bool(settings["photo_file_id"])
+    _save_autoreply_settings(user_id, enabled, [], settings["photo_file_id"])
+
+
+def set_autoreply_photo(user_id: int, file_id: str) -> None:
+    settings = get_autoreply_settings(user_id)
+    _save_autoreply_settings(user_id, settings["enabled"], settings["messages"], str(file_id or ""))
+
+
+def clear_autoreply_photo(user_id: int) -> None:
+    settings = get_autoreply_settings(user_id)
+    enabled = settings["enabled"] and bool(settings["messages"])
+    _save_autoreply_settings(user_id, enabled, settings["messages"], "")
+
+
+def parse_autoreply_messages(raw: str) -> list[str]:
+    raw = str(raw or "").strip()
+    if not raw:
+        return []
+    if re.search(r"\n\s*---+\s*\n", raw):
+        parts = re.split(r"\n\s*---+\s*\n", raw)
+    else:
+        parts = raw.splitlines()
+    return [part.strip() for part in parts if part.strip()]
+
+
+def choose_autoreply_message(settings: dict, incoming_message: dict) -> str:
+    messages = list(settings.get("messages") or [])
+    if not messages:
+        return ""
+    try:
+        message_id = int(incoming_message.get("message_id") or 0)
+        chat_id = int((incoming_message.get("chat") or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        message_id = 0
+        chat_id = 0
+    index = abs((message_id * 1315423911) ^ chat_id) % len(messages)
+    return str(messages[index])
+
+
+def maybe_send_business_autoreply(message: dict, owner_id: int | None) -> bool:
+    if owner_id is None or message.get("sender_business_bot") or message_is_from_user(message, owner_id):
+        return False
+    connection_id = str(message.get("business_connection_id") or "")
+    chat_id = int((message.get("chat") or {}).get("id") or 0)
+    if not connection_id or not chat_id:
+        return False
+
+    settings = get_autoreply_settings(owner_id)
+    if not settings["enabled"]:
+        return False
+    text = choose_autoreply_message(settings, message)
+    photo_file_id = str(settings.get("photo_file_id") or "")
+    if not text and not photo_file_id:
+        return False
+
+    try:
+        if photo_file_id:
+            payload: dict[str, object] = {
+                "business_connection_id": connection_id,
+                "chat_id": chat_id,
+                "photo": photo_file_id,
+            }
+            if text:
+                payload["caption"] = text[:1024]
+            telegram_call("sendPhoto", payload)
+        else:
+            telegram_call(
+                "sendMessage",
+                {
+                    "business_connection_id": connection_id,
+                    "chat_id": chat_id,
+                    "text": text[:4096],
+                },
+            )
+        return True
+    except TelegramApiError as exc:
+        log(f"Business autoresponder failed for {owner_id}/{chat_id}: {exc}")
+        return False
+
+
 def get_communication_style(user_id: int) -> str:
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
