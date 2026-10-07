@@ -7195,7 +7195,12 @@ def handle_callback_query(query: dict) -> None:
             if style not in STYLE_LABELS and style:
                 answer_callback(query_id, text="Неизвестный стиль", show_alert=True)
                 return
+            old_style = get_communication_style(user_id)
+            old_label = STYLE_LABELS.get(old_style, "Отключён") if old_style else "Отключён"
             set_communication_style(user_id, style)
+            new_label = STYLE_LABELS.get(style, "Отключён") if style else "Отключён"
+            if old_style != style:
+                STYLE_CHANGE_NOTICE[user_id] = (old_label, new_label)
             if style == "rooster":
                 page = page_rooster_settings(user_id)
                 alert = f"Петух включён · мат {get_rooster_profanity_percent(user_id)}%"
