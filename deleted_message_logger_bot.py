@@ -4622,6 +4622,15 @@ def stored_user_label(
     return html_text(name) if name else f"Пользователь {user_id}"
 
 
+def stored_user_notification_label(user_id: int) -> str:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT first_name, last_name, username FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return stored_user_label(user_id, *(row or (None, None, None)))
+
+
 def stored_user_payment_label(user_id: int) -> str:
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
