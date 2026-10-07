@@ -8441,11 +8441,12 @@ def send_immediate_timer_media(notify_chat_id: int, saved_message: dict) -> None
             saved_message.get("content") or "",
             saved_message.get("media_type") or "media",
             saved_message.get("ttl_seconds"),
+            saved_locally=bool(saved_message.get("local_media_path")),
         ),
         parse_mode="HTML",
     )
     if not send_saved_media(notify_chat_id, saved_message):
-        send_message(notify_chat_id, "Медиа было найдено, но Telegram не дал повторно отправить файл.")
+        send_message(notify_chat_id, media_send_failed_html(), parse_mode="HTML")
 
 
 def send_immediate_reply_media(notify_chat_id: int, saved_message: dict) -> None:
@@ -8457,11 +8458,12 @@ def send_immediate_reply_media(notify_chat_id: int, saved_message: dict) -> None
             saved_message.get("media_type") or "media",
             saved_message.get("ttl_seconds"),
             source="reply",
+            saved_locally=bool(saved_message.get("local_media_path")),
         ),
         parse_mode="HTML",
     )
     if not send_saved_media(notify_chat_id, saved_message):
-        send_message(notify_chat_id, "Медиа из ответа было найдено, но Telegram не дал повторно отправить файл.")
+        send_message(notify_chat_id, media_send_failed_html(), parse_mode="HTML")
 
 
 def handle_reply_to_message_media(
