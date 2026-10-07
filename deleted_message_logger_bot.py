@@ -2172,6 +2172,8 @@ PENDING_CUSTOM_COMMAND: dict[int, tuple[str, int | None, str | None, float]] = {
 # chat_id -> (mode, deadline)
 PENDING_TEXT_TOOL: dict[int, tuple[str, float]] = {}
 PENDING_LINK_TOOL: dict[int, tuple[str, float]] = {}
+STYLE_CHANGE_NOTICE: dict[int, tuple[str, str]] = {}
+STYLE_LEVEL_NOTICE: dict[int, tuple[str, int, int]] = {}
 # token -> (expires_at, owner_user_id, payload)
 QUICK_ACTION_CACHE: dict[str, tuple[float, int, dict]] = {}
 QUICK_ACTION_TTL_SEC = 15 * 60
