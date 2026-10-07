@@ -1707,13 +1707,8 @@ def notify_admins_business_connection(connection: dict, previous_enabled: bool |
     action = "🟢 <b>Подключил(а) бота к Telegram Business</b>" if enabled else "🔴 <b>Отключил(а) бота от Telegram Business</b>"
     connection_id = short_connection_id(connection.get("id"))
 
-    text = (
-        f"🔔 <b>Изменение Business-подключения</b>\n\n"
-        f"{action}\n\n"
-        f"👤 Имя: <b>{html_text(full_name)}</b>\n"
-        f"🆔 ID: <code>{int(owner_id)}</code>\n"
-        f"🔗 Ник: <b>{username_text}</b>\n"
-        f"💼 Подключение: <code>{html_text(connection_id)}</code>"
+    text = business_connection_notification_html(user, enabled) + (
+        f"\n{tg_icon('info')} ID: <code>{int(owner_id)}</code>"
     )
     for admin_id in list_admin_ids():
         try:
