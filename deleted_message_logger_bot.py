@@ -497,12 +497,38 @@ def deleted_notification_html(
     )
 
 
+TG_ANDROID_EDIT_ICONS = {
+    # https://t.me/addemoji/TgAndroidIcons
+    "edit": ("✏️", "5879841310902324730"),
+    "user": ("👤", "5814247475141153332"),
+    "document": ("📄", "5839323457015256759"),
+    "new": ("🆕", "5886306834410640699"),
+}
+
+
+def tg_android_edit_icon(name: str) -> str:
+    fallback, emoji_id = TG_ANDROID_EDIT_ICONS[name]
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+def compact_edited_author(author: str) -> str:
+    """Keep name/@username in edit alerts, but hide the technical Telegram ID."""
+    value = str(author or "").strip()
+    value = re.sub(r",\\s*ID:\\s*-?\\d+(?=\\))", "", value)
+    value = re.sub(r"\\s*\\(ID:\\s*-?\\d+\\)", "", value)
+    return value.strip() or "Неизвестный пользователь"
+
+
 def edited_notification_html(author: str, old_content: str, new_content: str) -> str:
+    # Layout intentionally mirrors Telegram's compact edited-message card:
+    # title -> interlocutor -> old quote -> new quote.
     return (
-        f"{html_text(author)} изменил(а) сообщение:\n\n"
-        f"Old:\n{html_quote(old_content)}\n\n"
-        f"New:\n{html_quote(new_content)}"
-        f"{bot_signature_html()}"
+        f"{tg_android_edit_icon('edit')} <b>Собеседник изменил сообщение</b>\n\n"
+        f"{tg_android_edit_icon('user')} {html_text(compact_edited_author(author))}\n\n"
+        f"{tg_android_edit_icon('document')} <b>Было:</b>\n"
+        f"{html_quote(old_content)}\n\n"
+        f"{tg_android_edit_icon('new')} <b>Стало:</b>\n"
+        f"{html_quote(new_content)}"
     )
 
 
