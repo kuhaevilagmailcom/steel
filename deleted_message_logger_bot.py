@@ -2128,6 +2128,70 @@ def bot_username() -> str:
     return _ME_USERNAME
 
 
+def _button_plain_emoji(text: str, emoji: str | None = None) -> str:
+    """Use only ordinary Unicode emoji in inline buttons."""
+    value = str(text or "").strip()
+    if not value:
+        return "🔹"
+
+    # If the label already starts with a symbol/emoji, keep it as-is.
+    if not re.match(r"^[A-Za-zА-Яа-яЁё0-9@#]", value):
+        return ""
+
+    lower = value.casefold()
+    semantic = (
+        ("назад", "⬅️"),
+        ("главное меню", "🏠"),
+        ("функции", "⚙️"),
+        ("как подключить", "🔗"),
+        ("поддерж", "💬"),
+        ("ответить", "💬"),
+        ("проверить", "✅"),
+        ("обновить", "🔄"),
+        ("добавить", "➕"),
+        ("создать", "➕"),
+        ("удалить", "🗑️"),
+        ("очистить", "🗑️"),
+        ("включить", "✅"),
+        ("выключить", "❌"),
+        ("отключить", "❌"),
+        ("сообщения", "💬"),
+        ("картинка", "🖼️"),
+        ("подключённые чаты", "💬"),
+        ("чаты", "💬"),
+        ("стиль", "🎭"),
+        ("автоответ", "🤖"),
+        ("автозамен", "🔁"),
+        ("команд", "⚡"),
+        ("пользовател", "👥"),
+        ("обращен", "💬"),
+        ("статист", "📊"),
+        ("рассыл", "📢"),
+        ("экспорт", "📄"),
+        ("диагност", "🛠️"),
+        ("журнал", "📋"),
+        ("админ", "🛡️"),
+        ("сохран", "💾"),
+        ("готово", "✅"),
+        ("отмена", "✖️"),
+        ("дальше", "➡️"),
+        ("след.", "➡️"),
+        ("пред.", "⬅️"),
+        ("скопировать", "📋"),
+        ("поделиться", "🔗"),
+    )
+    for marker, icon in semantic:
+        if lower.startswith(marker):
+            return icon
+
+    if emoji and emoji in NEWS:
+        fallback = NEWS[emoji][0]
+        if emoji == "back":
+            return "⬅️"
+        return fallback
+    return "🔹"
+
+
 def btn(
     text: str,
     cb: str | None = None,
@@ -2137,16 +2201,17 @@ def btn(
     style: str | None = None,
     web_app: str | None = None,
 ) -> dict:
+    prefix = _button_plain_emoji(text, emoji)
+    if prefix:
+        text = f"{prefix} {text}"
+
     item: dict[str, object] = {"text": text}
     if cb:
         item["callback_data"] = cb
     if url:
         item["url"] = url
     if copy:
-        # Bot API требует RichText-объект, а не голую строку
         item["copy_text"] = {"text": copy}
-    if emoji:
-        item["icon_custom_emoji_id"] = NEWS[emoji][1]
     if style:
         item["style"] = style
     if web_app:
@@ -4159,23 +4224,22 @@ def bottom_navigation() -> list[list[dict]]:
 
 def page_home(user_id: int) -> tuple[str, dict]:
     rows = [
+        [btn("⚙️ Функции бота", "functions", style="primary")],
         [
-            btn("🎵 Музыка", "hub:music", style="primary"),
-            btn("🧰 Инструменты", "hub:tools"),
+            btn("🔗 Как подключить", "help"),
+            btn("💬 Поддержка", "support"),
         ],
-        [
-            btn("📂 Моё", "hub:mine"),
-            btn("🎲 Развлечения", "hub:fun"),
-        ],
-        [btn("⚙️ Настройки", "hub:settings")],
     ]
     if is_admin_user(user_id):
-        rows.append([btn("🛡 Админ-панель", "panel", emoji="admin", style="success")])
+        rows.append([btn("🛡️ Админ-панель", "panel", style="success")])
 
     text = (
-        "✨ <b>HunterGram</b>\n\n"
-        "Всё нужное — в одном месте.\n"
-        "Выбери раздел:"
+        "💬 <b>HunterGram</b>\n\n"
+        "✔️ удалённые сообщения — сохраним и пришлём\n"
+        "✔️ правки сообщений — покажем «было / стало»\n"
+        "✔️ сгоревшие фото и видео — в архив\n"
+        "✔️ кружки, голосовые, файлы, стикеры — тоже\n\n"
+        "<b>Тг прем не нужен</b>"
     )
     return text, kb(rows)
 
@@ -4216,7 +4280,7 @@ def page_hub_tools(user_id: int) -> tuple[str, dict]:
             btn("🔗 Ссылки", "tools:links"),
         ],
         [btn("🔥 Быстрые действия", "tools:quick", style="primary")],
-        [btn("💬 Telegram Business", "hub:settings", emoji="view")],
+        [btn("💬 Telegram Business", "functions", emoji="view")],
         [btn("Назад", "home", emoji="back")],
     ]
     return text, kb(rows)
@@ -4370,31 +4434,8 @@ def page_hub_fun(user_id: int, result: str | None = None) -> tuple[str, dict]:
 
 
 def page_hub_settings(user_id: int) -> tuple[str, dict]:
-    style = STYLE_LABELS.get(get_communication_style(user_id), "Отключён")
-    autoreply = get_autoreply_settings(user_id)
-    autoreply_status = "включён" if autoreply["enabled"] else "выключен"
-    text = (
-        "⚙️ <b>Настройки</b>\n\n"
-        f"Стиль общения: <b>{html_text(style)}</b>\n"
-        f"Автоответчик: <b>{autoreply_status}</b>\n"
-        f"Автозамен: <b>{len(list_auto_replacements(user_id))}</b>\n"
-        f"Команд: <b>{len(list_custom_commands(user_id))}</b>\n\n"
-        "Настрой HunterGram под себя."
-    )
-    rows = [
-        [
-            btn("🎭 Стиль", "style", emoji="profile"),
-            btn("🤖 Автоответчик", "autoreply", emoji="refresh"),
-        ],
-        [
-            btn("🔁 Автозамена", "autoreplace", emoji="refresh"),
-            btn("⚡ Команды", "commands", emoji="history"),
-        ],
-        [btn("💬 Чаты", "conns", emoji="view")],
-        [btn("Как подключить", "help", emoji="support")],
-        [btn("Назад", "home", emoji="back")],
-    ]
-    return text, kb(rows)
+    # Kept as a compatibility alias for old buttons/messages.
+    return page_functions(user_id)
 
 
 
@@ -4431,28 +4472,30 @@ def page_functions(user_id: int) -> tuple[str, dict]:
     commands_count = len(list_custom_commands(user_id))
     current_style = STYLE_LABELS.get(get_communication_style(user_id), "Отключён")
     autoreply = get_autoreply_settings(user_id)
+
     rows = [
         [
-            btn("Подключённые чаты", "conns", emoji="view"),
-            btn("Стили общения", "style", emoji="profile"),
+            btn("💬 Подключённые чаты", "conns"),
+            btn("🎭 Стиль общения", "style"),
         ],
         [
-            btn("Автоответчик", "autoreply", emoji="refresh"),
-            btn("Автозамена", "autoreplace", emoji="refresh"),
+            btn("🤖 Автоответчик", "autoreply"),
+            btn("🔁 Автозамена", "autoreplace"),
         ],
-        [btn("Мои команды", "commands", emoji="history")],
-        [btn("Назад", "home", emoji="back")],
+        [btn("⚡ Мои команды", "commands")],
+        [btn("⬅️ Назад", "home")],
     ]
     text = (
         "⚙️ <b>Функции бота</b>\n\n"
         f"Подключено чатов: <b>{enabled_count}</b>\n"
-        f"Стиль: <b>{html_text(current_style)}</b>\n"
+        f"Стиль общения: <b>{html_text(current_style)}</b>\n"
         f"Автоответчик: <b>{'включён' if autoreply['enabled'] else 'выключен'}</b>\n"
         f"Автозамен: <b>{replacements_count}</b>\n"
         f"Команд: <b>{commands_count}</b>\n\n"
-        "Здесь собраны функции, которые меняют и автоматизируют исходящие сообщения."
+        "Настрой работу чат-бота под себя."
     )
     return text, kb(rows)
+
 
 
 def page_autoreply(user_id: int) -> tuple[str, dict]:
@@ -4489,7 +4532,7 @@ def page_autoreply(user_id: int) -> tuple[str, dict]:
         if has_photo:
             cleanup.append(btn("Удалить картинку", "autoreply:photo:clear", emoji="warning"))
         rows.append(cleanup)
-    rows.append([btn("Назад в настройки", "hub:settings", emoji="back")])
+    rows.append([btn("Назад в функции", "functions", emoji="back")])
     text = (
         f"🤖 <b>Автоответчик</b>\n\n"
         f"Статус: <b>{status_icon} {'включён' if enabled else 'выключен'}</b>\n"
@@ -4514,7 +4557,7 @@ def page_auto_replacements(user_id: int) -> tuple[str, dict]:
         rows.append([btn(label, f"ar:item:{rule_id}")])
     rows.extend([
         [btn("Добавить автозамену", "ar:add", emoji="add", style="success")],
-        [btn("Назад в настройки", "hub:settings", emoji="back")],
+        [btn("Назад в функции", "functions", emoji="back")],
     ])
     text = (
         "🔁 <b>Автозамена</b>\n\n"
@@ -4550,7 +4593,7 @@ def page_custom_commands(user_id: int) -> tuple[str, dict]:
         rows.append([btn(f"{trigger} · {len(messages)} сообщ.", f"cmd:item:{command_id}")])
     rows.extend([
         [btn("Создать команду", "cmd:add", emoji="add", style="success")],
-        [btn("Назад в настройки", "hub:settings", emoji="back")],
+        [btn("Назад в функции", "functions", emoji="back")],
     ])
     text = (
         "⌨️ <b>Мои команды</b>\n\n"
@@ -4618,7 +4661,7 @@ def page_communication_style(user_id: int) -> tuple[str, dict]:
         rows.append([btn("Настройки мата", "rooster:settings", emoji="refresh", style="primary")])
     rows.extend([
         [btn("Отключить стиль", "style:off", emoji="warning", style="danger")],
-        [btn("Назад в настройки", "hub:settings", emoji="back")],
+        [btn("Назад в функции", "functions", emoji="back")],
     ])
     examples = "\n".join(
         f"{'→' if key == current else '•'} <b>{label}</b>: {html_text(STYLE_EXAMPLES[key])}"
@@ -4812,7 +4855,7 @@ def page_connections(user_id: int) -> tuple[str, dict]:
     rows.extend([
         [btn("Добавить или изменить чаты", "help", emoji="add")],
         [btn("Обновить", "conns", emoji="refresh")],
-        [btn("Назад в настройки", "hub:settings", emoji="back")],
+        [btn("Назад в функции", "functions", emoji="back")],
     ])
     return text, kb(rows)
 
@@ -7292,7 +7335,7 @@ def handle_callback_query(query: dict) -> None:
         page = page_my_music_history(user_id)
     elif data == "hub:fun":
         page = page_hub_fun(user_id)
-    elif data == "hub:settings":
+    elif data == "functions":
         page = page_hub_settings(user_id)
     elif data == "fun:coin":
         side = "Орёл 🦅" if uuid.uuid4().int % 2 == 0 else "Решка 🪙"
@@ -7360,7 +7403,7 @@ def handle_callback_query(query: dict) -> None:
         page = page_buy(user_id)
         alert = "HunterGram бесплатный — подписки и оплаты отключены"
     elif data == "functions":
-        page = page_hub_tools(user_id)
+        page = page_functions(user_id)
     elif data == "autoreply":
         page = page_autoreply(user_id)
     elif data == "autoreply:toggle":
@@ -9318,20 +9361,13 @@ def handle_regular_message(message: dict) -> None:
         elif name == "/menu":
             handle_start(message, [])
         elif name in {"/music", "/search"} and is_private_chat(message):
-            if args:
-                send_music_search_results(user_id, chat_id, " ".join(args))
-            else:
-                send_message(
-                    chat_id,
-                    "🔎 <b>Напиши название песни или исполнителя.</b>",
-                    parse_mode="HTML",
-                )
+            home_text, home_markup = page_home(user_id)
+            send_menu_page(user_id, chat_id, home_text, home_markup)
         elif name == "/help":
             if is_private_chat(message):
-                help_text, help_markup = page_music_help(user_id)
-                send_menu_page(user_id, chat_id, help_text, help_markup, use_photo=False)
+                send_setup_guide(user_id, chat_id)
             else:
-                send_message(chat_id, "Помощь покажу в личных сообщениях со мной.")
+                send_message(chat_id, "Как подключить бота — покажу в личных сообщениях.")
         elif name == "/support" and is_private_chat(message):
             PENDING_SUPPORT[chat_id] = time.time() + 600
             send_message(chat_id, "Напиши вопрос одним сообщением. Отмена — /cancel")
@@ -9672,10 +9708,8 @@ def handle_update(update: dict) -> None:
 
 def configure_bot() -> None:
     user_commands = [
-        {"command": "start", "description": "HunterGram — главное меню"},
-        {"command": "music", "description": "Найти музыку"},
-        {"command": "search", "description": "Поиск музыки"},
-        {"command": "help", "description": "Помощь"},
+        {"command": "start", "description": "Главное меню"},
+        {"command": "help", "description": "Как подключить"},
         {"command": "support", "description": "Поддержка"},
     ]
     try:
