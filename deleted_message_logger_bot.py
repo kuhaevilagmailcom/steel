@@ -489,7 +489,7 @@ def deleted_notification_html(
 ) -> str:
     return (
         f'<tg-emoji emoji-id="5879896690210639947">🗑</tg-emoji> <b>Собеседник удалил сообщение</b>\n\n'
-        f'<tg-emoji emoji-id="5814247475141153332">👤</tg-emoji> {html_text(author)}\n\n'
+        f'<tg-emoji emoji-id="5814247475141153332">👤</tg-emoji> {html_text(compact_edited_author(author))}\n\n'
         f'<tg-emoji emoji-id="5884179047482659474">💬</tg-emoji> <b>Сообщение:</b>\n'
         f"{html_quote(content)}"
     )
@@ -561,26 +561,74 @@ def edited_notification_html(author: str, old_content: str, new_content: str) ->
     )
 
 
+def reply_notification_html(author: str, replied_to: str, new_content: str) -> str:
+    return (
+        f"{tg_icon('reply')} <b>Ответ на сообщение</b>\n\n"
+        f"{tg_icon('user')} {html_text(compact_edited_author(author))}\n\n"
+        f"{tg_icon('message')} <b>На что ответил:</b>\n{html_quote(replied_to)}\n\n"
+        f"{tg_icon('memo')} <b>Новый текст:</b>\n{html_quote(new_content)}"
+    )
+
+
+def media_icon_name(media_type: str) -> str:
+    return {
+        "photo": "photo",
+        "video": "video",
+        "video_note": "video",
+        "voice": "voice",
+        "audio": "audio",
+        "animation": "animation",
+        "document": "file",
+        "sticker": "file",
+    }.get(media_type, "file")
+
+
 def media_notification_html(
     author: str,
     content: str,
     media_type: str,
     ttl_seconds: int | None,
     source: str = "message",
+    saved_locally: bool | None = None,
 ) -> str:
-    label = MEDIA_LABELS.get(media_type, media_type)
+    label = MEDIA_LABELS.get(media_type, media_type).capitalize()
     if ttl_seconds:
-        title = f"отправил(а) медиа с таймером ({ttl_seconds} сек.)"
+        title, title_icon = "Собеседник отправил исчезающее медиа", "timer"
     elif source == "reply":
-        title = "отправил(а) медиа из ответа"
+        title, title_icon = "Медиа из сообщения, на которое ответили", "reply"
     else:
-        title = "отправил(а) медиа"
-    return (
-        f"{html_text(author)} {title}:\n\n"
-        f"{html_quote(content or f'[{label}]')}"
-        f"{bot_signature_html()}"
-    )
+        title, title_icon = "Собеседник отправил медиа", media_icon_name(media_type)
 
+    lines = [
+        f"{tg_icon(title_icon)} <b>{title}</b>",
+        "",
+        f"{tg_icon('user')} {html_text(compact_edited_author(author))}",
+        "",
+        f"{tg_icon(media_icon_name(media_type))} <b>{html_text(label)}</b>",
+    ]
+    if ttl_seconds:
+        lines.append(f"{tg_icon('time')} Таймер: <b>{int(ttl_seconds)} сек.</b>")
+
+    normalized = str(content or "").strip()
+    if normalized and normalized not in {
+        f"[{MEDIA_LABELS.get(media_type, media_type)}]",
+        "[сообщение без текста]",
+    }:
+        lines.extend(["", f"{tg_icon('memo')} <b>Подпись:</b>", html_quote(normalized)])
+
+    if saved_locally is True:
+        lines.extend(["", f"{tg_icon('save')} <b>Медиа сохранено</b>"])
+    elif saved_locally is False:
+        lines.extend(["", f"{tg_icon('warning')} <b>Не удалось сохранить файл</b>"])
+
+    return "\n".join(lines)
+
+
+def media_send_failed_html() -> str:
+    return (
+        f"{tg_icon('warning')} <b>Не удалось отправить сохранённый файл</b>\n\n"
+        "Telegram не дал повторно отправить это медиа."
+    )
 
 def unknown_deleted_notification_html(message_id: int, chat_info: str | None = None) -> str:
     header = "Неизвестный пользователь удалил(а) сообщение"
