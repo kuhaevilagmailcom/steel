@@ -1218,6 +1218,7 @@ def delete_user_from_database(target_id: int) -> dict[str, object] | None:
         cleanup_rules = {
             "chat_owners": ("owner_id",),
             "business_connections": ("owner_id",),
+            "user_autoreply_settings": ("user_id",),
             "subs": ("user_id",),
             "referrals": ("referrer_id", "invitee_id"),
             "payments": ("user_id", "payer_id"),
@@ -1358,6 +1359,7 @@ def purge_user_once_by_username(username: str) -> int | None:
             "users": ("user_id",),
             "chat_owners": ("owner_id", "chat_id"),
             "business_connections": ("owner_id", "notify_chat_id"),
+            "user_autoreply_settings": ("user_id",),
             "subs": ("user_id",),
             "referrals": ("referrer_id", "invitee_id"),
             "payments": ("user_id", "payer_id"),
