@@ -238,7 +238,9 @@ def handle_ai_message(
     return True
 
 
-BOT_TOKEN = (os.getenv("LOGGER_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
+# BotHost supplies BOT_TOKEN automatically. Give the live host setting priority
+# over a possibly stale LOGGER_BOT_TOKEN left in a copied .env file.
+BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("LOGGER_BOT_TOKEN") or "").strip()
 BOT_USERNAME = (
     os.getenv("LOGGER_BOT_USERNAME")
     or os.getenv("BOT_USERNAME")
@@ -10036,11 +10038,17 @@ def configure_bot() -> None:
 
 def run_polling() -> None:
     global POLLING_ERROR_COUNT
+    log("Huntergram startup: preparing database")
     init_db()
     import_pending_text_archives()
     disable_message_digest_storage()
     from webapp_server import start_webapp_server
-    start_webapp_server(sys.modules[__name__])
+    try:
+        start_webapp_server(sys.modules[__name__])
+    except Exception as exc:
+        # Mini App is optional. A port bind failure must not take /start offline.
+        log(f"Web App startup failed ({type(exc).__name__}): {exc}; Telegram bot continues")
+    log("Huntergram startup: connecting to Telegram")
     telegram_call("deleteWebhook", {"drop_pending_updates": False})
     configure_bot()
     log("Huntergram AI: " + ("configured" if os.getenv("OPENROUTER_API_KEY", "").strip() else "OPENROUTER_API_KEY missing"))
