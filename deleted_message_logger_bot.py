@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 import ipaddress
 
 from dotenv import load_dotenv
+from huntergram_ai import handle_ai_message, is_ai_command
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -8925,6 +8926,15 @@ def handle_regular_message(message: dict) -> None:
             send_message(chat_id, "Доступ к боту заблокирован администратором.")
             return
 
+    # .ai has priority over music search and pending text/menu handlers.
+    if is_private_chat(message) and is_ai_command(text):
+        handle_ai_message(
+            message,
+            user_id,
+            lambda answer, success: send_message(chat_id, answer),
+        )
+        return
+
     pending_maps = (
         PENDING_GRANT, PENDING_PRICE, PENDING_BROADCAST, PENDING_BROADCAST_BUTTON, PENDING_PROMO_CREATE,
         PENDING_PROMO_ACTIVATE, PENDING_GIFT, PENDING_SUPPORT, PENDING_SUPPORT_REPLY,
@@ -9586,6 +9596,48 @@ def apply_business_message_style(message: dict, owner_id: int | None) -> str | N
     return transformed
 
 
+def execute_user_ai_business_command(message: dict, owner_id: int | None) -> bool:
+    """AI answers to .ai messages from the owner of a connected business account."""
+    if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
+        return False
+    if not is_ai_command(str(message.get("text") or "")):
+        return False
+    connection_id = str(message.get("business_connection_id") or "")
+    chat_id = int((message.get("chat") or {}).get("id") or 0)
+    message_id = int(message.get("message_id") or 0)
+    if not connection_id or not chat_id:
+        return False
+
+    def send_ai_result(answer: str, success: bool) -> None:
+        try:
+            telegram_call(
+                "sendMessage",
+                {
+                    "business_connection_id": connection_id,
+                    "chat_id": chat_id,
+                    "text": answer[:3900],
+                },
+            )
+        except TelegramApiError as exc:
+            log(f"Business AI message delivery failed for {owner_id}: {exc}")
+            return
+        # Remove the typed command only after a successful AI response was sent.
+        if success and message_id:
+            try:
+                telegram_call(
+                    "deleteBusinessMessages",
+                    {
+                        "business_connection_id": connection_id,
+                        "message_ids": [message_id],
+                    },
+                )
+            except TelegramApiError as exc:
+                log(f"Business AI trigger deletion skipped for {owner_id}: {exc}")
+
+    handle_ai_message(message, int(owner_id), send_ai_result)
+    return True
+
+
 def execute_user_custom_business_command(message: dict, owner_id: int | None) -> bool:
     if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
         return False
@@ -9646,7 +9698,9 @@ def handle_business_message(message: dict) -> None:
     context = f"business:{connection_id}"
     notify_chat_id = get_business_notify_chat_id(connection_id)
     owner_id = get_business_owner_id(connection_id)
-    command_executed = execute_user_custom_business_command(message, owner_id)
+    command_executed = execute_user_ai_business_command(message, owner_id)
+    if not command_executed:
+        command_executed = execute_user_custom_business_command(message, owner_id)
     if not command_executed:
         apply_business_message_style(message, owner_id)
     saved = save_message(context, message)
