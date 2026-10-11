@@ -10,6 +10,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+# Fail the deployment early if Python syntax is broken.
+RUN python -m py_compile deleted_message_logger_bot.py webapp_server.py huntergram_ai.py
 
 # Bothost mounts persistent bot data at /app/data.
 RUN mkdir -p /app/data
