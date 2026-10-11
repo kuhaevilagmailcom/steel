@@ -10043,6 +10043,7 @@ def run_polling() -> None:
     start_webapp_server(sys.modules[__name__])
     telegram_call("deleteWebhook", {"drop_pending_updates": False})
     configure_bot()
+    log("Huntergram AI: " + ("configured" if os.getenv("OPENROUTER_API_KEY", "").strip() else "OPENROUTER_API_KEY missing"))
     me = telegram_call("getMe")
     log(f"Bot @{me.get('username')} started. Waiting for updates.")
     notify_process_restart()
