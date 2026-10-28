@@ -6,6 +6,7 @@ import os
 import random
 import re
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, quote_plus, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -25,6 +26,12 @@ SAFE_HELP = """Huntergram — команды в диалоге
 
 Остальное:
 .love · .flip · .help
+
+Открытый поиск:
+.osint — список безопасных команд
+.search запрос · .social username · .domain example.com
+.news запрос · .image ссылка · .email адрес
+.local текст — поиск в сохранённом текущем чате
 
 Команды приватности, спама, обхода ограничений и травли отключены."""
 
@@ -67,6 +74,68 @@ def format_command(name: str, arg: str) -> tuple[str, str] | None:
         return random.choice(("Орёл 🦅", "Решка 🪙")), ""
     if name == "help":
         return SAFE_HELP, ""
+    return None
+
+
+def safe_osint_command(name: str, arg: str) -> str | None:
+    if name == "osint":
+        return (
+            "Открытый поиск\n\n"
+            ".search имя или запрос\n.social username\n.domain example.com\n"
+            ".news запрос\n.image ссылка на изображение\n.email адрес\n"
+            ".local текст — только сохранённый текущий чат"
+        )
+    if name in {"search", "news"}:
+        if not arg:
+            return f"Использование: .{name} запрос"
+        query = quote_plus(arg[:200])
+        if name == "news":
+            return f"Новости по запросу «{arg[:120]}»:\nGoogle News: https://news.google.com/search?q={query}\nЯндекс: https://yandex.ru/news/search?text={query}"
+        return f"Публичный поиск «{arg[:120]}»:\nGoogle: https://www.google.com/search?q={query}\nЯндекс: https://yandex.ru/search/?text={query}\nBing: https://www.bing.com/search?q={query}"
+    if name == "social":
+        username = arg.strip().lstrip("@").replace(" ", "")[:64]
+        if not username or not re.fullmatch(r"[A-Za-z0-9_.-]+", username):
+            return "Использование: .social username"
+        encoded = quote(username, safe="")
+        return (
+            f"Публичные профили @{username}:\n"
+            f"Telegram: https://t.me/{encoded}\nGitHub: https://github.com/{encoded}\n"
+            f"VK: https://vk.com/{encoded}\nTikTok: https://www.tiktok.com/@{encoded}\n"
+            f"X: https://x.com/{encoded}"
+        )
+    if name == "domain":
+        domain = arg.strip().lower()
+        if "://" in domain:
+            domain = urlparse(domain).hostname or ""
+        domain = domain.strip(". ")[:253]
+        if not domain or not re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}", domain):
+            return "Использование: .domain example.com"
+        encoded = quote(domain, safe="")
+        return (
+            f"Публичная проверка домена {domain}:\n"
+            f"ICANN Lookup: https://lookup.icann.org/en/lookup?name={encoded}\n"
+            f"VirusTotal: https://www.virustotal.com/gui/domain/{encoded}\n"
+            f"Web Archive: https://web.archive.org/web/*/{encoded}"
+        )
+    if name == "image":
+        url = arg.strip()
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return "Использование: .image https://адрес-картинки"
+        encoded = quote(url[:1500], safe="")
+        return (
+            "Обратный поиск изображения:\n"
+            f"Google Lens: https://lens.google.com/uploadbyurl?url={encoded}\n"
+            f"Яндекс.Картинки: https://yandex.ru/images/search?rpt=imageview&url={encoded}"
+        )
+    if name in {"email", "breach"}:
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", arg.strip()):
+            return f"Использование: .{name} name@example.com"
+        return (
+            "Проверяйте только свой адрес. Email не отправлен сторонним сервисам.\n"
+            "Mozilla Monitor: https://monitor.mozilla.org/\n"
+            "Have I Been Pwned: https://haveibeenpwned.com/"
+        )
     return None
 
 

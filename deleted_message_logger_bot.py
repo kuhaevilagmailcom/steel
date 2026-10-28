@@ -29,7 +29,7 @@ import ipaddress
 from dotenv import load_dotenv
 import threading
 from typing import Callable
-from huntergram_commands import ask_ai, format_command, parse_dot_command
+from huntergram_commands import ask_ai, format_command, parse_dot_command, safe_osint_command
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -9828,6 +9828,23 @@ def recent_business_dialog(context: str, chat_id: int, limit: int = 40) -> str:
     return "\n".join(f"{author or 'Участник'}: {content}" for author, content in reversed(rows))
 
 
+def search_current_business_dialog(context: str, chat_id: int, query: str) -> str:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT author,content FROM messages
+            WHERE context=? AND chat_id=? AND deleted_at IS NULL AND content LIKE ?
+            ORDER BY updated_at DESC LIMIT 10
+            """,
+            (context, chat_id, f"%{query[:200]}%"),
+        ).fetchall()
+    if not rows:
+        return "В сохранённой истории текущего чата ничего не найдено."
+    lines = [f"Найдено в текущем чате: {len(rows)}"]
+    lines.extend(f"• {author or 'Участник'}: {str(content)[:240]}" for author, content in rows)
+    return "\n".join(lines)[:4000]
+
+
 def handle_huntergram_command(message: dict, owner_id: int | None, context: str) -> bool:
     if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
         return False
@@ -9842,7 +9859,16 @@ def handle_huntergram_command(message: dict, owner_id: int | None, context: str)
             message["text"] = arg if parse_mode and arg else result
         return True
 
-    if name in {"dox", "doxp", "spam", "antimute", "troll", "zaebu"}:
+    osint_result = safe_osint_command(name, arg)
+    if osint_result is not None:
+        result = osint_result
+    elif name == "local":
+        result = (
+            search_current_business_dialog(context, int(message["chat"]["id"]), arg)
+            if arg else "Использование: .local текст"
+        )
+
+    elif name in {"dox", "doxp", "spam", "antimute", "troll", "zaebu"}:
         result = "Команда отключена: она нарушает приватность или может использоваться для спама и травли."
     elif name == "gpt":
         if not arg:
