@@ -106,6 +106,11 @@ def build_ai_prompt(message: dict) -> str:
     return question
 
 
+def ai_provider_for_message(message: dict) -> str:
+    text = str(message.get("text") or "").lstrip().lower()
+    return "hcnsec" if text == ".gpt" or text.startswith(".gpt ") else "openrouter"
+
+
 class OpenRouterAIError(Exception):
     def __init__(self, user_message: str):
         self.user_message = user_message
@@ -173,11 +178,14 @@ def handle_ai_message(
     if not is_ai_command(str(message.get("text") or "")):
         return False
     prompt = build_ai_prompt(message)
+    provider = ai_provider_for_message(message)
     if not prompt:
-        send_reply("🤖 Использование: .gpt твой вопрос\nМожно ответить на сообщение командой .gpt", False)
+        command = ".gpt" if provider == "hcnsec" else ".ai"
+        send_reply(f"🤖 Использование: {command} твой вопрос\nМожно ответить на сообщение командой {command}", False)
         return True
-    if not os.getenv("OPENROUTER_API_KEY", "").strip():
-        send_reply("⚠️ ИИ пока не подключён. Администратору нужно добавить OpenRouter API-ключ.", False)
+    key_name = "HCNSEC_API_KEY" if provider == "hcnsec" else "OPENROUTER_API_KEY"
+    if not os.getenv(key_name, "").strip():
+        send_reply(f"⚠️ ИИ пока не подключён. Администратору нужно добавить {key_name}.", False)
         return True
 
     now = time.monotonic()
@@ -212,10 +220,13 @@ def handle_ai_message(
         global _ACTIVE_TOTAL
         try:
             try:
-                answer = ask_openrouter(prompt)
+                answer = ask_ai(prompt) if provider == "hcnsec" else ask_openrouter(prompt)
                 succeeded = True
             except OpenRouterAIError as exc:
                 answer = exc.user_message
+                succeeded = False
+            except RuntimeError as exc:
+                answer = str(exc)
                 succeeded = False
             except Exception:
                 answer = "⚠️ Ошибка ИИ. Попробуй позже."

@@ -16,6 +16,8 @@ b.send_message = lambda *a, **k: None  # заглушка сети
 b.init_db()
 assert b.is_ai_command(".gpt привет"), ".gpt должен использовать рабочий AI-обработчик"
 assert b.build_ai_prompt({"text": ".gpt привет"}) == "привет"
+assert b.ai_provider_for_message({"text": ".gpt привет"}) == "hcnsec"
+assert b.ai_provider_for_message({"text": ".ai привет"}) == "openrouter"
 assert parse_dot_command(".gpt привет") == ("gpt", "привет")
 assert parse_dot_command("обычный текст") is None
 assert format_command("bold", "<тест>") == ("<b>&lt;тест&gt;</b>", "HTML")
