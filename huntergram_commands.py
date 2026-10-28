@@ -152,22 +152,29 @@ def ask_ai(prompt: str, system: str = HCNSEC_SYSTEM_PROMPT, max_tokens: int = 45
     model = os.getenv("HCNSEC_MODEL", "gpt-4o-mini").strip()
     if system == HCNSEC_SYSTEM_PROMPT:
         system = os.getenv("HCNSEC_SYSTEM_PROMPT", system).strip() or system
-    payload = json.dumps({
-        "model": model,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-        "temperature": 0.5,
-        "max_tokens": max_tokens,
-    }, ensure_ascii=False).encode("utf-8")
-    request = Request(f"{base}/chat/completions", data=payload, headers={
-        "Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept": "application/json",
-    }, method="POST")
-    try:
-        with urlopen(request, timeout=45) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        raise RuntimeError(f"ИИ API вернул ошибку {exc.code}") from exc
-    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError("ИИ API временно недоступен") from exc
+    body = None
+    for attempt in range(2):
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            "temperature": 0.5,
+            "max_tokens": max_tokens if attempt == 0 else min(max_tokens, 220),
+        }, ensure_ascii=False).encode("utf-8")
+        request = Request(f"{base}/chat/completions", data=payload, headers={
+            "Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept": "application/json",
+        }, method="POST")
+        try:
+            with urlopen(request, timeout=45) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            break
+        except HTTPError as exc:
+            if exc.code in {502, 503, 504} and attempt == 0:
+                continue
+            if exc.code == 504:
+                raise RuntimeError("ИИ сейчас перегружен и дважды не успел ответить. Попробуйте ещё раз.") from exc
+            raise RuntimeError(f"ИИ API вернул ошибку {exc.code}") from exc
+        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise RuntimeError("ИИ API временно недоступен") from exc
     try:
         text = str(body["choices"][0]["message"]["content"]).strip()
     except (KeyError, IndexError, TypeError) as exc:

@@ -3,6 +3,7 @@ import os, sys, json, time, tempfile
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
 import deleted_message_logger_bot as b
+import huntergram_commands as hc
 from huntergram_commands import HCNSEC_SYSTEM_PROMPT, format_command, parse_dot_command, safe_osint_command
 
 # всё в временную базу, сеть не трогаем
@@ -23,6 +24,28 @@ assert parse_dot_command("обычный текст") is None
 assert format_command("bold", "<тест>") == ("<b>&lt;тест&gt;</b>", "HTML")
 assert format_command("love", "")[0] == "❤️"
 assert "мат" in HCNSEC_SYSTEM_PROMPT.lower() and "не запикивай" in HCNSEC_SYSTEM_PROMPT.lower()
+
+class _FakeAIResponse:
+    def __enter__(self): return self
+    def __exit__(self, *_args): return False
+    def read(self): return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+ai_attempts = []
+original_ai_urlopen = hc.urlopen
+original_hcnsec_key = os.environ.get("HCNSEC_API_KEY")
+def _flaky_ai_urlopen(request, timeout=0):
+    ai_attempts.append((request, timeout))
+    if len(ai_attempts) == 1:
+        raise hc.HTTPError(request.full_url, 504, "Gateway Timeout", {}, None)
+    return _FakeAIResponse()
+hc.urlopen = _flaky_ai_urlopen
+os.environ["HCNSEC_API_KEY"] = "test-key"
+assert hc.ask_ai("тест") == "ok" and len(ai_attempts) == 2
+hc.urlopen = original_ai_urlopen
+if original_hcnsec_key is None:
+    os.environ.pop("HCNSEC_API_KEY", None)
+else:
+    os.environ["HCNSEC_API_KEY"] = original_hcnsec_key
 assert "lookup.icann.org" in safe_osint_command("domain", "example.com")
 assert "github.com/test_user" in safe_osint_command("social", "@test_user")
 assert safe_osint_command("domain", "не домен") == "Использование: .domain example.com"
