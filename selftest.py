@@ -3,6 +3,7 @@ import os, sys, json, time, tempfile
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
 import deleted_message_logger_bot as b
+from huntergram_commands import format_command, parse_dot_command
 
 # всё в временную базу, сеть не трогаем
 test_root = __import__("pathlib").Path(tempfile.mkdtemp())
@@ -13,6 +14,14 @@ b.DB_PATH = test_root / "test.sqlite3"
 b.send_message = lambda *a, **k: None  # заглушка сети
 
 b.init_db()
+assert parse_dot_command(".gpt привет") == ("gpt", "привет")
+assert parse_dot_command("обычный текст") is None
+assert format_command("bold", "<тест>") == ("<b>&lt;тест&gt;</b>", "HTML")
+assert format_command("love", "")[0] == "❤️"
+b.set_business_automation(111, "afk", "Вернусь позже")
+assert b.get_business_automation(111, "afk") == "Вернусь позже"
+b.set_business_automation(111, "afk", None)
+assert b.get_business_automation(111, "afk") is None
 assert b.format_display_time(0, "%H:%M") == "03:00", "время диалогов показывается по Москве"
 assert b.is_owner_admin(1141626866), "второй владелец имеет полный доступ владельца"
 assert b.is_owner_admin(8464597898), "основной владелец не зависит от переменных Bothost"

@@ -29,6 +29,7 @@ import ipaddress
 from dotenv import load_dotenv
 import threading
 from typing import Callable
+from huntergram_commands import ask_ai, format_command, parse_dot_command
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1336,6 +1337,28 @@ def init_db() -> None:
                 interval_hours INTEGER NOT NULL DEFAULT 5,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (recipient_id, target_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS business_automations (
+                owner_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                text TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (owner_id, kind)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS business_auto_reply_state (
+                owner_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                last_reply_at INTEGER NOT NULL,
+                PRIMARY KEY (owner_id, chat_id)
             )
             """
         )
@@ -9748,6 +9771,165 @@ def handle_business_connection(connection: dict) -> None:
             parse_mode="HTML",
         )
 
+def set_business_automation(owner_id: int, kind: str, text: str | None) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        if text is None:
+            conn.execute(
+                "DELETE FROM business_automations WHERE owner_id=? AND kind=?",
+                (owner_id, kind),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO business_automations
+                    (owner_id,kind,enabled,text,updated_at)
+                VALUES (?,?,1,?,?)
+                """,
+                (owner_id, kind, text, int(time.time())),
+            )
+
+
+def get_business_automation(owner_id: int, kind: str) -> str | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT text FROM business_automations WHERE owner_id=? AND kind=? AND enabled=1",
+            (owner_id, kind),
+        ).fetchone()
+    return str(row[0]) if row else None
+
+
+def edit_business_command(message: dict, text: str, parse_mode: str = "") -> bool:
+    payload = {
+        "business_connection_id": message["business_connection_id"],
+        "chat_id": int(message["chat"]["id"]),
+        "message_id": int(message["message_id"]),
+        "text": text[:4096],
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    try:
+        telegram_call("editMessageText", payload, timeout=100)
+        return True
+    except TelegramApiError as exc:
+        log(f"Huntergram command edit failed: {exc}")
+        return False
+
+
+def recent_business_dialog(context: str, chat_id: int, limit: int = 40) -> str:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT author,content FROM messages
+            WHERE context=? AND chat_id=? AND deleted_at IS NULL AND content!=''
+            ORDER BY updated_at DESC LIMIT ?
+            """,
+            (context, chat_id, limit),
+        ).fetchall()
+    return "\n".join(f"{author or 'Участник'}: {content}" for author, content in reversed(rows))
+
+
+def handle_huntergram_command(message: dict, owner_id: int | None, context: str) -> bool:
+    if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
+        return False
+    parsed = parse_dot_command(str(message.get("text") or ""))
+    if not parsed:
+        return False
+    name, arg = parsed
+    formatted = format_command(name, arg)
+    if formatted:
+        result, parse_mode = formatted
+        if edit_business_command(message, result, parse_mode):
+            message["text"] = arg if parse_mode and arg else result
+        return True
+
+    if name in {"dox", "doxp", "spam", "antimute", "troll", "zaebu"}:
+        result = "Команда отключена: она нарушает приватность или может использоваться для спама и травли."
+    elif name == "gpt":
+        if not arg:
+            result = "Использование: .gpt ваш вопрос"
+        else:
+            try:
+                result = ask_ai(arg)
+            except RuntimeError as exc:
+                result = str(exc)
+    elif name == "short":
+        dialog = recent_business_dialog(context, int(message["chat"]["id"]))
+        if not dialog:
+            result = "В сохранённой истории пока недостаточно сообщений."
+        else:
+            try:
+                result = ask_ai(
+                    dialog,
+                    "Кратко перескажи диалог на русском. Не придумывай факты. Выдели договорённости и вопросы.",
+                    500,
+                )
+            except RuntimeError as exc:
+                result = str(exc)
+    elif name == "info":
+        chat = message.get("chat") or {}
+        title = " ".join(str(chat.get(key) or "").strip() for key in ("first_name", "last_name")).strip()
+        if not title:
+            title = str(chat.get("title") or "Не указано")
+        username = f"@{chat['username']}" if chat.get("username") else "не указан"
+        result = f"Собеседник: {title}\nUsername: {username}\nTelegram ID: {chat.get('id', 'неизвестен')}"
+    elif name == "afk":
+        if arg.lower() in {"off", "выкл", "стоп"}:
+            set_business_automation(owner_id, "afk", None)
+            result = "AFK-ответ выключен."
+        else:
+            set_business_automation(owner_id, "afk", (arg or "Сейчас не у телефона. Отвечу позже.")[:1000])
+            result = "AFK-ответ включён."
+    elif name == "autoresponder":
+        if arg.lower() in {"off", "выкл", "стоп"}:
+            _ok, result = set_autoreply_enabled(owner_id, False)
+        elif not arg:
+            result = "Использование: .autoresponder текст ответа"
+        else:
+            ok, result = set_autoreply_messages(owner_id, [arg])
+            if ok:
+                _ok, result = set_autoreply_enabled(owner_id, True)
+    else:
+        return False
+
+    if edit_business_command(message, result):
+        message["text"] = result
+    return True
+
+
+def maybe_send_business_afk(message: dict, owner_id: int | None) -> None:
+    if owner_id is None or message.get("sender_business_bot") or message_is_from_user(message, owner_id):
+        return
+    if get_autoreply_settings(owner_id)["enabled"]:
+        return
+    text = get_business_automation(owner_id, "afk")
+    cooldown = 4 * 3600
+    if not text:
+        return
+    chat_id = int(message["chat"]["id"])
+    now = int(time.time())
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT last_reply_at FROM business_auto_reply_state WHERE owner_id=? AND chat_id=?",
+            (owner_id, chat_id),
+        ).fetchone()
+        if row and now - int(row[0]) < cooldown:
+            return
+        conn.execute(
+            "INSERT OR REPLACE INTO business_auto_reply_state (owner_id,chat_id,last_reply_at) VALUES (?,?,?)",
+            (owner_id, chat_id, now),
+        )
+    payload = {
+        "business_connection_id": message["business_connection_id"],
+        "chat_id": chat_id,
+        "text": text,
+        "reply_parameters": {"message_id": int(message["message_id"])},
+    }
+    try:
+        telegram_call("sendMessage", payload)
+    except TelegramApiError as exc:
+        log(f"Huntergram auto reply failed for {owner_id}: {exc}")
+
+
 def apply_business_message_style(message: dict, owner_id: int | None) -> str | None:
     if owner_id is None or message.get("sender_business_bot") or not message_is_from_user(message, owner_id):
         return None
@@ -9883,7 +10065,9 @@ def handle_business_message(message: dict) -> None:
     context = f"business:{connection_id}"
     notify_chat_id = get_business_notify_chat_id(connection_id)
     owner_id = get_business_owner_id(connection_id)
-    command_executed = execute_user_ai_business_command(message, owner_id)
+    command_executed = handle_huntergram_command(message, owner_id, context)
+    if not command_executed:
+        command_executed = execute_user_ai_business_command(message, owner_id)
     if not command_executed:
         command_executed = execute_user_custom_business_command(message, owner_id)
     if not command_executed:
@@ -9891,6 +10075,7 @@ def handle_business_message(message: dict) -> None:
     saved = save_message(context, message)
     if saved_message_is_from_user(saved, owner_id):
         return
+    maybe_send_business_afk(message, owner_id)
     if not owner_can_log(owner_id):
         return
     maybe_send_business_autoreply(message, owner_id)
