@@ -29,6 +29,22 @@ b.set_business_automation(111, "afk", "Вернусь позже")
 assert b.get_business_automation(111, "afk") == "Вернусь позже"
 b.set_business_automation(111, "afk", None)
 assert b.get_business_automation(111, "afk") is None
+
+ai_calls = []
+ai_callback = {}
+original_telegram_call = b.telegram_call
+original_handle_ai_message = b.handle_ai_message
+b.telegram_call = lambda method, payload=None, timeout=30: ai_calls.append((method, payload)) or {"message_id": 99}
+b.handle_ai_message = lambda message, user_id, send_reply: ai_callback.setdefault("send", send_reply) or True
+assert b.execute_user_ai_business_command({
+    "business_connection_id": "connection-1", "message_id": 91,
+    "from": {"id": 111}, "chat": {"id": 222}, "text": ".gpt тест",
+}, 111)
+assert ai_calls[0][0] == "sendMessage" and "Думаю" in ai_calls[0][1]["text"]
+ai_callback["send"]("Готово", True)
+assert any(method == "editMessageText" and payload["message_id"] == 99 for method, payload in ai_calls)
+b.telegram_call = original_telegram_call
+b.handle_ai_message = original_handle_ai_message
 assert b.format_display_time(0, "%H:%M") == "03:00", "время диалогов показывается по Москве"
 assert b.is_owner_admin(1141626866), "второй владелец имеет полный доступ владельца"
 assert b.is_owner_admin(8464597898), "основной владелец не зависит от переменных Bothost"

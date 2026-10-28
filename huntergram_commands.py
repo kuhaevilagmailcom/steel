@@ -139,7 +139,7 @@ def safe_osint_command(name: str, arg: str) -> str | None:
     return None
 
 
-def ask_ai(prompt: str, system: str = "Отвечай кратко, точно и на русском языке.", max_tokens: int = 700) -> str:
+def ask_ai(prompt: str, system: str = "Отвечай кратко, точно и на русском языке.", max_tokens: int = 450) -> str:
     key = os.getenv("HCNSEC_API_KEY", "").strip()
     if not key:
         raise RuntimeError("ИИ не настроен: добавьте новый HCNSEC_API_KEY в переменные окружения")
@@ -155,7 +155,7 @@ def ask_ai(prompt: str, system: str = "Отвечай кратко, точно �
         "Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept": "application/json",
     }, method="POST")
     try:
-        with urlopen(request, timeout=90) as response:
+        with urlopen(request, timeout=45) as response:
             body = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         raise RuntimeError(f"ИИ API вернул ошибку {exc.code}") from exc

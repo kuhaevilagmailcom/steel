@@ -10012,19 +10012,49 @@ def execute_user_ai_business_command(message: dict, owner_id: int | None) -> boo
     if not connection_id or not chat_id:
         return False
 
+    status_message_id = 0
+    try:
+        status = telegram_call(
+            "sendMessage",
+            {
+                "business_connection_id": connection_id,
+                "chat_id": chat_id,
+                "text": "⏳ Думаю…",
+            },
+        )
+        if isinstance(status, dict):
+            status_message_id = int(status.get("message_id") or 0)
+    except TelegramApiError as exc:
+        log(f"Business AI status delivery failed for {owner_id}: {exc}")
+
     def send_ai_result(answer: str, success: bool) -> None:
         try:
-            telegram_call(
-                "sendMessage",
-                {
-                    "business_connection_id": connection_id,
-                    "chat_id": chat_id,
-                    "text": answer[:3900],
-                },
-            )
+            payload = {
+                "business_connection_id": connection_id,
+                "chat_id": chat_id,
+                "text": answer[:3900],
+            }
+            if status_message_id:
+                payload["message_id"] = status_message_id
+                telegram_call("editMessageText", payload)
+            else:
+                telegram_call("sendMessage", payload)
         except TelegramApiError as exc:
             log(f"Business AI message delivery failed for {owner_id}: {exc}")
-            return
+            if not status_message_id:
+                return
+            try:
+                telegram_call(
+                    "sendMessage",
+                    {
+                        "business_connection_id": connection_id,
+                        "chat_id": chat_id,
+                        "text": answer[:3900],
+                    },
+                )
+            except TelegramApiError as fallback_exc:
+                log(f"Business AI fallback delivery failed for {owner_id}: {fallback_exc}")
+                return
         # Remove the typed command only after a successful AI response was sent.
         if success and message_id:
             try:
