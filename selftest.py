@@ -3,7 +3,7 @@ import os, sys, json, time, tempfile
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
 import deleted_message_logger_bot as b
-from huntergram_commands import format_command, parse_dot_command, safe_osint_command
+from huntergram_commands import HCNSEC_SYSTEM_PROMPT, format_command, parse_dot_command, safe_osint_command
 
 # всё в временную базу, сеть не трогаем
 test_root = __import__("pathlib").Path(tempfile.mkdtemp())
@@ -22,6 +22,7 @@ assert parse_dot_command(".gpt привет") == ("gpt", "привет")
 assert parse_dot_command("обычный текст") is None
 assert format_command("bold", "<тест>") == ("<b>&lt;тест&gt;</b>", "HTML")
 assert format_command("love", "")[0] == "❤️"
+assert "мат" in HCNSEC_SYSTEM_PROMPT.lower() and "не запикивай" in HCNSEC_SYSTEM_PROMPT.lower()
 assert "lookup.icann.org" in safe_osint_command("domain", "example.com")
 assert "github.com/test_user" in safe_osint_command("social", "@test_user")
 assert safe_osint_command("domain", "не домен") == "Использование: .domain example.com"

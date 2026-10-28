@@ -38,6 +38,11 @@ SAFE_HELP = """Huntergram — команды в диалоге
 RU = "йцукенгшщзхъфывапролджэячсмитьбюЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ"
 EN = "qwertyuiop[]asdfghjkl;'zxcvbnm,.QWERTYUIOP[]ASDFGHJKL:'ZXCVBNM,."
 SWAP = str.maketrans(RU + EN, EN + RU)
+HCNSEC_SYSTEM_PROMPT = (
+    "Отвечай на русском языке живо, прямо и по делу. "
+    "Можешь естественно использовать мат, сленг и грубые выражения, если они подходят контексту. "
+    "Не запикивай и не заменяй мат звёздочками. Не превращай каждый ответ в поток ругани и не выдумывай факты."
+)
 
 
 def parse_dot_command(text: str) -> tuple[str, str] | None:
@@ -139,12 +144,14 @@ def safe_osint_command(name: str, arg: str) -> str | None:
     return None
 
 
-def ask_ai(prompt: str, system: str = "Отвечай кратко, точно и на русском языке.", max_tokens: int = 450) -> str:
+def ask_ai(prompt: str, system: str = HCNSEC_SYSTEM_PROMPT, max_tokens: int = 450) -> str:
     key = os.getenv("HCNSEC_API_KEY", "").strip()
     if not key:
         raise RuntimeError("ИИ не настроен: добавьте новый HCNSEC_API_KEY в переменные окружения")
     base = os.getenv("HCNSEC_API_BASE", "https://api.hcnsec.cn/v1").strip().rstrip("/")
     model = os.getenv("HCNSEC_MODEL", "gpt-4o-mini").strip()
+    if system == HCNSEC_SYSTEM_PROMPT:
+        system = os.getenv("HCNSEC_SYSTEM_PROMPT", system).strip() or system
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
