@@ -14,6 +14,8 @@ b.DB_PATH = test_root / "test.sqlite3"
 b.send_message = lambda *a, **k: None  # заглушка сети
 
 b.init_db()
+assert b.is_ai_command(".gpt привет"), ".gpt должен использовать рабочий AI-обработчик"
+assert b.build_ai_prompt({"text": ".gpt привет"}) == "привет"
 assert parse_dot_command(".gpt привет") == ("gpt", "привет")
 assert parse_dot_command("обычный текст") is None
 assert format_command("bold", "<тест>") == ("<b>&lt;тест&gt;</b>", "HTML")

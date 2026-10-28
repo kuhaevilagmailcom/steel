@@ -67,7 +67,7 @@ SYSTEM_PROMPT = (
     "Не придумывай факты и не утверждай, что видел другие сообщения в чате. "
     "Если данных недостаточно, уточни вопрос."
 )
-AI_COMMAND_RE = re.compile(r"^\s*\.ai(?=\s|$)(?:\s+([\s\S]*?))?\s*$", re.IGNORECASE)
+AI_COMMAND_RE = re.compile(r"^\s*\.(?:ai|gpt)(?=\s|$)(?:\s+([\s\S]*?))?\s*$", re.IGNORECASE)
 MAX_PROMPT_LENGTH = 2500
 MAX_REPLY_LENGTH = 2000
 _LOCK = threading.Lock()
@@ -174,7 +174,7 @@ def handle_ai_message(
         return False
     prompt = build_ai_prompt(message)
     if not prompt:
-        send_reply("🤖 Использование: .ai твой вопрос\nМожно ответить на сообщение командой .ai", False)
+        send_reply("🤖 Использование: .gpt твой вопрос\nМожно ответить на сообщение командой .gpt", False)
         return True
     if not os.getenv("OPENROUTER_API_KEY", "").strip():
         send_reply("⚠️ ИИ пока не подключён. Администратору нужно добавить OpenRouter API-ключ.", False)
@@ -10091,9 +10091,9 @@ def handle_business_message(message: dict) -> None:
     context = f"business:{connection_id}"
     notify_chat_id = get_business_notify_chat_id(connection_id)
     owner_id = get_business_owner_id(connection_id)
-    command_executed = handle_huntergram_command(message, owner_id, context)
+    command_executed = execute_user_ai_business_command(message, owner_id)
     if not command_executed:
-        command_executed = execute_user_ai_business_command(message, owner_id)
+        command_executed = handle_huntergram_command(message, owner_id, context)
     if not command_executed:
         command_executed = execute_user_custom_business_command(message, owner_id)
     if not command_executed:
