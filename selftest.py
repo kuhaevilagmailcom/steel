@@ -593,4 +593,62 @@ with __import__("sqlite3").connect(legacy_db) as conn:
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"chat_view_state", "admin_user_labels", "hidden_chat_users", "admin_view_log", "temporary_admin_messages", "digest_settings"}.issubset(tables)
 
+# Business mute: persistent state, owner authorization, deletion, and no self-delete alerts.
+with __import__("sqlite3").connect(b.DB_PATH) as conn:
+    conn.execute(
+        "INSERT INTO business_connections "
+        "(connection_id, owner_id, notify_chat_id, is_enabled, can_reply, rights_json, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("mute-test-conn", 999, 999, 1, 1, '{"rights":{"can_delete_all_messages":true}}', int(time.time()), int(time.time())),
+    )
+mute_calls = []
+old_api = b.telegram_call
+def mute_api(method, payload=None, timeout=30):
+    if method == "getBusinessConnection":
+        return {"is_enabled": True, "rights": {"can_delete_all_messages": True}}
+    mute_calls.append((method, payload))
+    return {"message_id": 700}
+b.telegram_call = mute_api
+def owner_mute(chat_id, message_id):
+    return {"business_connection_id": "mute-test-conn", "message_id": message_id,
+            "from": {"id": 999}, "chat": {"id": chat_id, "type": "private", "first_name": "Собеседник"},
+            "text": ".mute"}
+b.handle_business_message(owner_mute(333, 800))
+muted = b.get_business_mute("mute-test-conn", 333)
+assert muted and muted["owner_id"] == 999
+assert b.count_business_mutes(999) == 1
+assert any(method == "editMessageText" and payload.get("reply_markup", {}).get("inline_keyboard") for method, payload in mute_calls)
+mute_calls.clear()
+b.handle_business_message({"business_connection_id": "mute-test-conn", "message_id": 801,
+                           "from": {"id": 333}, "chat": {"id": 333, "type": "private"}, "text": "удалить"})
+assert any(method == "deleteBusinessMessages" and payload["message_ids"] == [801] for method, payload in mute_calls)
+assert b.get_saved_message("business:mute-test-conn", 333, 801) is None
+mute_calls.clear()
+b.handle_deleted_business_messages({
+    "business_connection_id": "mute-test-conn", "chat": {"id": 333, "type": "private"}, "message_ids": [801]
+})
+assert not any(method == "sendMessage" for method, _ in mute_calls), "self-deletions must not generate notifications"
+assert not b.consume_business_mute_deletion("mute-test-conn", 333, 801)
+button = f"bizmute:one:{muted['control_token']}"
+b.handle_business_mute_callback({"id": "deny", "data": button, "from": {"id": 333},
+                                 "message": {"message_id": 800, "chat": {"id": 333}}}, 333)
+assert b.get_business_mute("mute-test-conn", 333), "peer must not unmute owner"
+b.handle_business_mute_callback({"id": "allow", "data": button, "from": {"id": 999},
+                                 "message": {"message_id": 800, "chat": {"id": 333}}}, 999)
+assert b.get_business_mute("mute-test-conn", 333) is None
+b.handle_business_message(owner_mute(333, 810))
+b.handle_business_message(owner_mute(444, 811))
+all_button = f"bizmute:all:{b.get_business_mute('mute-test-conn', 333)['control_token']}"
+b.handle_business_mute_callback({"id": "all", "data": all_button, "from": {"id": 999},
+                                 "message": {"message_id": 810, "chat": {"id": 333}}}, 999)
+assert not b.get_business_mute("mute-test-conn", 333)
+assert not b.get_business_mute("mute-test-conn", 444)
+b.telegram_call = lambda method, payload=None, timeout=30: (
+    {"is_enabled": True, "rights": {"can_delete_all_messages": False}}
+    if method == "getBusinessConnection" else mute_calls.append((method, payload)) or True
+)
+b.handle_business_message(owner_mute(333, 820))
+assert not b.get_business_mute("mute-test-conn", 333), "no mute without delete-all permission"
+b.telegram_call = old_api
+
 print("ALL TESTS PASSED")
