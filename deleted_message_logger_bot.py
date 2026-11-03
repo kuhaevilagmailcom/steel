@@ -996,6 +996,33 @@ def init_db() -> None:
             )
             """
         )
+        # Muted business dialogs persist across restarts. Tokens bind inline buttons
+        # to their owner without exposing business connection IDs in callback data.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS business_muted_chats (
+                connection_id TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                owner_id INTEGER NOT NULL,
+                control_token TEXT NOT NULL UNIQUE,
+                muted_at INTEGER NOT NULL,
+                PRIMARY KEY (connection_id, chat_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS business_mute_deletions (
+                connection_id TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (connection_id, chat_id, message_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_business_mute_owner ON business_muted_chats(owner_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_business_mute_deletions_age ON business_mute_deletions(created_at)")
         ensure_column(conn, "business_connections", "can_reply", "INTEGER")
         ensure_column(conn, "business_connections", "rights_json", "TEXT")
         ensure_column(conn, "messages", "media_type", "TEXT")
@@ -1988,6 +2015,211 @@ def get_business_owner_id(connection_id: str) -> int | None:
     if not row or not row[1] or not row[0]:
         return None
     return int(row[0])
+
+
+
+# --- Business dialog mute -------------------------------------------------------
+
+def get_business_mute(connection_id: str, chat_id: int) -> dict | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT connection_id, chat_id, owner_id, control_token FROM business_muted_chats "
+            "WHERE connection_id=? AND chat_id=?",
+            (connection_id, chat_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_business_mute(connection_id: str, chat_id: int, owner_id: int) -> str:
+    token = uuid.uuid4().hex
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO business_muted_chats(connection_id, chat_id, owner_id, control_token, muted_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(connection_id, chat_id) DO UPDATE SET
+                owner_id=excluded.owner_id,
+                control_token=excluded.control_token,
+                muted_at=excluded.muted_at
+            """,
+            (connection_id, chat_id, owner_id, token, int(time.time())),
+        )
+    return token
+
+
+def count_business_mutes(owner_id: int) -> int:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM business_muted_chats WHERE owner_id=?", (owner_id,)
+        ).fetchone()
+    return int(row[0])
+
+
+def record_business_mute_deletion(connection_id: str, chat_id: int, message_id: int) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO business_mute_deletions "
+            "(connection_id, chat_id, message_id, created_at) VALUES (?, ?, ?, ?)",
+            (connection_id, chat_id, message_id, int(time.time())),
+        )
+        # Telegram delivers deletion updates asynchronously. Keep recent IDs
+        # after an unmute, but prevent this auxiliary table from growing forever.
+        conn.execute(
+            "DELETE FROM business_mute_deletions WHERE created_at < ?",
+            (int(time.time()) - 3 * 86400,),
+        )
+
+
+def consume_business_mute_deletion(connection_id: str, chat_id: int, message_id: int) -> bool:
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute(
+            "DELETE FROM business_mute_deletions WHERE connection_id=? AND chat_id=? AND message_id=?",
+            (connection_id, chat_id, message_id),
+        )
+        return cursor.rowcount > 0
+
+
+def business_mute_markup(token: str) -> dict:
+    return {"inline_keyboard": [
+        [{"text": "Размутить", "callback_data": f"bizmute:one:{token}"}],
+        [{"text": "Размутить всех", "callback_data": f"bizmute:all:{token}"}],
+    ]}
+
+
+def handle_business_mute_command(message: dict, owner_id: int) -> bool:
+    connection_id = str(message["business_connection_id"])
+    chat = message.get("chat") or {}
+    chat_id = int(chat["id"])
+    if chat.get("type") != "private" or chat_id == owner_id:
+        edit_business_command(message, "Команда .mute работает только в личном диалоге с собеседником.")
+        return True
+
+    try:
+        connection = telegram_call(
+            "getBusinessConnection", {"business_connection_id": connection_id}
+        )
+    except TelegramApiError as exc:
+        log(f"Business mute rights check failed: {exc}")
+        edit_business_command(message, "Не удалось проверить права бота. Попробуйте позже.")
+        return True
+
+    rights = connection.get("rights") or {}
+    if not connection.get("is_enabled", True) or not rights.get("can_delete_all_messages"):
+        edit_business_command(
+            message,
+            "Для .mute включите право «Удаление всех сообщений» "
+            "у HunterGram в настройках Telegram Business.",
+        )
+        return True
+
+    token = set_business_mute(connection_id, chat_id, owner_id)
+    peer_name = " ".join(
+        str(chat.get(key) or "").strip() for key in ("first_name", "last_name")
+    ).strip() or str(chat.get("username") or chat_id)
+    status = (
+        f"🔇 <b>Мут включён</b> для {html.escape(peer_name)}.\n"
+        "Все новые сообщения собеседника будут удаляться.\n"
+        f"Всего замученных диалогов: {count_business_mutes(owner_id)}."
+    )
+    markup = business_mute_markup(token)
+    payload = {
+        "business_connection_id": connection_id,
+        "chat_id": chat_id,
+        "message_id": int(message["message_id"]),
+        "text": status,
+        "parse_mode": "HTML",
+        "reply_markup": markup,
+    }
+    try:
+        telegram_call("editMessageText", payload)
+        message["text"] = status
+    except TelegramApiError as exc:
+        log(f"Business mute status edit failed; sending separate status: {exc}")
+        try:
+            telegram_call(
+                "sendMessage",
+                {
+                    "business_connection_id": connection_id,
+                    "chat_id": chat_id,
+                    "text": status,
+                    "parse_mode": "HTML",
+                    "reply_markup": markup,
+                },
+            )
+            try:
+                telegram_call(
+                    "deleteBusinessMessages",
+                    {
+                        "business_connection_id": connection_id,
+                        "message_ids": [int(message["message_id"])],
+                    },
+                )
+                record_business_mute_deletion(connection_id, chat_id, int(message["message_id"]))
+            except TelegramApiError as delete_exc:
+                log(f"Business mute original command delete failed: {delete_exc}")
+        except TelegramApiError as send_exc:
+            log(f"Business mute status send failed: {send_exc}")
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute(
+                    "DELETE FROM business_muted_chats WHERE connection_id=? AND chat_id=? AND control_token=?",
+                    (connection_id, chat_id, token),
+                )
+            return True
+    return True
+
+
+def handle_business_mute_callback(query: dict, user_id: int) -> None:
+    query_id = str(query.get("id") or "")
+    data = str(query.get("data") or "")
+    match = re.fullmatch(r"bizmute:(one|all):([0-9a-f]{32})", data)
+    if not match:
+        answer_callback(query_id, text="Кнопка устарела", show_alert=True)
+        return
+    action, token = match.groups()
+    message = query.get("message") or {}
+    chat = message.get("chat") or {}
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT connection_id, chat_id, owner_id FROM business_muted_chats WHERE control_token=?",
+            (token,),
+        ).fetchone()
+        if not row:
+            answer_callback(query_id, text="Мут уже снят или кнопка устарела")
+            return
+        connection_id, chat_id, owner_id = str(row["connection_id"]), int(row["chat_id"]), int(row["owner_id"])
+        if (
+            user_id != owner_id
+            or int(chat.get("id") or 0) != chat_id
+            or get_business_owner_id(connection_id) != user_id
+        ):
+            answer_callback(query_id, text="Только владелец аккаунта может снять мут", show_alert=True)
+            return
+        if action == "all":
+            cursor = conn.execute("DELETE FROM business_muted_chats WHERE owner_id=?", (owner_id,))
+        else:
+            cursor = conn.execute(
+                "DELETE FROM business_muted_chats WHERE connection_id=? AND chat_id=? AND control_token=?",
+                (connection_id, chat_id, token),
+            )
+        removed = cursor.rowcount
+
+    text = (
+        f"🔊 Мут снят со всех диалогов ({removed})."
+        if action == "all" else "🔊 Мут снят. Новые сообщения больше не удаляются."
+    )
+    try:
+        telegram_call("editMessageText", {
+            "business_connection_id": connection_id,
+            "chat_id": chat_id,
+            "message_id": int(message["message_id"]),
+            "text": text,
+            "reply_markup": {"inline_keyboard": []},
+        })
+    except (TelegramApiError, KeyError, TypeError, ValueError) as exc:
+        log(f"Business mute status update failed: {exc}")
+    answer_callback(query_id, text="Мут снят")
 
 
 def list_business_connections(owner_id: int | None = None) -> list[dict]:
@@ -7435,6 +7667,12 @@ def handle_callback_query(query: dict) -> None:
     except (KeyError, TypeError, ValueError):
         return
 
+    if data.startswith("bizmute:"):
+        # A business-chat callback has the peer's chat ID, NOT the owner's
+        # private bot chat ID. It must never pass through menu registration.
+        handle_business_mute_callback(query, user_id)
+        return
+
     if str(chat.get("type") or "private") != "private":
         answer_callback(query_id, text="Меню работает в личных сообщениях со мной", show_alert=True)
         return
@@ -9863,6 +10101,11 @@ def handle_huntergram_command(message: dict, owner_id: int | None, context: str)
     if not parsed:
         return False
     name, arg = parsed
+    if name == "mute":
+        if arg:
+            edit_business_command(message, "Использование: .mute — отправьте команду в нужном личном диалоге.")
+            return True
+        return handle_business_mute_command(message, owner_id)
     formatted = format_command(name, arg)
     if formatted:
         result, parse_mode = formatted
@@ -10132,6 +10375,25 @@ def handle_business_message(message: dict) -> None:
     context = f"business:{connection_id}"
     notify_chat_id = get_business_notify_chat_id(connection_id)
     owner_id = get_business_owner_id(connection_id)
+    chat = message.get("chat") or {}
+    chat_id = int(chat.get("id") or 0)
+    if (
+        owner_id is not None
+        and chat.get("type") == "private"
+        and not message_is_from_user(message, owner_id)
+        and same_user_id((message.get("from") or {}).get("id"), chat_id)
+        and get_business_mute(connection_id, chat_id)
+    ):
+        try:
+            telegram_call("deleteBusinessMessages", {
+                "business_connection_id": connection_id,
+                "message_ids": [int(message["message_id"])],
+            })
+            record_business_mute_deletion(connection_id, chat_id, int(message["message_id"]))
+        except TelegramApiError as exc:
+            log(f"Muted business message deletion failed for {connection_id}/{chat_id}: {exc}")
+        return
+
     command_executed = execute_user_ai_business_command(message, owner_id)
     if not command_executed:
         command_executed = handle_huntergram_command(message, owner_id, context)
@@ -10204,6 +10466,9 @@ def handle_deleted_business_messages(deleted: dict) -> None:
             mark_message_deleted(context, int(chat_id), int(message_id))
         return
     for message_id in message_ids:
+        if consume_business_mute_deletion(connection_id, int(chat_id), int(message_id)):
+            mark_message_deleted(context, int(chat_id), int(message_id))
+            continue
         old = get_saved_message(context, int(chat_id), int(message_id))
         if old:
             if saved_message_is_from_user(old, owner_id):
