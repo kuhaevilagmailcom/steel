@@ -9,6 +9,8 @@ jobs:
   python-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      LOGGER_BOT_TOKEN: '000000:CI_TEST_ONLY'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
